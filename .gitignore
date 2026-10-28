@@ -61,3 +61,6 @@ data/cache/
 data/predictions/
 data/daily_bars.csv
 frontend/node_modules/
+
+# Private source-pinned runtime broker evidence; never commit captures.
+/scripts/crc110_observed_fees.json

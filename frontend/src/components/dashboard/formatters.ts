@@ -5,7 +5,7 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
 });
 
 const numberFormatter = new Intl.NumberFormat("en-US", {
-  maximumFractionDigits: 0,
+  maximumFractionDigits: 9,
 });
 
 const percentFormatter = new Intl.NumberFormat("en-US", {
@@ -13,14 +13,14 @@ const percentFormatter = new Intl.NumberFormat("en-US", {
 });
 
 export const formatCurrency = (value: number | null | undefined) => {
-  if (value === null || value === undefined || Number.isNaN(value)) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
     return "--";
   }
   return currencyFormatter.format(value);
 };
 
 export const formatSignedCurrency = (value: number | null | undefined) => {
-  if (value === null || value === undefined || Number.isNaN(value)) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
     return "--";
   }
   const sign = value > 0 ? "+" : "";
@@ -28,21 +28,21 @@ export const formatSignedCurrency = (value: number | null | undefined) => {
 };
 
 export const formatNumber = (value: number | null | undefined) => {
-  if (value === null || value === undefined || Number.isNaN(value)) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
     return "--";
   }
   return numberFormatter.format(value);
 };
 
 export const formatPercent = (value: number | null | undefined) => {
-  if (value === null || value === undefined || Number.isNaN(value)) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
     return "--";
   }
   return `${percentFormatter.format(value)}%`;
 };
 
 export const formatSignedPercent = (value: number | null | undefined) => {
-  if (value === null || value === undefined || Number.isNaN(value)) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
     return "--";
   }
   const sign = value > 0 ? "+" : "";

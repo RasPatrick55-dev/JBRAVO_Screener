@@ -20,7 +20,7 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
 });
 
 const numberFormatter = new Intl.NumberFormat("en-US", {
-  maximumFractionDigits: 0,
+  maximumFractionDigits: 9,
 });
 
 export const fetchJsonNoStore = async <T,>(path: string, timeoutMs = 15_000): Promise<T | null> => {
@@ -103,7 +103,7 @@ export const formatAgeSeconds = (value: number | null | undefined): string => {
 };
 
 export const parseNumber = (value: string | number | null | undefined): number | null => {
-  if (value === null || value === undefined) {
+  if (value === null || value === undefined || String(value).trim() === "") {
     return null;
   }
   const numeric = Number(String(value).trim());

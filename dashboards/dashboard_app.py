@@ -36,6 +36,7 @@ from typing import Any, Callable, Mapping, Optional
 from flask import Response, abort, jsonify, send_from_directory, request
 from plotly.subplots import make_subplots
 from scripts import db
+from dashboards import source_contracts
 from scripts.utils.env import load_env as _load_runtime_env
 
 logger = logging.getLogger(__name__)
@@ -1775,48 +1776,8 @@ def _load_trades_for_api_from_db(max_rows: int = 100_000) -> tuple[pd.DataFrame,
             pass
 
 
-def _load_trades_for_api_from_files() -> tuple[pd.DataFrame, str]:
-    sources: list[str] = []
-    frames: list[pd.DataFrame] = []
-
-    for path, label in (
-        (executed_trades_path, "Executed trades"),
-        (trades_log_real_path, "Real trades"),
-        (trades_log_path, "Paper trades"),
-    ):
-        if not os.path.exists(path):
-            continue
-        df, alert = load_csv(path)
-        if alert is not None or df is None or df.empty:
-            continue
-        sources.append(label)
-        frames.append(df.copy())
-
-    if not frames:
-        return pd.DataFrame(), "files"
-
-    if len(frames) == 1:
-        return frames[0], sources[0]
-
-    combined = pd.concat(frames, ignore_index=True, sort=False)
-    dedupe_columns = [
-        column
-        for column in (
-            "trade_id",
-            "entry_order_id",
-            "order_id",
-            "symbol",
-            "entry_time",
-            "exit_time",
-            "qty",
-        )
-        if column in combined.columns
-    ]
-    if dedupe_columns:
-        combined = combined.drop_duplicates(subset=dedupe_columns, keep="first")
-
-    source_label = " + ".join(list(dict.fromkeys(sources)))
-    return combined, source_label
+def _load_trades_for_api_from_files():
+    return (pd.DataFrame(), "file_financial_source_disabled")
 
 
 def _series_from_alias(df: pd.DataFrame, aliases: list[str]) -> pd.Series:
@@ -1873,8 +1834,7 @@ def _normalize_trades_api_frame(frame: pd.DataFrame) -> pd.DataFrame:
     )
     work["exit_reason"] = _series_from_alias(work, ["exit_reason"]).astype(str).replace({"nan": ""})
 
-    computed_pnl = (work["exit_price"] - work["entry_price"]) * work["qty"]
-    work["realized_pnl"] = work["realized_pnl"].fillna(computed_pnl).fillna(0.0)
+    # Recorded/validated P&L stays unknown when absent; never reconstruct net here.
 
     is_closed = work["exit_time"].notna() | work["status"].eq("CLOSED")
     work = work[is_closed].copy()
@@ -1901,6 +1861,9 @@ def _load_trades_analytics_frame(max_rows: int = 100_000) -> tuple[pd.DataFrame,
         logger.warning('TRADES_ANALYTICS_HELD error_type=%s', type(exc).__name__)
         held = pd.DataFrame()
         held.attrs.update(db.performance_hold_visibility())
+        if held.attrs.get('policy_validation_status') != 'VALIDATED_POLICY':
+            held.attrs.update(source_contracts.policy_visibility(
+                db.get_db_conn, db.disposition, _dashboard_read_policy_identity()))
         return held, 'postgres', 'trades-db-held-unvalidated-performance'
 
 
@@ -2012,33 +1975,18 @@ def _calendar_hold_days(entry_time: Any, exit_time: Any) -> int:
 def _build_latest_trades_rows(frame: pd.DataFrame, limit: int) -> list[dict[str, Any]]:
     if frame.empty:
         return []
-
-    scoped = frame.sort_values("sort_ts", ascending=False, na_position="last").head(limit)
-    rows: list[dict[str, Any]] = []
-    for _, row in scoped.iterrows():
-        entry_time = row.get("entry_time")
-        exit_time = row.get("exit_time")
-        hold_days = _calendar_hold_days(entry_time, exit_time)
-
-        qty = row.get("qty")
-        try:
-            qty_value = int(float(qty)) if qty is not None else 0
-        except (TypeError, ValueError):
-            qty_value = 0
-
-        rows.append(
-            {
-                "symbol": str(row.get("symbol") or "--"),
-                "buyDate": _serialize_record(entry_time),
-                "sellDate": _serialize_record(exit_time),
-                "totalDays": hold_days,
-                "totalShares": qty_value,
-                "avgEntryPrice": _json_safe_float(row.get("entry_price")),
-                "priceSold": _json_safe_float(row.get("exit_price")),
-                "totalPL": _json_safe_float(row.get("realized_pnl")),
-            }
-        )
+    rows = []
+    for _, row in frame.sort_values("sort_ts", ascending=False, na_position="last").head(limit).iterrows():
+        entry, exit = row.get("entry_time"), row.get("exit_time")
+        rows.append({"symbol": str(row.get("symbol") or "--"),
+            "buyDate": _serialize_record(entry), "sellDate": _serialize_record(exit),
+            "totalDays": _calendar_hold_days(entry, exit) if pd.notna(entry) and pd.notna(exit) else None,
+            "totalShares": source_contracts.number(row.get("qty")),
+            "avgEntryPrice": source_contracts.number(row.get("entry_price")),
+            "priceSold": source_contracts.number(row.get("exit_price")),
+            "totalPL": source_contracts.number(row.get("realized_pnl"))})
     return rows
+
 
 
 def _record_trades_api_request(
@@ -2136,7 +2084,61 @@ def _alpaca_base_url() -> str:
 
 
 def _account_api_is_paper_mode() -> bool:
-    return "paper-api" in _alpaca_base_url().lower()
+    return _alpaca_base_url().rstrip("/") == "https://paper-api.alpaca.markets"
+
+
+
+def _dashboard_broker_context():
+    """Require canonical paper origin and explicit, consistent SDK paper metadata."""
+    from enum import Enum
+
+    mismatch = (None, "broker_environment_mismatch")
+    if not _account_api_is_paper_mode():
+        return mismatch
+    client = trading_client
+    if client is None:
+        return None, "broker_client_unavailable"
+    try:
+        sdk_url = getattr(client, "_base_url", None)
+        # alpaca-py stores BaseURL(str, Enum), whose str() is the member name.
+        if isinstance(sdk_url, Enum):
+            if not isinstance(sdk_url, str):
+                return mismatch
+            sdk_url = sdk_url.value
+        # No userinfo, alternate authority, path, query, fragment or coercion.
+        if type(sdk_url) is not str or sdk_url not in (
+            "https://paper-api.alpaca.markets", "https://paper-api.alpaca.markets/"
+        ):
+            return mismatch
+        if getattr(client, "_sandbox", None) is not True:
+            return mismatch
+        missing = object()
+        legacy_paper = getattr(client, "_paper", missing)
+        if legacy_paper is not missing and legacy_paper is not True:
+            return mismatch
+    except Exception:
+        # Attribute/representation failures disclose no raw endpoint or client data.
+        return mismatch
+    return client, "configured_paper_broker"
+
+
+def _dashboard_broker_positions():
+    client, context = _dashboard_broker_context()
+    snapshot = source_contracts.position_snapshot(client)
+    snapshot.update(account_scope="configured_paper_broker", broker_context=context)
+    if context == "broker_environment_mismatch":
+        snapshot["reason"] = context
+    return snapshot
+
+
+def _dashboard_read_policy_identity():
+    # This only prepares an expected target for canonical read-only policy
+    # validation; it never binds global identity, enables execution or certifies
+    # that the configured broker account owns this historical ledger.
+    _client, context = _dashboard_broker_context()
+    return source_contracts.expected_paper_read_identity(
+        db.disposition, db._PAPER_DISPOSITION_BINDING, broker_context=context,
+        mode_present='JBR_EXEC_PAPER' in os.environ, mode_value=os.getenv('JBR_EXEC_PAPER'))
 
 
 def _alpaca_rest_headers() -> dict[str, str]:
@@ -2284,7 +2286,7 @@ def _fetch_account_portfolio_points(
             "timeframe": timeframe,
             "intraday_reporting": "market_hours",
         },
-        timeout=20,
+        timeout=3,
     )
     if detail != "ok":
         return [], detail
@@ -2298,11 +2300,11 @@ def _account_live_equity() -> tuple[Optional[float], Optional[datetime], str]:
     if not _account_api_is_paper_mode():
         return None, None, "paper_mode_required"
 
-    payload, detail = _alpaca_rest_get_json("/v2/account", timeout=12)
+    payload, detail = _alpaca_rest_get_json("/v2/account", timeout=3)
     if detail != "ok" or not isinstance(payload, Mapping):
         return None, None, detail
 
-    equity = _to_float(payload.get("equity"))
+    equity = source_contracts.number(payload.get("equity"))
     if equity is None:
         return None, None, "invalid_equity"
 
@@ -2743,159 +2745,16 @@ def _account_portfolio_points_from_db(
     return points, "ok"
 
 
-def _open_positions_value_from_csv() -> Optional[float]:
-    path = Path(open_positions_path)
-    if not path.exists():
-        return None
-    try:
-        df = pd.read_csv(path)
-    except Exception:
-        return None
-    if df is None or df.empty:
-        return None
-
-    if "market_value" in df.columns:
-        values = pd.to_numeric(df["market_value"], errors="coerce").dropna()
-        if not values.empty:
-            return float(values.sum())
-
-    qty_series = pd.to_numeric(df.get("qty"), errors="coerce")
-    current_series = pd.to_numeric(df.get("current_price"), errors="coerce")
-    if qty_series is not None and current_series is not None:
-        combined = (qty_series.fillna(0) * current_series.fillna(0)).abs()
-        if not combined.empty:
-            return float(combined.sum())
+def _open_positions_value_from_csv():
     return None
 
 
-def _account_summary_from_csv() -> tuple[dict[str, Any] | None, str]:
-    path = Path(BASE_DIR) / "data" / "account_equity.csv"
-    if not path.exists():
-        return None, "csv_missing"
-    try:
-        df = pd.read_csv(path)
-    except Exception:
-        return None, "csv_unreadable"
-    if df is None or df.empty:
-        return None, "csv_empty"
-
-    required_cols = {"timestamp", "equity"}
-    if not required_cols.issubset(set(df.columns)):
-        return None, "csv_missing_columns"
-
-    frame = df.copy()
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce", utc=True)
-    frame["equity"] = pd.to_numeric(frame["equity"], errors="coerce")
-    if "cash" in frame.columns:
-        frame["cash"] = pd.to_numeric(frame["cash"], errors="coerce")
-    else:
-        frame["cash"] = np.nan
-    if "buying_power" in frame.columns:
-        frame["buying_power"] = pd.to_numeric(frame["buying_power"], errors="coerce")
-    else:
-        frame["buying_power"] = np.nan
-
-    frame = frame.dropna(subset=["timestamp", "equity"]).sort_values("timestamp")
-    if frame.empty:
-        return None, "csv_no_valid_rows"
-
-    latest = frame.iloc[-1]
-    equity = _to_float(latest.get("equity")) or 0.0
-    cash = _to_float(latest.get("cash"))
-    if cash is None:
-        cash = equity
-    buying_power = _to_float(latest.get("buying_power"))
-    if buying_power is None:
-        buying_power = 0.0
-
-    open_positions_value = _open_positions_value_from_csv()
-    if open_positions_value is None:
-        inferred = equity - cash
-        open_positions_value = inferred if inferred > 0 else 0.0
-    ratio = float(cash / open_positions_value) if open_positions_value > 0 else None
-
-    taken_at = latest.get("timestamp")
-    taken_at_utc = ""
-    if isinstance(taken_at, pd.Timestamp):
-        taken_at_utc = taken_at.to_pydatetime().isoformat()
-    elif taken_at is not None and not pd.isna(taken_at):
-        parsed = _coerce_datetime_utc(taken_at)
-        taken_at_utc = parsed.isoformat() if parsed else ""
-    if not taken_at_utc:
-        taken_at_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-    return (
-        {
-            "equity": float(equity),
-            "cash": float(cash),
-            "buying_power": float(buying_power),
-            "open_positions_value": float(open_positions_value),
-            "cash_to_positions_ratio": ratio,
-            "taken_at_utc": taken_at_utc,
-        },
-        "csv:account_equity",
-    )
+def _account_summary_from_csv():
+    return (None, "file_financial_source_disabled")
 
 
-def _account_portfolio_points_from_csv(
-    *, period: str, timeframe: str
-) -> tuple[list[dict[str, Any]], str]:
-    path = Path(BASE_DIR) / "data" / "account_equity.csv"
-    if not path.exists():
-        return [], "csv_missing"
-    try:
-        df = pd.read_csv(path)
-    except Exception:
-        return [], "csv_unreadable"
-    if df is None or df.empty:
-        return [], "csv_empty"
-    if "timestamp" not in df.columns or "equity" not in df.columns:
-        return [], "csv_missing_columns"
-
-    frame = df.copy()
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce", utc=True)
-    frame["equity"] = pd.to_numeric(frame["equity"], errors="coerce")
-    frame = frame.dropna(subset=["timestamp", "equity"]).sort_values("timestamp")
-    if frame.empty:
-        return [], "csv_no_valid_rows"
-
-    if str(period).upper() == "1Y":
-        cutoff = datetime.now(timezone.utc) - timedelta(days=366)
-        frame = frame[frame["timestamp"] >= cutoff]
-        if frame.empty:
-            return [], "csv_period_empty"
-
-    points: list[dict[str, Any]] = []
-    for _, row in frame.iterrows():
-        ts_raw = row.get("timestamp")
-        ts = None
-        if isinstance(ts_raw, pd.Timestamp):
-            ts = ts_raw.to_pydatetime()
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            else:
-                ts = ts.astimezone(timezone.utc)
-        else:
-            ts = _coerce_datetime_utc(ts_raw)
-        equity = _to_float(row.get("equity"))
-        if ts is None or equity is None:
-            continue
-        points.append({"t": ts.isoformat(), "equity": float(equity), "_dt": ts})
-
-    if not points:
-        return [], "csv_no_points"
-
-    if str(timeframe).upper() == "1D":
-        by_day: dict[str, dict[str, Any]] = {}
-        for point in points:
-            dt = point.get("_dt")
-            if dt is None:
-                continue
-            by_day[dt.date().isoformat()] = point
-        points = list(by_day.values())
-
-    points.sort(key=lambda item: item.get("_dt") or datetime.fromtimestamp(0, tz=timezone.utc))
-    return points, "ok"
+def _account_portfolio_points_from_csv(*, period: str, timeframe: str):
+    return ([], "file_financial_source_disabled")
 
 
 def _serialize_record(value: Any) -> Any:
@@ -3423,7 +3282,7 @@ def load_latest_candidates():
     source_label = source_file or "unknown"
     if df is None or df.empty:
         return None, dbc.Alert(
-            "No candidates yet (DB view empty/unreachable and CSV fallback unavailable).",
+            "PostgreSQL candidates empty or unavailable; no file fallback.",
             color="info",
         )
 
@@ -3562,11 +3421,14 @@ def load_execute_metrics() -> tuple[dict[str, Any], dbc.Alert | None, list[dict[
 
 
 def load_open_positions() -> tuple[pd.DataFrame, dbc.Alert | None]:
-    return _safe_csv_with_message(Path(open_positions_path), required=["symbol", "qty"])
+    snapshot = source_contracts.position_snapshot(trading_client if _account_api_is_paper_mode() else None)
+    return pd.DataFrame(snapshot.get("positions") or []), (None if snapshot["ok"] else dbc.Alert("Broker positions unavailable; no file fallback.", color="warning"))
 
 
 def load_executed_trades() -> tuple[pd.DataFrame, dbc.Alert | None]:
-    return _safe_csv_with_message(Path(executed_trades_path))
+    frame, _, detail = _load_trades_analytics_frame()
+    available = detail == "validated-performance"
+    return frame, None if available else dbc.Alert("Validated trade analytics held or unavailable.", color="warning")
 
 
 _FILLS_RECENT_SQL = """
@@ -4154,16 +4016,9 @@ def load_top_or_latest_candidates(required_columns: Optional[set[str] | list[str
 
 
 def load_symbol_perf_df() -> pd.DataFrame | dbc.Alert:
-    """Return the trades dataframe (or alert) for the Symbol Performance tab."""
-
-    df, alert = load_csv(
-        str(TRADES_LOG_FOR_SYMBOLS),
-        ["symbol"],
-        alert_prefix="Symbol Performance",
-    )
-    if alert:
-        return alert
-    return df
+    frame, _, detail = _load_trades_analytics_frame()
+    available = detail == "validated-performance"
+    return frame if available else dbc.Alert("Validated trade analytics held or unavailable.", color="warning")
 
 
 def _compute_trade_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -4208,70 +4063,13 @@ def _compute_trade_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_trades_for_exits() -> tuple[pd.DataFrame, pd.DataFrame, dbc.Alert | None, str]:
-    """Load trades for exit analytics with DB-first fallback to CSV."""
-
-    db_enabled = db.db_enabled()
-    db_ready = db.get_engine() is not None if db_enabled else False
-
-    db_trades = load_trades_db()
-    open_db_trades = load_open_trades_db() if not db_trades.empty else pd.DataFrame()
-    if not db_trades.empty:
-        recent_df = _compute_trade_columns(db_trades)
-        open_df = _compute_trade_columns(open_db_trades)
-        if open_df.empty and not recent_df.empty and "status" in recent_df.columns:
-            open_df = recent_df[recent_df["status"] == "OPEN"].copy()
-        if "entry_time" in open_df.columns:
-            open_df.sort_values("entry_time", ascending=False, inplace=True)
-        if "exit_time" in recent_df.columns:
-            recent_df.sort_values(by="exit_time", ascending=False, na_position="last", inplace=True)
-        return recent_df, open_df, None, "db"
-
-    csv_df, alert = load_csv(
-        str(TRADES_LOG_PATH),
-        required_columns=["symbol", "entry_time"],
-        alert_prefix="Trades log",
-    )
-    if alert:
-        if db_enabled and db_ready is False:
-            return (
-                pd.DataFrame(),
-                pd.DataFrame(),
-                dbc.Alert("Trades unavailable.", color="warning"),
-                "unavailable",
-            )
-        if not db_enabled:
-            return (
-                pd.DataFrame(),
-                pd.DataFrame(),
-                dbc.Alert("No trades yet (paper).", color="info"),
-                "csv",
-            )
-        return pd.DataFrame(), pd.DataFrame(), alert, "unavailable"
-
-    if not isinstance(csv_df, pd.DataFrame) or csv_df.empty:
-        return (
-            pd.DataFrame(),
-            pd.DataFrame(),
-            dbc.Alert("No trades yet (paper).", color="info"),
-            "csv",
-        )
-
-    csv_df = _compute_trade_columns(csv_df)
-    open_df = pd.DataFrame()
-    if "status" in csv_df.columns:
-        open_df = csv_df[csv_df["status"] == "OPEN"].copy()
-    elif "exit_time" in csv_df.columns:
-        open_df = csv_df[csv_df["exit_time"].isna()].copy()
-
-    if "entry_time" in open_df.columns:
-        open_df.sort_values("entry_time", ascending=False, inplace=True)
-    sorted_csv = (
-        csv_df.sort_values(by="exit_time", ascending=False, na_position="last")
-        if "exit_time" in csv_df.columns
-        else csv_df
-    )
-
-    return sorted_csv, open_df, None, "csv"
+    frame, _, detail = _load_trades_analytics_frame()
+    available = detail == "validated-performance"
+    if not available:
+        return pd.DataFrame(), pd.DataFrame(), dbc.Alert("Validated analytics held or unavailable.", color="warning"), detail
+    recent = _compute_trade_columns(frame)
+    opened = recent[recent["status"].eq("OPEN")].copy() if "status" in recent else pd.DataFrame()
+    return recent, opened, None, "postgres_validated_performance"
 
 
 def make_trades_exits_layout():
@@ -5341,24 +5139,9 @@ def _render_legacy_net_trade_performance_panel() -> html.Div:
 
 
 def _resolve_trades_dataframe() -> tuple[pd.DataFrame | None, str, str, list[Any]]:
-    """Return the most suitable trades dataframe and metadata."""
-
-    alerts: list[Any] = []
-    if os.path.exists(executed_trades_path):
-        df, alert = load_csv(executed_trades_path)
-        if alert is None and df is not None and not df.empty:
-            return df, executed_trades_path, "Executed trades", alerts
-        if alert:
-            alerts.append(alert)
-
-    if os.path.exists(trades_log_path):
-        df, alert = load_csv(trades_log_path)
-        if alert is None and df is not None and not df.empty:
-            return df, trades_log_path, "Paper trades", alerts
-        if alert:
-            alerts.append(alert)
-
-    return None, "", "", alerts
+    frame, _, detail = _load_trades_analytics_frame()
+    available = detail == "validated-performance"
+    return (frame, "postgres", "Validated trade analytics", []) if available else (None, "postgres", detail, [dbc.Alert("Validated performance held or unavailable.", color="warning")])
 
 
 def load_prediction_history(limit: int = 7) -> list[tuple[str, pd.DataFrame]]:
@@ -5853,12 +5636,10 @@ def health_overview():
 
 @server.route("/api/time")
 def api_time():
-    now_utc = datetime.now(timezone.utc).replace(microsecond=0)
-    payload = {"utc": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")}
-    response = jsonify(payload)
-    response.headers["Cache-Control"] = "no-store, max-age=1, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    return response
+    now = datetime.now(timezone.utc)
+    client = trading_client if _account_api_is_paper_mode() else None
+    return _json_no_store({"utc": now.isoformat(), "market": {**source_contracts.broker_clock(_dashboard_broker_context()[0], now=now), "broker_context": _dashboard_broker_context()[1]}})
+
 
 
 def _json_no_store(payload: Mapping[str, Any] | list[Any]) -> Response:
@@ -5928,117 +5709,32 @@ def api_logo(symbol: str):
 
 @server.route("/api/account/overview")
 def api_account_overview():
-    row = _account_latest_db()
-    if row:
-        snapshot = {key: _serialize_record(value) for key, value in row.items()}
-        return _json_no_store(
-            {
-                "ok": True,
-                "snapshot": snapshot,
-                "source": "postgres",
-                "source_detail": str(row.get("source") or "db"),
-                "db_source_of_truth": True,
-                "db_ready": True,
-            }
-        )
-
-    if _account_api_allow_live_fallback():
-        live_row = _account_latest_alpaca()
-        if live_row:
-            snapshot = {key: _serialize_record(value) for key, value in live_row.items()}
-            return _json_no_store(
-                {
-                    "ok": True,
-                    "snapshot": snapshot,
-                    "source": "alpaca-fallback",
-                    "source_detail": "live",
-                    "db_source_of_truth": True,
-                    "db_ready": False,
-                }
-            )
-
-    return _json_no_store(
-        {
-            "ok": False,
-            "snapshot": {},
-            "source": "postgres",
-            "source_detail": "unavailable",
-            "db_source_of_truth": True,
-            "db_ready": False,
-        }
-    )
+    payload = api_account_summary().get_json()
+    snapshot = {key: payload.get(key) for key in ("equity", "cash", "buying_power")}
+    snapshot.update(taken_at=payload.get("taken_at_utc"), source="alpaca")
+    return _json_no_store({**payload, "snapshot": snapshot if payload["ok"] else {},
+                          "db_source_of_truth": False, "db_ready": None})
 
 
 @server.route("/api/account/summary")
 def api_account_summary():
-    paper_mode = _account_api_is_paper_mode()
-    alpaca_detail = "paper_mode_required" if not paper_mode else "skipped"
-
-    if paper_mode:
-        payload, detail = _alpaca_rest_get_json("/v2/account", timeout=12)
-        alpaca_detail = detail
-        if detail == "ok" and isinstance(payload, Mapping):
-            equity = _to_float(payload.get("equity")) or 0.0
-            cash = _to_float(payload.get("cash")) or 0.0
-            buying_power = _to_float(payload.get("buying_power")) or 0.0
-
-            open_positions_value = _open_positions_value_from_alpaca()
-            if open_positions_value is None or open_positions_value <= 0:
-                inferred_value = equity - cash
-                open_positions_value = inferred_value if inferred_value > 0 else 0.0
-
-            ratio = None
-            if open_positions_value > 0:
-                ratio = float(cash / open_positions_value)
-
-            return _json_no_store(
-                {
-                    "ok": True,
-                    "source": "alpaca",
-                    "equity": float(equity),
-                    "cash": float(cash),
-                    "buying_power": float(buying_power),
-                    "open_positions_value": float(open_positions_value),
-                    "cash_to_positions_ratio": ratio,
-                    "taken_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-                }
-            )
-
-    db_summary, db_detail = _account_summary_from_db()
-    if db_summary:
-        return _json_no_store(
-            {
-                "ok": True,
-                "source": "postgres",
-                **db_summary,
-                "source_detail": f"alpaca:{alpaca_detail};{db_detail}",
-            }
-        )
-
-    csv_summary, csv_detail = _account_summary_from_csv()
-    if csv_summary:
-        return _json_no_store(
-            {
-                "ok": True,
-                "source": "csv",
-                **csv_summary,
-                "source_detail": f"alpaca:{alpaca_detail};{csv_detail}",
-            }
-        )
-
-    return _json_no_store(
-        {
-            "ok": False,
-            "source": "alpaca",
-            "equity": 0.0,
-            "cash": 0.0,
-            "buying_power": 0.0,
-            "open_positions_value": 0.0,
-            "cash_to_positions_ratio": None,
-            "taken_at_utc": datetime.now(timezone.utc).isoformat(),
-            "source_detail": f"alpaca:{alpaca_detail};db:unavailable;csv:unavailable",
-        }
-    )
+    payload, detail = (None, "paper_mode_required")
+    if _account_api_is_paper_mode():
+        payload, detail = _alpaca_rest_get_json("/v2/account", timeout=3)
+    valid = detail == "ok" and isinstance(payload, Mapping)
+    payload = payload if valid else {}
+    equity = source_contracts.number(payload.get("equity"))
+    cash = source_contracts.number(payload.get("cash"))
+    buying_power = source_contracts.number(payload.get("buying_power"))
+    long_value = source_contracts.number(payload.get("long_market_value"))
+    short_value = source_contracts.number(payload.get("short_market_value"))
+    gross = abs(long_value) + abs(short_value) if long_value is not None and short_value is not None else None
+    complete = all(value is not None for value in (equity, cash, buying_power, gross))
+    return _json_no_store(dict(ok=valid, status="ready" if valid and complete else "partial" if valid else "unavailable",
+        source="alpaca", account_scope="configured_paper_broker", source_detail=detail,
+        equity=equity, cash=cash, buying_power=buying_power, open_positions_value=gross,
+        cash_to_positions_ratio=cash / gross if cash is not None and gross is not None and gross > 0 else None,
+        taken_at_utc=datetime.now(timezone.utc).isoformat() if valid else None))
 
 
 @server.route("/api/account/performance")
@@ -6055,19 +5751,6 @@ def api_account_performance():
         history_detail = "paper_mode_required"
         source_detail = f"alpaca:{history_detail}"
 
-    if not points:
-        db_points, db_detail = _account_portfolio_points_from_db(period="ALL", timeframe="1D")
-        if db_points:
-            points = db_points
-            source_detail = f"{source_detail};postgres:{db_detail}"
-        else:
-            source_detail = f"{source_detail};postgres:{db_detail}"
-    if not points:
-        csv_points, csv_detail = _account_portfolio_points_from_csv(period="ALL", timeframe="1D")
-        if csv_points:
-            points = csv_points
-        source_detail = f"{source_detail};csv:{csv_detail}"
-
     live_equity, live_taken_at, live_detail = _account_live_equity()
     latest_equity_override = live_equity if live_equity is not None else None
     latest_dt_override = live_taken_at if live_taken_at is not None else None
@@ -6083,10 +5766,7 @@ def api_account_performance():
         equity_basis = "live"
         performance_basis = "live_vs_close_baselines"
     else:
-        if latest_equity is None:
-            latest_equity = 0.0
-        if not latest_as_of_utc:
-            latest_as_of_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        latest_as_of_utc = latest_as_of_utc or None
 
     rows: list[dict[str, Any]] = []
     detail_tokens: list[str] = []
@@ -6099,16 +5779,16 @@ def api_account_performance():
             latest_dt_override=latest_dt_override,
         )
         if status not in calculable_statuses:
-            pct = 0.0
-            usd = 0.0
+            pct = None
+            usd = None
             detail_tokens.append(f"{key}:{status}")
         elif status != "ok":
             detail_tokens.append(f"{key}:{status}")
         rows.append(
             {
                 "period": _ACCOUNT_PERFORMANCE_LABELS[key],
-                "netChangePct": float(pct),
-                "netChangeUsd": float(usd),
+                "netChangePct": source_contracts.number(pct),
+                "netChangeUsd": source_contracts.number(usd),
             }
         )
 
@@ -6119,8 +5799,8 @@ def api_account_performance():
         latest_dt_override=latest_dt_override,
     )
     if total_status not in calculable_statuses:
-        total_pct = 0.0
-        total_usd = 0.0
+        total_pct = None
+        total_usd = None
         detail_tokens.append(f"total:{total_status}")
     elif total_status != "ok":
         detail_tokens.append(f"total:{total_status}")
@@ -6138,12 +5818,14 @@ def api_account_performance():
     return _json_no_store(
         {
             "ok": bool(points) or latest_equity_override is not None,
+            "status": "partial" if detail_tokens else "ready",
+            "source": "alpaca", "account_scope": "configured_paper_broker",
             "range": requested_range,
             "rows": rows,
             "accountTotal": {
-                "equity": float(latest_equity),
-                "netChangePct": float(total_pct),
-                "netChangeUsd": float(total_usd),
+                "equity": source_contracts.number(latest_equity),
+                "netChangePct": source_contracts.number(total_pct),
+                "netChangeUsd": source_contracts.number(total_usd),
                 "equityBasis": equity_basis,
                 "asOfUtc": latest_as_of_utc,
                 "performanceBasis": performance_basis,
@@ -6157,46 +5839,14 @@ def api_account_performance():
 def api_account_portfolio_history():
     period_label, alpaca_period = _normalize_account_history_period(request.args.get("period"))
     timeframe = _normalize_account_history_timeframe(request.args.get("timeframe"))
-    paper_mode = _account_api_is_paper_mode()
-
-    points: list[dict[str, Any]] = []
-    detail = "paper_mode_required" if not paper_mode else "skipped"
-    if paper_mode:
-        points, detail = _fetch_account_portfolio_points(period=alpaca_period, timeframe=timeframe)
-    source_detail = f"alpaca:{detail}"
-
-    if not points:
-        db_points, db_detail = _account_portfolio_points_from_db(
-            period=period_label, timeframe=timeframe
-        )
-        if db_points:
-            points = db_points
-        source_detail = f"{source_detail};postgres:{db_detail}"
-    if not points:
-        csv_points, csv_detail = _account_portfolio_points_from_csv(
-            period=period_label, timeframe=timeframe
-        )
-        if csv_points:
-            points = csv_points
-        source_detail = f"{source_detail};csv:{csv_detail}"
-
-    serialized_points = [
-        {"t": str(point.get("t") or ""), "equity": float(point.get("equity") or 0.0)}
-        for point in points
-    ]
-    start = serialized_points[0]["t"] if serialized_points else None
-    end = serialized_points[-1]["t"] if serialized_points else None
-    return _json_no_store(
-        {
-            "ok": bool(serialized_points),
-            "points": serialized_points,
-            "start": start,
-            "end": end,
-            "timeframe": timeframe,
-            "period": period_label,
-            "source_detail": source_detail,
-        }
-    )
+    points, detail = _fetch_account_portfolio_points(period=alpaca_period, timeframe=timeframe) if _account_api_is_paper_mode() else ([], "paper_mode_required")
+    serialized = [{"t": point.get("t"), "equity": source_contracts.number(point.get("equity"))} for point in points]
+    available = detail in {"ok", "empty_history"}
+    return _json_no_store(dict(ok=available, status="ready" if serialized else "empty" if available else "unavailable",
+        source="alpaca", account_scope="configured_paper_broker", source_detail=detail,
+        points=serialized, start=serialized[0]["t"] if serialized else None,
+        end=serialized[-1]["t"] if serialized else None, timeframe=timeframe, period=period_label,
+        observed_at=datetime.now(timezone.utc).isoformat(), source_as_of=serialized[-1]["t"] if serialized else None))
 
 
 @server.route("/api/account/open_orders")
@@ -6207,7 +5857,7 @@ def api_account_open_orders():
         payload, detail = _alpaca_rest_get_json(
             "/v2/orders",
             params={"status": "open", "limit": int(limit), "direction": "desc"},
-            timeout=20,
+            timeout=3,
         )
         if detail == "ok":
             if isinstance(payload, list):
@@ -6215,7 +5865,7 @@ def api_account_open_orders():
             elif isinstance(payload, Mapping) and isinstance(payload.get("orders"), list):
                 raw_orders = payload.get("orders", [])
             else:
-                raw_orders = []
+                return _json_no_store(dict(ok=False, status="unavailable", rows=[], source="alpaca", source_detail="invalid_orders_payload"))
 
             rows: list[dict[str, Any]] = []
             for raw in raw_orders:
@@ -6239,34 +5889,19 @@ def api_account_open_orders():
                         "symbol": str(raw.get("symbol") or "").strip().upper(),
                         "type": str(raw.get("type") or "market").strip().lower(),
                         "side": str(raw.get("side") or "buy").strip().lower(),
-                        "qty": float(qty) if qty is not None else 0.0,
+                        "qty": source_contracts.number(qty),
                         "price_or_stop": _order_price_or_stop(raw),
                         "submitted_at": submitted_at,
                     }
                 )
 
             rows.sort(key=lambda row: str(row.get("submitted_at") or ""), reverse=True)
-            return _json_no_store({"ok": True, "rows": rows[: int(limit)]})
+            return _json_no_store({"ok": True, "status": "ready" if rows else "empty", "source": "alpaca", "account_scope": "configured_paper_broker", "observed_at": datetime.now(timezone.utc).isoformat(), "rows": rows[: int(limit)]})
         alpaca_detail = detail
     else:
         alpaca_detail = "paper_mode_required"
 
-    db_rows, db_detail = _account_open_orders_from_db(limit=limit)
-    if db_rows:
-        return _json_no_store(
-            {
-                "ok": True,
-                "rows": db_rows,
-                "source_detail": f"alpaca:{alpaca_detail};{db_detail}",
-            }
-        )
-    return _json_no_store(
-        {
-            "ok": False,
-            "rows": [],
-            "source_detail": f"alpaca:{alpaca_detail};{db_detail}",
-        }
-    )
+    return _json_no_store(dict(ok=False, status="unavailable", source="alpaca", rows=[], source_detail=alpaca_detail))
 
 
 @server.route("/api/account/order_logs")
@@ -6284,45 +5919,34 @@ def api_account_order_logs():
 
 @server.route("/api/trades/overview")
 def api_trades_overview():
+    history = source_contracts.physical_history(db.get_db_conn, limit=100)
+    client = trading_client if _account_api_is_paper_mode() else None
+    broker = _dashboard_broker_positions()
     metrics = _metrics_summary_db()
-    trades_df = load_trades_db(limit=200)
-    trade_records = []
-    if not trades_df.empty:
-        for record in trades_df.to_dict(orient="records"):
-            trade_records.append({key: _serialize_record(value) for key, value in record.items()})
+    return _json_no_store({**history, "trade_view": "PHYSICAL_HISTORY_UNFILTERED", "trades": history["rows"], "metrics": metrics,
+        "performance_status": metrics.get("validation_status", "HELD_UNVALIDATED_PERFORMANCE"),
+        "open_positions": {"status": broker["status"], "count": len(broker["positions"]) if broker["positions"] is not None else None,
+            "unrealized_pnl": broker["summary"]["totalOpenPL"], "source": "alpaca"}})
 
-    live_positions = _positions_from_alpaca()
-    open_source = "alpaca"
-    open_count = int(len(live_positions))
-    open_pnl = None
-    if live_positions:
-        open_pnl = float(sum(_to_float(row.get("dollar_pl")) or 0.0 for row in live_positions))
-    else:
-        open_df = load_open_trades_db()
-        open_source = "db-fallback"
-        open_count = int(len(open_df)) if open_df is not None else 0
-        if (
-            isinstance(open_df, pd.DataFrame)
-            and not open_df.empty
-            and "realized_pnl" in open_df.columns
-        ):
-            open_pnl = float(open_df["realized_pnl"].fillna(0).sum())
 
-    payload = {
-        "ok": bool(metrics or trade_records),
-        "db_source_of_truth": True,
-        "metrics": metrics,
-        "trade_view": "PHYSICAL_HISTORY_UNFILTERED",
-        "performance_status": metrics.get("validation_status"),
-        "trades": trade_records,
-        "open_positions": {"count": open_count, "realized_pnl": open_pnl, "source": open_source},
-    }
-    return jsonify(payload)
+
+@server.route("/api/trades/history")
+def api_trades_history():
+    limit = _parse_positive_int(request.args.get("limit"), default=25, minimum=1, maximum=100)
+    cursor = request.args.get("before")
+    before = request.args.get("before", type=int)
+    if cursor is not None and (before is None or before < 1 or before > 9223372036854775807):
+        return _json_no_store({"ok": False, "status": "unavailable", "reason": "invalid_cursor", "rows": []}), 400
+    derived_identity = _dashboard_read_policy_identity()
+    return _json_no_store(source_contracts.physical_history(db.get_db_conn, limit=limit, before=before, derived_identity=derived_identity))
 
 
 @server.route("/api/trades/stats")
 def api_trades_stats():
     requested_range = _parse_trades_range(request.args.get("range"), default="all")
+    if request.args.get("basis") == "recorded_gross":
+        from dashboards.recorded_trade_analytics import read_view
+        return _json_no_store(read_view(db.get_db_conn, _dashboard_read_policy_identity(), period=requested_range))
     trades_frame, source, source_detail = _load_trades_analytics_frame()
     db_ready = _trades_api_db_ready(source, source_detail)
 
@@ -6345,6 +5969,8 @@ def api_trades_stats():
             "performance_status": 'VALIDATED_PERFORMANCE' if db_ready else 'HELD_UNVALIDATED_PERFORMANCE',
             "trade_policy": trades_frame.attrs.get('trade_policy'),
             "policy_validation_status": trades_frame.attrs.get('policy_validation_status', 'VALIDATED_POLICY' if db_ready else 'UNAVAILABLE'),
+            "policy_visibility_scope": trades_frame.attrs.get('policy_visibility_scope'),
+            "accounting_input_status": trades_frame.attrs.get('accounting_input_status', 'NOT_INSPECTED'),
             "excluded_count": trades_frame.attrs.get('excluded_count'),
             "unresolved_trade_ids": trades_frame.attrs.get('unresolved_trade_ids'),
             "recovery_complete": False,
@@ -6378,6 +6004,11 @@ def api_trades_leaderboard():
         )
         response.status_code = 400
         return response
+
+    if request.args.get("basis") == "recorded_gross":
+        from dashboards.recorded_trade_analytics import read_view
+        return _json_no_store(read_view(db.get_db_conn, _dashboard_read_policy_identity(),
+            kind="leaderboard", period=range_key, mode=mode, limit=limit))
 
     trades_frame, source, source_detail = _load_trades_analytics_frame()
     db_ready = _trades_api_db_ready(source, source_detail)
@@ -6462,355 +6093,65 @@ def api_execute_task():
 
 @server.route("/api/positions/monitoring")
 def api_positions_monitoring():
-    include_debug = str(request.args.get("debug", "")).lower() in {"1", "true", "yes", "on"}
-    db_ready = _db_connection_available()
+    # Broker state is independent of ledger health. Optional historical overlays
+    # are deferred; neither PG OPEN rows nor entry prices replace broker marks.
+    client = trading_client if _account_api_is_paper_mode() else None
+    return _json_no_store(_dashboard_broker_positions())
 
-    def _sparkline_from_daily_bars(symbols: list[str], points: int = 12) -> dict[str, list[float]]:
-        bars_df = _load_daily_bars_cache()
-        if bars_df is None or bars_df.empty:
-            return {}
-        sparkline_map: dict[str, list[float]] = {}
-        for symbol in symbols:
-            symbol_df = bars_df[bars_df["symbol"] == symbol]
-            if symbol_df.empty:
-                continue
-            closes = symbol_df["close"].tail(points).tolist()
-            sparkline_map[symbol] = [float(value) for value in closes if value is not None]
-        return sparkline_map
-
-    sparkline_points = 12
-    open_df = load_open_trades_db()
-    aggregated: dict[str, dict[str, Any]] = {}
-    calculation_source = "alpaca"
-    db_source_of_truth = False
-
-    # Open positions are live-source first (Alpaca API).
-    for record in _positions_from_alpaca():
-        symbol = _normalize_symbol(record.get("symbol"))
-        if not symbol:
-            continue
-
-        qty = _to_float(record.get("qty"))
-        entry_price = _to_float(record.get("entry_price"))
-        if qty is None or entry_price is None or qty == 0:
-            continue
-
-        dollar_pl = _to_float(record.get("dollar_pl"))
-        percent_pl = _to_float(record.get("percent_pl"))
-
-        bucket = aggregated.setdefault(
-            symbol,
-            {
-                "symbol": symbol,
-                "qty": 0.0,
-                "entry_value": 0.0,
-                "realized_pnl": 0.0,
-                "has_realized": False,
-                "dollar_pl": 0.0,
-                "percent_pl": None,
-            },
-        )
-        bucket["qty"] += qty
-        bucket["entry_value"] += qty * entry_price
-        if dollar_pl is not None:
-            bucket["dollar_pl"] = _to_float(bucket.get("dollar_pl")) or 0.0
-            bucket["dollar_pl"] += dollar_pl
-        if percent_pl is not None and bucket.get("percent_pl") is None:
-            bucket["percent_pl"] = percent_pl
-
-    # Fallback to DB OPEN rows only when live API returns no positions.
-    if not aggregated:
-        if open_df is not None and not open_df.empty and "symbol" not in open_df.columns:
-            return _json_no_store(
-                {
-                    "ok": False,
-                    "positions": [],
-                    "summary": _positions_summary([]),
-                    "source": "db-fallback",
-                    "calculationSource": "postgres",
-                    "db_source_of_truth": True,
-                    "db_ready": bool(db_ready),
-                }
-            )
-
-        if open_df is not None and not open_df.empty:
-            calculation_source = "postgres"
-            db_source_of_truth = True
-            for record in open_df.to_dict(orient="records"):
-                symbol = str(record.get("symbol") or "").strip()
-                if not symbol:
-                    continue
-                qty = _to_float(record.get("qty"))
-                entry_price = _to_float(record.get("entry_price"))
-                realized_pnl = _to_float(record.get("realized_pnl"))
-
-                bucket = aggregated.setdefault(
-                    symbol,
-                    {
-                        "symbol": symbol,
-                        "qty": 0.0,
-                        "entry_value": 0.0,
-                        "realized_pnl": 0.0,
-                        "has_realized": False,
-                        "dollar_pl": None,
-                        "percent_pl": None,
-                    },
-                )
-                if qty is not None and entry_price is not None:
-                    bucket["qty"] += qty
-                    bucket["entry_value"] += qty * entry_price
-                if realized_pnl is not None:
-                    bucket["realized_pnl"] += realized_pnl
-                    bucket["has_realized"] = True
-
-    if not aggregated:
-        return _json_no_store(
-            {
-                "ok": bool(db_ready),
-                "positions": [],
-                "summary": _positions_summary([]),
-                "source": "alpaca",
-                "calculationSource": "alpaca",
-                "db_source_of_truth": False,
-                "db_ready": bool(db_ready),
-                "reconciliation_required": False,
-            }
-        )
-
-    symbols = list(aggregated.keys())
-    sparkline_map = _fetch_alpaca_sparklines(symbols, points=sparkline_points)
-    alpaca_sparkline = bool(sparkline_map)
-    if not sparkline_map:
-        sparkline_map = _sparkline_from_daily_bars(symbols, points=sparkline_points)
-
-    latest_prices = _fetch_latest_prices(symbols)
-    trailing_stop_map = _active_trailing_stops_from_alpaca(symbols)
-    activity_seed = [
-        {"symbol": symbol, "qty": bucket.get("qty")} for symbol, bucket in aggregated.items()
-    ]
-    days_held_map = _days_held_map_from_alpaca_activities(activity_seed)
-    using_alpaca_overlay = bool(
-        alpaca_sparkline or latest_prices or trailing_stop_map or days_held_map
-    )
-
-    positions = []
-
-    for symbol, bucket in aggregated.items():
-        raw_qty = _to_float(bucket.get("qty"))
-        qty = raw_qty if raw_qty is not None and raw_qty != 0 else None
-        entry_price = (
-            bucket["entry_value"] / raw_qty if raw_qty is not None and raw_qty != 0 else None
-        )
-        cost_basis = bucket["entry_value"] if bucket["entry_value"] else None
-        sparkline = sparkline_map.get(symbol, [])
-        latest_price = latest_prices.get(symbol)
-        current_price = (
-            latest_price
-            if latest_price is not None
-            else (sparkline[-1] if sparkline else entry_price)
-        )
-
-        dollar_pl = None
-        if current_price is not None and entry_price is not None and qty is not None:
-            dollar_pl = (current_price - entry_price) * qty
-        if dollar_pl is None:
-            dollar_pl = _to_float(bucket.get("dollar_pl"))
-
-        percent_pl = None
-        if dollar_pl is not None and entry_price is not None and qty is not None and qty != 0:
-            cost_basis = entry_price * qty
-            if cost_basis != 0:
-                percent_pl = (dollar_pl / cost_basis) * 100
-        if percent_pl is None:
-            percent_pl = _to_float(bucket.get("percent_pl"))
-
-        live_trailing = trailing_stop_map.get(_normalize_symbol(symbol), {})
-        trailing_stop = _to_float(live_trailing.get("trailingStop"))
-        trail_percent = _to_float(live_trailing.get("trailPercent"))
-
-        positions.append(
-            {
-                "symbol": symbol,
-                "qty": qty,
-                "entryPrice": entry_price,
-                "currentPrice": current_price,
-                "sparklineData": sparkline,
-                "percentPL": percent_pl,
-                "dollarPL": dollar_pl,
-                "costBasis": cost_basis,
-                "logoUrl": _logo_url_for_symbol(symbol),
-                "daysHeld": days_held_map.get(_normalize_symbol(symbol)),
-                "trailingStop": trailing_stop,
-                "trailPercent": trail_percent,
-                **(
-                    {
-                        "_debug": {
-                            "qty": qty,
-                            "entryPrice": entry_price,
-                            "costBasis": cost_basis,
-                            "currentPrice": current_price,
-                            "latestTradePrice": latest_price,
-                            "sparklineTail": sparkline[-3:] if sparkline else [],
-                            "daysHeldFromActivities": days_held_map.get(_normalize_symbol(symbol)),
-                            "liveTrailingStop": trailing_stop,
-                            "liveTrailPercent": trail_percent,
-                        }
-                    }
-                    if include_debug
-                    else {}
-                ),
-            }
-        )
-
-    positions, summary = _enrich_positions_with_db_metrics(positions)
-    payload = {
-        "ok": bool(db_ready),
-        "positions": positions,
-        "summary": summary,
-        "source": "alpaca"
-        if calculation_source == "alpaca"
-        else ("db+alpaca" if using_alpaca_overlay else "db-fallback"),
-        "calculationSource": calculation_source,
-        "db_source_of_truth": bool(db_source_of_truth),
-        "db_ready": bool(db_ready),
-        "reconciliation_required": bool(positions) and not bool(db_source_of_truth),
-    }
-    if include_debug:
-        payload["_debug"] = {
-            "symbols": symbols,
-            "feed": os.getenv("ALPACA_DATA_FEED"),
-            "latestPrices": latest_prices,
-            "trailingStops": trailing_stop_map,
-            "daysHeldFromActivities": days_held_map,
-            "alpacaOverlayUsed": using_alpaca_overlay,
-        }
-    return _json_no_store(payload)
 
 
 @server.route("/api/execute/overview")
 def api_execute_overview():
-    now_utc = datetime.now(timezone.utc)
-    ny_tz = pytz.timezone("America/New_York")
-    ny_now = now_utc.astimezone(ny_tz)
-    window_start = ny_now.replace(hour=7, minute=0, second=0, microsecond=0)
-    window_end = ny_now.replace(hour=9, minute=30, second=0, microsecond=0)
-    in_window = window_start <= ny_now <= window_end
-
-    account = _account_latest_db()
-    buying_power = account.get("buying_power") if account else None
-
-    trades_df = load_trades_db(limit=500)
-    submitted = int(len(trades_df)) if not trades_df.empty else 0
-    filled = 0
-    rejected = 0
-    if not trades_df.empty and "status" in trades_df.columns:
-        for status in trades_df["status"].fillna("").astype(str):
-            status_lower = status.lower()
-            if "reject" in status_lower:
-                rejected += 1
-            elif "fill" in status_lower or status_lower in {"closed", "filled"}:
-                filled += 1
-
-    live_positions = _positions_from_alpaca()
-    open_count = int(len(live_positions))
-    open_positions_source = "alpaca"
-    if open_count == 0:
-        open_df = load_open_trades_db()
-        open_count = int(len(open_df)) if open_df is not None else 0
-        open_positions_source = "db-fallback"
-
-    skip_counts: dict[str, int] = {}
-    lines = tail_log(execute_trades_log_path, limit=400)
-    last_exec_ts = None
-    for line in lines:
-        match = re.search(r"EXECUTE_SKIP reason=([A-Z_]+)", line)
-        if match:
-            reason = match.group(1)
-            skip_counts[reason] = skip_counts.get(reason, 0) + 1
-        if "Starting pre-market trade execution" in line or "Starting trade execution" in line:
-            candidate = _parse_log_timestamp(line)
-            if candidate:
-                last_exec_ts = candidate
-    payload = {
-        "ok": True,
-        "in_window": in_window,
-        "buying_power": buying_power,
-        "open_positions": open_count,
-        "orders_submitted": submitted,
-        "orders_filled": filled,
-        "orders_rejected": rejected,
-        "skip_counts": skip_counts,
-        "last_execution": last_exec_ts.isoformat() if last_exec_ts else None,
-        "ny_now": ny_now.isoformat(),
-        "open_positions_source": open_positions_source,
-    }
-    return jsonify(payload)
+    summary = _execute_summary_payload()
+    broker = _dashboard_broker_positions()
+    account = api_account_summary().get_json()
+    return _json_no_store(dict(ok=summary["ok"], in_window=summary["in_window"],
+        buying_power=account.get("buying_power") if account.get("ok") else None,
+        open_positions=len(broker["positions"]) if broker["positions"] is not None else None,
+        open_positions_source="alpaca", open_positions_status=broker["status"],
+        orders_submitted=summary["submitted"], orders_filled=summary["filled"], orders_rejected=summary["rejected"],
+        last_execution=summary["last_run_utc"], skip_counts={}, ny_now=None,
+        result_pl_usd=summary["result_pl_usd"], performance_status=summary["performance_status"],
+        result_pl_source=summary["result_pl_source"], evidence_kind="operational_execution_snapshot"))
 
 
 @server.route("/api/execute/orders-summary")
 def api_execute_orders_summary():
-    now_utc = datetime.now(timezone.utc)
-    since_utc = now_utc - timedelta(hours=24)
-    if trading_client is None:
-        return jsonify(
-            {
-                "ok": False,
-                "orders_filled": 0,
-                "total_value": 0,
-                "since_utc": since_utc.isoformat(),
-                "until_utc": now_utc.isoformat(),
-                "source": "alpaca",
-            }
-        )
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(hours=24)
+    client, context = _dashboard_broker_context()
+    base = dict(source="alpaca", account_scope="configured_paper_broker", broker_context=context,
+                observed_at=now.isoformat(), since_utc=since.isoformat(), until_utc=now.isoformat())
+    if client is None:
+        return _json_no_store(dict(base, ok=False, status="unavailable", orders_filled=None, total_value=None))
     try:
-        request = GetOrdersRequest(
-            status="closed",
-            after=since_utc,
-            until=now_utc,
-            direction="desc",
-            limit=500,
-        )
-        orders = trading_client.get_orders(filter=request) or []
-        filled_count = 0
-        filled_value = 0.0
+        query = GetOrdersRequest(status="closed", after=since, until=now, direction="desc", limit=500)
+        orders = source_contracts.bounded_read(lambda: client.get_orders(filter=query))
+        if not isinstance(orders, (list, tuple)):
+            raise ValueError("missing_orders_result")
+        values, count, incomplete = [], 0, False
         for order in orders:
             filled_at = getattr(order, "filled_at", None)
-            if filled_at is None:
-                continue
-            if filled_at < since_utc:
+            if filled_at is None or filled_at < since:
                 continue
             side = getattr(order, "side", None)
-            side_value = side.value if hasattr(side, "value") else str(side or "").lower()
-            if side_value and side_value != "buy":
+            side = str(getattr(side, "value", side) or "").lower()
+            if side != "buy":
                 continue
-            qty = float(getattr(order, "filled_qty", 0) or 0)
-            price = float(getattr(order, "filled_avg_price", 0) or 0)
-            if qty <= 0 or price <= 0:
-                continue
-            filled_count += 1
-            filled_value += qty * price
-        return jsonify(
-            {
-                "ok": True,
-                "orders_filled": filled_count,
-                "total_value": filled_value,
-                "since_utc": since_utc.isoformat(),
-                "until_utc": now_utc.isoformat(),
-                "source": "alpaca",
-            }
-        )
-    except Exception as exc:
-        logger.error("Failed to fetch Alpaca order summary: %s", exc)
-        return jsonify(
-            {
-                "ok": False,
-                "orders_filled": 0,
-                "total_value": 0,
-                "since_utc": since_utc.isoformat(),
-                "until_utc": now_utc.isoformat(),
-                "source": "alpaca",
-            }
-        )
+            count += 1
+            qty = source_contracts.number(getattr(order, "filled_qty", None))
+            price = source_contracts.number(getattr(order, "filled_avg_price", None))
+            if qty is None or price is None or qty <= 0 or price <= 0:
+                incomplete = True
+            else:
+                values.append(qty * price)
+        saturated = len(orders) >= 500
+        return _json_no_store(dict(base, ok=True, status="partial" if incomplete or saturated else "ready" if count else "empty",
+            orders_filled=None if saturated else count, observed_orders_filled=count,
+            total_value=None if incomplete or saturated else sum(values),
+            coverage="at_least_500_orders_incomplete" if saturated else "requested_24h_window", value_unit="USD_buy_fill_notional"))
+    except Exception:
+        return _json_no_store(dict(base, ok=False, status="unavailable", orders_filled=None, total_value=None))
 
 
 _EXECUTE_STATUS_SCOPES = {"all", "open", "closed"}
@@ -6906,33 +6247,13 @@ def _execute_to_int_optional(value: Any) -> Optional[int]:
         return None
 
 
-def _execute_latest_candidates_count() -> int:
+def _execute_latest_candidates_count() -> int | None:
     from scripts.strategy_pipeline import enabled as strategy_enabled
     if strategy_enabled():
         from scripts.strategy_dashboard import snapshot
         return snapshot()['rows_final']
-    count_row = _db_fetch_one("SELECT COUNT(*) AS count FROM latest_screener_candidates")
-    if count_row and count_row.get("count") is not None:
-        return _execute_to_int(count_row.get("count"), 0)
-
-    latest_run = _db_fetch_one("SELECT MAX(run_date) AS run_date FROM screener_candidates")
-    run_date = latest_run.get("run_date") if latest_run else None
-    if run_date is not None:
-        row = _db_fetch_one(
-            "SELECT COUNT(*) AS count FROM screener_candidates WHERE run_date = %(run_date)s",
-            {"run_date": run_date},
-        )
-        if row and row.get("count") is not None:
-            return _execute_to_int(row.get("count"), 0)
-
-    latest_candidates_file = Path(BASE_DIR) / "data" / "latest_candidates.csv"
-    if latest_candidates_file.exists():
-        try:
-            frame = pd.read_csv(latest_candidates_file)
-            return int(len(frame.index))
-        except Exception:
-            return 0
-    return 0
+    row = _db_fetch_one("SELECT COUNT(*) AS count FROM latest_screener_candidates")
+    return _execute_to_int_optional(row.get("count")) if row else None
 
 
 def _execute_last_run_from_logs() -> str | None:
@@ -7229,31 +6550,14 @@ def _execute_summary_from_metrics_file() -> tuple[dict[str, Any] | None, str]:
 
 
 def _execute_result_pl_from_db(last_run_dt: datetime | None) -> float | None:
-    row = _db_fetch_one(
-        """
-        SELECT SUM(COALESCE(realized_pnl, 0)) AS result_pl_usd
-        FROM trades
-        WHERE status = 'CLOSED'
-          AND (%(since)s IS NULL OR exit_time >= %(since)s)
-        """,
-        {"since": last_run_dt},
-    )
-    if row and row.get("result_pl_usd") is not None:
-        value = _to_float(row.get("result_pl_usd"))
-        if value is not None:
-            return value
-
-    fallback_row = _db_fetch_one(
-        """
-        SELECT SUM(COALESCE(net_pnl, pnl, 0)) AS result_pl_usd
-        FROM executed_trades
-        WHERE (%(since)s IS NULL OR COALESCE(exit_time, entry_time, created_at) >= %(since)s)
-        """,
-        {"since": last_run_dt},
-    )
-    if fallback_row and fallback_row.get("result_pl_usd") is not None:
-        return _to_float(fallback_row.get("result_pl_usd"))
-    return None
+    frame, _, detail = _load_trades_analytics_frame()
+    if detail != "validated-performance":
+        return None
+    scoped = frame[frame["status"].eq("CLOSED")] if "status" in frame else frame
+    if last_run_dt is not None and "exit_time" in scoped:
+        scoped = scoped[pd.to_datetime(scoped["exit_time"], utc=True, errors="coerce") >= last_run_dt]
+    values = pd.to_numeric(scoped.get("realized_pnl", pd.Series(dtype=float)), errors="coerce")
+    return source_contracts.number(values.sum()) if len(values) and values.notna().all() else None
 
 
 def _execute_side_label(side_value: Any, event_type: str = "") -> str:
@@ -8318,9 +7622,9 @@ def _execute_summary_payload() -> dict[str, Any]:
             "last_run_utc": _execute_last_run_from_logs(),
             "in_window": _execute_now_in_window(),
             "candidates": _execute_latest_candidates_count(),
-            "submitted": 0,
-            "filled": 0,
-            "rejected": 0,
+            "submitted": None,
+            "filled": None,
+            "rejected": None,
             "result_pl_usd": None,
         }
 
@@ -8352,11 +7656,10 @@ def _execute_summary_payload() -> dict[str, Any]:
     candidates_value = _execute_to_int_optional(summary_payload.get("candidates"))
     candidates = candidates_value if candidates_value is not None else 0
     if candidates_value is None:
-        candidates = max(submitted, _execute_latest_candidates_count())
+        candidates = _execute_latest_candidates_count()
 
-    result_pl = _to_float(summary_payload.get("result_pl_usd"))
-    if result_pl is None:
-        result_pl = _execute_result_pl_from_db(last_run_dt)
+    # Operational run aggregates carry no eligible-trade validation evidence.
+    result_pl = source_contracts.number(_execute_result_pl_from_db(last_run_dt))
 
     in_window_value = _execute_parse_bool(summary_payload.get("in_window"))
     in_window = _execute_now_in_window() if in_window_value is None else bool(in_window_value)
@@ -8371,13 +7674,15 @@ def _execute_summary_payload() -> dict[str, Any]:
         "ok": bool(last_run_utc or submitted or filled or rejected or candidates),
         "last_run_utc": last_run_utc,
         "in_window": bool(in_window),
-        "candidates": int(candidates),
+        "candidates": int(candidates) if candidates is not None else None,
         "submitted": int(submitted),
         "filled": int(filled),
         "rejected": int(rejected),
-        "result_pl_usd": result_pl if result_pl is not None else 0.0,
+        "result_pl_usd": result_pl,
         "source": source,
         "source_detail": ";".join(part for part in source_detail_parts if part),
+        "result_pl_source": "postgres_validated_performance" if result_pl is not None else None,
+        "evidence_kind": "operational_execution_snapshot", "performance_status": "HELD_OR_UNKNOWN" if result_pl is None else "VALIDATED_PERFORMANCE",
     }
 
 
@@ -9131,12 +8436,8 @@ def _screener_parse_bool(value: Any) -> Optional[bool]:
 
 
 def _screener_normalize_pct(value: Any) -> Optional[float]:
-    numeric = _to_float(value)
-    if numeric is None:
-        return None
-    if abs(numeric) <= 1:
-        return float(numeric * 100.0)
-    return float(numeric)
+    """The dashboard contract is percentage points, irrespective of magnitude."""
+    return source_contracts.number(value)
 
 
 def _screener_iso_utc(value: Any) -> Optional[str]:
@@ -9188,124 +8489,64 @@ def _screener_apply_pick_filter(
     return trimmed
 
 
-def _screener_latest_run_scope() -> dict[str, Any]:
-    global _SCREENER_RUN_SCOPE_CACHE
+def _db_fetch_all_strict(sql, params=None):
+    conn = db.get_db_conn()
+    if conn is None:
+        raise RuntimeError("postgres_unavailable")
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SET TRANSACTION READ ONLY")
+            cursor.execute("SET LOCAL statement_timeout = '2000ms'")
+            cursor.execute(sql, params or {})
+            return [dict(zip([column[0] for column in cursor.description], row)) for row in cursor.fetchall()]
+    finally:
+        conn.close()
 
+
+def _screener_read(function, **kwargs):
+    try:
+        return function(**kwargs)
+    except Exception:
+        return [], "postgres_unavailable"
+
+
+def _screener_latest_run_scope() -> dict[str, Any]:
     from scripts.strategy_pipeline import enabled as strategy_enabled
     if strategy_enabled():
         from scripts.strategy_dashboard import snapshot
         current = snapshot()
         return {k: current[k] for k in ('run_date','run_ts_utc','status','source_detail')}
 
-    now = time.time()
-    if _SCREENER_RUN_SCOPE_CACHE is not None:
-        cached_at, cached_scope = _SCREENER_RUN_SCOPE_CACHE
-        if (now - cached_at) <= _SCREENER_RUN_SCOPE_CACHE_TTL_SECONDS:
-            return dict(cached_scope)
-
-    scope: dict[str, Any] = {
-        "run_date": None,
-        "run_ts_utc": None,
-        "status": "COMPLETE",
-        "source_detail": "unavailable",
-    }
+    scope = dict(run_date=None, run_ts_utc=None, status="UNKNOWN", source="postgres",
+                 run_scope="screener_candidates_session", completion_status="unverified",
+                 source_detail="db_unavailable", observed_at=datetime.now(timezone.utc).isoformat())
     if not db.db_enabled():
-        scope["status"] = "ERROR"
-        scope["source_detail"] = "db_disabled"
-        _SCREENER_RUN_SCOPE_CACHE = (now, dict(scope))
-        return scope
-
+        return dict(scope, status="UNAVAILABLE", source_detail="db_disabled")
     conn = db.get_db_conn()
     if conn is None:
-        scope["status"] = "ERROR"
-        scope["source_detail"] = "db_connect_failed"
-        _SCREENER_RUN_SCOPE_CACHE = (now, dict(scope))
-        return scope
-
-    run_date = None
-    run_ts_utc = None
-    rc = None
+        return dict(scope, status="UNAVAILABLE", source_detail="db_connect_failed")
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT MAX(run_date) AS run_date FROM screener_candidates")
-            latest_date = cursor.fetchone()
-            run_date = latest_date[0] if latest_date else None
-            if run_date is None:
-                scope["status"] = "EMPTY"
-                scope["source_detail"] = "screener_candidates:empty"
-                _SCREENER_RUN_SCOPE_CACHE = (now, dict(scope))
-                return scope
-
+            cursor.execute("SET TRANSACTION READ ONLY")
+            cursor.execute("SET LOCAL statement_timeout = '2000ms'")
+            cursor.execute("SELECT MAX(run_date) FROM screener_candidates")
+            row = cursor.fetchone()
+            run_date = row[0] if row else None
+            run_ts = None
+            cursor.execute("SAVEPOINT screener_scope")
             try:
-                cursor.execute(
-                    """
-                    SELECT run_ts_utc
-                    FROM pipeline_health_app
-                    WHERE mode = 'screener' AND run_date = %(run_date)s
-                    ORDER BY run_ts_utc DESC NULLS LAST
-                    LIMIT 1
-                    """,
-                    {"run_date": run_date},
-                )
-                run_ts_row = cursor.fetchone()
-                run_ts_utc = run_ts_row[0] if run_ts_row else None
+                cursor.execute("SELECT run_ts_utc FROM pipeline_health_app WHERE mode='screener' AND run_date=%s ORDER BY run_ts_utc DESC NULLS LAST LIMIT 1", (run_date,))
+                row = cursor.fetchone()
+                run_ts = row[0] if row else None
             except Exception:
-                run_ts_utc = None
-            if run_ts_utc is None:
-                try:
-                    cursor.execute(
-                        """
-                        SELECT MAX(run_ts_utc) AS run_ts_utc
-                        FROM screener_run_map_app
-                        """
-                    )
-                    run_ts_row = cursor.fetchone()
-                    run_ts_utc = run_ts_row[0] if run_ts_row else None
-                except Exception:
-                    run_ts_utc = None
-
-            try:
-                cursor.execute(
-                    """
-                    SELECT rc
-                    FROM pipeline_runs
-                    WHERE run_date = %(run_date)s
-                    ORDER BY created_at DESC NULLS LAST
-                    LIMIT 1
-                    """,
-                    {"run_date": run_date},
-                )
-                pipeline_row = cursor.fetchone()
-                rc = pipeline_row[0] if pipeline_row else None
-            except Exception:
-                rc = None
-    except Exception as exc:
-        logger.warning("[WARN] DB_QUERY_FAIL err=%s", exc)
-        scope["status"] = "ERROR"
-        scope["source_detail"] = f"db_query_fail:{exc}"
-        _SCREENER_RUN_SCOPE_CACHE = (now, dict(scope))
-        return scope
+                cursor.execute("ROLLBACK TO SAVEPOINT screener_scope")
+            cursor.execute("RELEASE SAVEPOINT screener_scope")
+        return dict(scope, run_date=run_date, run_ts_utc=run_ts, status="UNKNOWN" if run_date else "EMPTY",
+                    source_detail="candidate_session_present_completion_unverified" if run_date else "screener_candidates:empty")
+    except Exception:
+        return dict(scope, status="UNAVAILABLE", source_detail="candidate_scope_query_failed")
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-    if run_date is None:
-        scope["status"] = "EMPTY"
-        scope["source_detail"] = "screener_candidates:empty"
-        _SCREENER_RUN_SCOPE_CACHE = (now, dict(scope))
-        return scope
-    scope["run_date"] = run_date
-
-    scope["run_ts_utc"] = run_ts_utc
-
-    if rc not in (None, 0):
-        scope["status"] = "ERROR"
-
-    scope["source_detail"] = f"run_date={_serialize_record(run_date)}"
-    _SCREENER_RUN_SCOPE_CACHE = (now, dict(scope))
-    return scope
+        conn.close()
 
 
 def _screener_pick_rows_from_db(
@@ -9365,6 +8606,8 @@ def _screener_pick_rows_from_db(
 
     scope_sql = ""
     map_columns = _db_table_columns("screener_run_map_app")
+    if run_ts_utc and not {"run_ts_utc", "symbol"}.issubset(map_columns):
+        return [], "postgres_scope_unavailable"
     if run_ts_utc and {"run_ts_utc", "symbol"}.issubset(map_columns):
         scope_sql = (
             " AND EXISTS ("
@@ -9386,7 +8629,7 @@ def _screener_pick_rows_from_db(
     }
 
     def _fetch_raw_rows(scope_fragment: str) -> list[dict[str, Any]]:
-        return _db_fetch_all(
+        return _db_fetch_all_strict(
             f"""
             SELECT
                 c.symbol AS symbol,
@@ -9413,9 +8656,6 @@ def _screener_pick_rows_from_db(
 
     raw_rows = _fetch_raw_rows(scope_sql)
     scope_note = "run_ts_scope=exact" if scope_sql else "run_ts_scope=none"
-    if not raw_rows and scope_sql:
-        raw_rows = _fetch_raw_rows("")
-        scope_note = "run_ts_scope=fallback_unscoped"
 
     staged_rows: list[dict[str, Any]] = []
     for row in raw_rows:
@@ -9657,7 +8897,7 @@ def _screener_resolve_run_date_from_run_ts(
         """
         SELECT run_date, run_ts_utc
         FROM pipeline_health_app
-        WHERE run_ts_utc <= %(run_ts_utc)s
+        WHERE mode = 'screener' AND run_ts_utc = %(run_ts_utc)s
         ORDER BY run_ts_utc DESC NULLS LAST
         LIMIT 1
         """,
@@ -9665,7 +8905,7 @@ def _screener_resolve_run_date_from_run_ts(
     )
     if health_row and health_row.get("run_date") is not None:
         return health_row.get("run_date"), health_row.get("run_ts_utc")
-    return parsed_ts.date(), parsed_ts
+    return None, None
 
 
 def _screener_latest_run_ts_for_date(run_date: Any) -> Optional[str]:
@@ -9704,12 +8944,12 @@ def _screener_backtest_rows_from_db(
     run_date_col = _first_existing_column(columns, ["run_date"])
     window_col = _first_existing_column(columns, ["window", "range", "period"])
     trades_col = _first_existing_column(columns, ["trades"])
-    win_rate_col = _first_existing_column(columns, ["win_rate", "win_rate_pct"])
+    win_rate_col = _first_existing_column(columns, ["win_rate_pct", "win_rate"])
     avg_return_col = _first_existing_column(
-        columns, ["avg_return_pct", "avg_return", "expectancy", "return_pct"]
+        columns, ["avg_return_pct", "return_pct"]
     )
     pl_ratio_col = _first_existing_column(columns, ["pl_ratio", "profit_factor"])
-    max_dd_col = _first_existing_column(columns, ["max_dd_pct", "max_drawdown", "max_drawdown_pct"])
+    max_dd_col = _first_existing_column(columns, ["max_dd_pct", "max_drawdown_pct"])
     avg_hold_col = _first_existing_column(columns, ["avg_hold_days", "hold_days", "avg_days_held"])
     total_pl_col = _first_existing_column(columns, ["total_pl_usd", "net_pnl", "total_pl", "pnl"])
 
@@ -9733,6 +8973,8 @@ def _screener_backtest_rows_from_db(
 
     scope_sql = ""
     map_columns = _db_table_columns("screener_run_map_app")
+    if run_ts_utc and not {"run_ts_utc", "symbol"}.issubset(map_columns):
+        return [], "postgres_scope_unavailable"
     if run_ts_utc and {"run_ts_utc", "symbol"}.issubset(map_columns):
         scope_sql = (
             " AND EXISTS ("
@@ -9758,7 +9000,7 @@ def _screener_backtest_rows_from_db(
         order_sql = f"b.{total_pl_col} DESC NULLS LAST, b.{symbol_col} ASC"
 
     def _fetch_rows(scope_fragment: str) -> list[dict[str, Any]]:
-        return _db_fetch_all(
+        return _db_fetch_all_strict(
             f"""
             SELECT
                 b.{symbol_col} AS symbol,
@@ -9780,8 +9022,6 @@ def _screener_backtest_rows_from_db(
         )
 
     rows = _fetch_rows(scope_sql)
-    if not rows and scope_sql:
-        rows = _fetch_rows("")
 
     normalized_rows: list[dict[str, Any]] = []
     for row in rows:
@@ -9795,6 +9035,7 @@ def _screener_backtest_rows_from_db(
             {
                 "symbol": symbol,
                 "window": resolved_window,
+                "units": {"win_rate_pct": "percent", "avg_return_pct": "percent", "max_dd_pct": "percent", "total_pl_usd": "USD"},
                 "trades": _to_float(row.get("trades")),
                 "win_rate_pct": _screener_normalize_pct(row.get("win_rate_pct")),
                 "avg_return_pct": _screener_normalize_pct(row.get("avg_return_pct")),
@@ -9865,6 +9106,7 @@ def _screener_backtest_rows_from_file(
             {
                 "symbol": symbol,
                 "window": resolved_window,
+                "units": {"win_rate_pct": "percent", "avg_return_pct": "percent", "max_dd_pct": "percent", "total_pl_usd": "USD"},
                 "trades": _to_float(source_row.get(trades_col)) if trades_col else None,
                 "win_rate_pct": _screener_normalize_pct(source_row.get(win_rate_col))
                 if win_rate_col
@@ -10011,6 +9253,8 @@ def _screener_metrics_rows_from_db(
 
     scope_sql = ""
     map_columns = _db_table_columns("screener_run_map_app")
+    if run_ts_utc and not {"run_ts_utc", "symbol"}.issubset(map_columns):
+        return [], "postgres_scope_unavailable"
     if run_ts_utc and {"run_ts_utc", "symbol"}.issubset(map_columns):
         scope_sql = (
             " AND EXISTS ("
@@ -10020,7 +9264,7 @@ def _screener_metrics_rows_from_db(
         )
 
     fetch_limit = max(limit * 6, 120)
-    raw_rows = _db_fetch_all(
+    raw_rows = _db_fetch_all_strict(
         f"""
         SELECT
             c.symbol AS symbol,
@@ -10487,13 +9731,13 @@ def api_screener_picks():
     scope = _screener_latest_run_scope()
     run_date = scope.get("run_date")
     run_ts_utc = scope.get("run_ts_utc")
-    status = str(scope.get("status") or "COMPLETE").upper()
+    status = str(scope.get("status") or "UNKNOWN").upper()
     source = "postgres"
     source_detail = str(scope.get("source_detail") or "")
 
     rows: list[dict[str, Any]] = []
     if run_date is not None and db.db_enabled():
-        rows, detail = _screener_pick_rows_from_db(
+        rows, detail = _screener_read(_screener_pick_rows_from_db,
             run_date=run_date,
             run_ts_utc=run_ts_utc,
             filter_key=filter_key,
@@ -10502,25 +9746,11 @@ def api_screener_picks():
         )
         source_detail = detail
 
-    if not rows:
-        fallback_rows, fallback_detail, fallback_run_ts = _screener_pick_rows_from_file(
-            filter_key=filter_key,
-            limit=limit,
-            query=query,
-        )
-        if fallback_detail.startswith("file:"):
-            rows = fallback_rows
-            source = "file-fallback"
-            source_detail = fallback_detail
-            run_ts_utc = fallback_run_ts or run_ts_utc
-            status = "COMPLETE"
-        elif status != "ERROR":
-            source_detail = fallback_detail
-            status = "EMPTY"
-
     return _json_no_store(
         {
-            "ok": status != "ERROR",
+            "ok": status not in {"ERROR", "UNAVAILABLE"} and source_detail.startswith("postgres:") if run_date is not None else status == "EMPTY",
+            "run_date": _serialize_record(run_date), "run_scope": "screener_candidates_session",
+            "completion_status": "unverified",
             "run_ts_utc": _screener_iso_utc(run_ts_utc),
             "status": status,
             "source": source,
@@ -10544,17 +9774,18 @@ def api_screener_backtest():
 
     requested_run_ts = str(request.args.get("run_ts_utc") or "").strip() or None
     run_date, resolved_run_ts = _screener_resolve_run_date_from_run_ts(requested_run_ts)
+    if requested_run_ts and run_date is None:
+        return _json_no_store(dict(ok=False, status="UNAVAILABLE", source="postgres", source_detail="requested_screener_run_not_found", rows=[])), 400
     if run_date is None:
         latest_scope = _screener_latest_run_scope()
         run_date = latest_scope.get("run_date")
         resolved_run_ts = resolved_run_ts or latest_scope.get("run_ts_utc")
-    if resolved_run_ts is None:
-        resolved_run_ts = _screener_latest_run_ts_for_date(run_date)
 
+    detail = "db_unavailable"
     source = "postgres"
     rows: list[dict[str, Any]] = []
     if run_date is not None and db.db_enabled():
-        rows, _ = _screener_backtest_rows_from_db(
+        rows, detail = _screener_read(_screener_backtest_rows_from_db,
             run_date=run_date,
             run_ts_utc=resolved_run_ts,
             window=window,
@@ -10562,17 +9793,12 @@ def api_screener_backtest():
             query=query,
         )
 
-    if not rows:
-        fallback_rows, _ = _screener_backtest_rows_from_file(
-            window=window, limit=limit, query=query
-        )
-        if fallback_rows:
-            rows = fallback_rows
-            source = "file-fallback"
-
     return _json_no_store(
         {
-            "ok": True,
+            "ok": detail == "ok" or detail.startswith("postgres:"),
+            "status": "UNKNOWN", "completion_status": "unverified",
+            "run_date": _serialize_record(run_date), "run_scope": "screener_candidates_session",
+            "source_detail": detail,
             "run_ts_utc": _screener_iso_utc(resolved_run_ts),
             "window": window,
             "source": source,
@@ -10595,15 +9821,18 @@ def api_screener_metrics():
 
     requested_run_ts = str(request.args.get("run_ts_utc") or "").strip() or None
     run_date, resolved_run_ts = _screener_resolve_run_date_from_run_ts(requested_run_ts)
+    if requested_run_ts and run_date is None:
+        return _json_no_store(dict(ok=False, status="UNAVAILABLE", source="postgres", source_detail="requested_screener_run_not_found", rows=[])), 400
     if run_date is None:
         latest_scope = _screener_latest_run_scope()
         run_date = latest_scope.get("run_date")
         resolved_run_ts = resolved_run_ts or latest_scope.get("run_ts_utc")
 
     rows: list[dict[str, Any]] = []
+    detail = "db_unavailable"
     source = "postgres"
     if run_date is not None and db.db_enabled():
-        rows, _ = _screener_metrics_rows_from_db(
+        rows, detail = _screener_read(_screener_metrics_rows_from_db,
             run_date=run_date,
             run_ts_utc=resolved_run_ts,
             filter_key=filter_key,
@@ -10611,19 +9840,12 @@ def api_screener_metrics():
             query=query,
         )
 
-    if not rows:
-        fallback_rows, _ = _screener_metrics_rows_from_file(
-            filter_key=filter_key,
-            limit=limit,
-            query=query,
-        )
-        if fallback_rows:
-            rows = fallback_rows
-            source = "file-fallback"
-
     return _json_no_store(
         {
-            "ok": True,
+            "ok": detail == "ok" or detail.startswith("postgres:"),
+            "status": "UNKNOWN", "completion_status": "unverified",
+            "run_date": _serialize_record(run_date), "run_scope": "screener_candidates_session",
+            "source_detail": detail,
             "run_ts_utc": _screener_iso_utc(resolved_run_ts),
             "source": source,
             "rows": rows,
@@ -10771,7 +9993,8 @@ def log_exports(filename: str):
 
 @app.server.route("/api/health")
 def api_health():
-    payload = load_screener_health()
+    payload = dict(load_screener_health())
+    payload.update(evidence_kind="operational_diagnostic_artifacts", financial_readiness="not_established_by_health_checks")
     return jsonify(payload)
 
 
@@ -11203,24 +10426,7 @@ def _render_tab(tab, _n_intervals, _n_log_intervals, _refresh_clicks):
             table_df = work_df
 
         latest_notice = None
-        if os.path.exists(latest_candidates_path):
-            try:
-                latest_preview = pd.read_csv(latest_candidates_path, nrows=1)
-            except Exception:
-                latest_preview = pd.DataFrame()
-            if latest_preview.empty:
-                latest_notice = dbc.Alert(
-                    [
-                        "No candidates today; fallback may populate shortly. ",
-                        html.A(
-                            "View pipeline panel",
-                            href="#sh-pipeline-panel",
-                            className="alert-link",
-                        ),
-                    ],
-                    color="info",
-                    className="mb-3",
-                )
+
 
         alerts = [a for a in (metrics_alert, candidates_alert, execute_alert) if a]
 
@@ -12097,14 +11303,14 @@ def _render_tab(tab, _n_intervals, _n_log_intervals, _refresh_clicks):
                 style_cell={"backgroundColor": "#212529", "color": "#E0E0E0"},
             )
 
-        positions_df, _ = load_csv(open_positions_path)
-        position_count = len(positions_df) if positions_df is not None else 0
+        positions_df, positions_alert = load_open_positions()
+        position_count = len(positions_df) if positions_alert is None and positions_df is not None else None
         trade_limit_alert = (
             html.Div(
                 f"Max open trades limit reached ({MAX_OPEN_TRADES}).",
                 style={"color": "orange"},
             )
-            if position_count >= MAX_OPEN_TRADES
+            if position_count is not None and position_count >= MAX_OPEN_TRADES
             else None
         )
 
@@ -12465,24 +11671,11 @@ def _render_tab(tab, _n_intervals, _n_log_intervals, _refresh_clicks):
         return render_account_tab()
 
     elif tab == "tab-monitor":
-        # Load open positions
-        positions_df, freshness_alert = load_csv(
-            open_positions_path,
-            ["symbol", "qty", "net_pnl"],
-            alert_prefix="Real positions",
-        )
-
-        if positions_df is not None and not positions_df.empty:
-            positions_df["entry_time"] = pd.to_datetime(
-                positions_df["entry_time"], utc=True, errors="coerce"
-            )
-            positions_df.sort_values("entry_time", ascending=False, inplace=True)
-            positions_df = add_days_in_trade(positions_df)
-            positions_chart = create_open_positions_chart(positions_df)
-            positions_table = create_open_positions_table(positions_df)
-        else:
-            positions_chart = html.Div("No open positions available.")
-            positions_table = html.Div()
+        snapshot = source_contracts.position_snapshot(trading_client if _account_api_is_paper_mode() else None)
+        rows = snapshot.get("positions")
+        positions_chart = html.Div("Alpaca broker marks; historical enrichment deferred. Source status: " + snapshot["status"])
+        positions_table = dash_table.DataTable(data=rows or [], columns=[{"name": key, "id": key} for key in ("symbol", "qty", "entryPrice", "currentPrice", "dollarPL")]) if rows else html.Div("No open broker positions." if snapshot["ok"] else "Broker position count and marks unavailable.")
+        freshness_alert = None
 
         monitor_lines = read_recent_lines(monitor_log_path, num_lines=100)[::-1]
         exec_lines = read_recent_lines(execute_trades_log_path, num_lines=100)[::-1]
@@ -12502,10 +11695,10 @@ def _render_tab(tab, _n_intervals, _n_log_intervals, _refresh_clicks):
         error_log_box = log_box("Errors", error_lines, "error-log", log_path=error_log_path)
 
         stale_warning_banner = stale_warning(
-            [monitor_log_path, open_positions_path], threshold_minutes=10
+            [monitor_log_path], threshold_minutes=10
         )
 
-        last_updated = format_time(get_file_mtime(open_positions_path))
+        last_updated = snapshot["observed_at"]
         timestamp = html.Div(
             f"Last Updated: {last_updated}",
             className="text-muted mb-2",
@@ -13355,13 +12548,10 @@ def update_execution_logs(n):
 def download_trades(n_clicks):
     if not n_clicks:
         return dash.no_update
-    _, path, _, _ = _resolve_trades_dataframe()
-    candidate = path or (
-        executed_trades_path if os.path.exists(executed_trades_path) else trades_log_path
-    )
-    if candidate and os.path.exists(candidate):
-        return dcc.send_file(candidate)
-    return dash.no_update
+    frame, _, detail = _load_trades_analytics_frame()
+    if detail != "validated-performance":
+        return dash.no_update
+    return dcc.send_data_frame(frame.to_csv, "validated-postgres-trades.csv", index=False)
 
 
 if __name__ == "__main__":

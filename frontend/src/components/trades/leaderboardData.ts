@@ -33,10 +33,12 @@ const normalizeLeaderboardRow = (value: unknown, index: number): LeaderRow | nul
     return null;
   }
 
+  const pl = parseNumber(record.pl ?? record.totalPL ?? record.total_pl ?? record.pnl ?? record.net_pnl);
+  if (pl === null) return null;
   return {
     rank: Math.max(1, Math.trunc(parseNumber(record.rank) ?? index + 1)),
     symbol,
-    pl: parseNumber(record.pl ?? record.totalPL ?? record.total_pl ?? record.pnl ?? record.net_pnl) ?? 0,
+    pl,
   };
 };
 
@@ -57,12 +59,14 @@ export const normalizeLeaderboardPayload = (payload: unknown): LeaderRow[] => {
 export const buildLeaderboardRequestPath = (
   range: RangeKey,
   mode: LeaderboardMode,
-  limit: number
+  limit: number,
+  basis?: "recorded_gross"
 ): string => {
   const query = new URLSearchParams({
     range,
     mode,
     limit: String(limit),
   });
+  if (basis) query.set("basis", basis);
   return `/api/trades/leaderboard?${query.toString()}`;
 };
