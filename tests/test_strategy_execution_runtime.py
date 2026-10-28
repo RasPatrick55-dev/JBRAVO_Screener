@@ -42,6 +42,22 @@ def test_monitor_default_is_inert_even_without_environment_or_config(monkeypatch
     assert runtime.monitor_cycle(base_dir=tmp_path)==dict(owned_symbols=[],native_covered=0)
 
 
+def test_failed_unified_handoff_replaces_stale_entry_receipt_before_broker(monkeypatch,tmp_path):
+    runtime.write_report(dict(status='skipped',finished_at='yesterday'),role='entry',base_dir=tmp_path)
+    monkeypatch.setattr(runtime,'environment',lambda:{})
+    monkeypatch.setattr(runtime,'source_lease',lambda *a:nullcontext())
+    monkeypatch.setattr(runtime,'load_config',lambda *a:{})
+    monkeypatch.setattr(runtime,'source_guard',lambda *a,**k:True)
+    monkeypatch.setattr(runtime,'readonly_handoff',lambda *a,**k:handoff())
+    def unavailable(*a,**k):raise ValueError('unified_selection_not_published')
+    monkeypatch.setattr(runtime,'unified_handoff',unavailable)
+    with pytest.raises(ValueError,match='unified_selection_not_published'):
+        runtime.run_entry(config(),base_dir=tmp_path)
+    value=json.loads((tmp_path/'reports/strategy_execution/entry/latest.json').read_bytes())
+    assert value['status']=='blocked' and value['phase']=='UNIFIED_SELECTION_HANDOFF'
+    assert value['orders_submitted']==value['orders_filled']==0 and value['broker_outcome']=='NOT_CONTACTED'
+
+
 @pytest.mark.parametrize('dry_run',[False,True])
 def test_no_signal_and_dry_run_do_not_construct_broker_or_write_order_state(monkeypatch,tmp_path,dry_run):
     value=handoff()
@@ -72,9 +88,10 @@ def test_no_signal_and_dry_run_do_not_construct_broker_or_write_order_state(monk
     ('submit_at_ny','09:30'),('limit_buffer_pct',1),('cancel_after_min',60),('chase_enabled',True),
     ('disable_open_position_cap',True),('paper_research_entries',False),('extended_hours',False),
     ('reconcile_only',True),('diagnostic',True),('reconcile_auto',False)])
-def test_changed_task_risk_or_reconciliation_settings_refuse_before_network(monkeypatch,field,value):
+def test_changed_task_risk_or_reconciliation_settings_refuse_before_network(monkeypatch,tmp_path,field,value):
+    monkeypatch.setattr(runtime,'load_config',lambda *a:{})
     monkeypatch.setattr(runtime,'environment',lambda:pytest.fail('Invalid settings accessed credentials'))
-    with pytest.raises(ValueError):runtime.run_entry(config(**{field:value}))
+    with pytest.raises(ValueError):runtime.run_entry(config(**{field:value}),base_dir=tmp_path)
 
 
 def test_monitor_receipt_requires_actual_account_freshness_and_identical_sources(tmp_path):
@@ -93,7 +110,7 @@ def test_monitor_receipt_requires_actual_account_freshness_and_identical_sources
 def test_source_contract_includes_executor_monitor_store_and_configuration():
     from scripts import pipeline_postflight as health,strategy_pipeline as pipeline
     bound=(*health.SOURCE_FILES,*pipeline.EXTRA_SOURCES)
-    assert len(bound)==len(set(bound))==64
+    assert len(bound)==len(set(bound))==66
     assert {'scripts/bull_flag_strategy.py','scripts/chart_patterns.py',
             'scripts/bull_flag_companion.py','config/strategy_companions.json',
             'scripts/pattern_strategy.py','scripts/swing_patterns.py','config/chart_pattern_companions.json','scripts/setup_selection.py'}<=set(bound)
@@ -166,6 +183,36 @@ def test_monitor_failure_replaces_prior_healthy_receipt_and_closes_adapter(monke
     with pytest.raises(ValueError):runtime.monitor_cycle(base_dir=tmp_path)
     receipt=json.loads((tmp_path/'reports/strategy_execution/monitor/latest.json').read_bytes())
     assert receipt['status']=='blocked' and broker.closed
+
+
+def test_missing_unified_selection_keeps_owned_lifecycle_running(monkeypatch,tmp_path):
+    from scripts import strategy_execution_broker,strategy_execution_engine
+    monkeypatch.setenv('JBR_STRATEGY_EXECUTION','true')
+    monkeypatch.setattr(runtime,'environment',lambda:{})
+    monkeypatch.setattr(runtime,'load_config',lambda *a:{})
+    monkeypatch.setattr(runtime,'source_lease',lambda *a:nullcontext())
+    monkeypatch.setattr(runtime,'source_guard',lambda *a,**k:True)
+    template=handoff()
+    monkeypatch.setattr(runtime,'readonly_handoff',lambda *a,**k:template)
+    def unavailable(*a,**k):raise RuntimeError('DB selection read failed')
+    monkeypatch.setattr(runtime,'unified_handoff',unavailable)
+    record=dict(source_bindings={},batch=dict(strategy_contract=template['strategy_contract']))
+    folder=tmp_path/'reports/pipeline_postflight';folder.mkdir(parents=True)
+    (folder/'latest.json').write_text(json.dumps(record))
+    signal=dict(signal_id='owned',payload=dict(handoff=template,position=None))
+    store=SimpleNamespace(lease=lambda:nullcontext(),signals=lambda:[signal],orders=lambda sid:[])
+    connection=SimpleNamespace(rollback=lambda:None,close=lambda:None)
+    monkeypatch.setattr(runtime,'store_connection',lambda *a:(connection,store))
+    broker=SimpleNamespace(account_id='paper',account=lambda:None,clock=lambda:{'is_open':False},close=lambda:None)
+    monkeypatch.setattr(strategy_execution_broker,'PaperBroker',lambda *a,**k:broker)
+    calls=[]
+    def tick(**kwargs):calls.append(kwargs);return dict(owned_symbols=['AAA'])
+    engine=SimpleNamespace(events=[],tick=tick)
+    monkeypatch.setattr(strategy_execution_engine,'Engine',lambda *a,**k:engine)
+    value=runtime.monitor_cycle(base_dir=tmp_path)
+    assert calls and value['status']=='ok' and value['owned_symbols']==['AAA']
+    assert value['entry_sources_ready'] is True and value['unified_selection_ready'] is False
+    assert value['entry_ready'] is False and value['entry_block_reason']=='UNIFIED_SELECTION_UNAVAILABLE'
 
 
 def test_unrelated_source_change_blocks_entry_without_stopping_frozen_exit_code(monkeypatch,tmp_path):

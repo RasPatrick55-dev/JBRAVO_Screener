@@ -19,6 +19,7 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 
 ## How-To
 
+- [Complete strategy preparation, blocked reporting and unified handoff](how-to/strategy_runtime_recovery.md)
 - [Swing research scorecards and isolated entry/exit comparisons](how-to/swing_research_lab.md)
 - [Bull flag companion alongside Pullback/Reclaim](how-to/bull_flag_companion.md)
 - [Four additional swing chart-pattern companions](how-to/chart_pattern_companions.md)

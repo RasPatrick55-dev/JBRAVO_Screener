@@ -56,6 +56,10 @@ candidate report. Cohort metric fields refer to the verified research simulation
 label generation and ranker evaluation are explicitly marked unused. Simulation
 P&L is never published as actual broker performance.
 
+The primary snapshot alone is partial evidence. Overall success also requires
+every enabled companion and the exact unified-selection publication. See
+[completion and blocked states](strategy_runtime_recovery.md#completion-and-blocked-states).
+
 The postflight separates `screen_ready` from `entry_ready`. The separately
 authorized executor binds the complete strategy/Backtest/Metrics handoff and
 uses its explicit 04:00 Eastern frozen-reference limit-order policy. Historical
