@@ -19,6 +19,7 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 
 ## How-To
 
+- [Swing research scorecards and isolated entry/exit comparisons](how-to/swing_research_lab.md)
 - [Bull flag companion alongside Pullback/Reclaim](how-to/bull_flag_companion.md)
 - [Four additional swing chart-pattern companions](how-to/chart_pattern_companions.md)
 - [Market-wide daily strategy screening](how-to/market_wide_strategy_screen.md)
