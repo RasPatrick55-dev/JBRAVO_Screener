@@ -73,7 +73,7 @@ def _status(value, base_dir=ROOT, strategy_id=BULL_FLAG):
             os.unlink(name)
 
 
-def produce(parent_root, parent_spec, cfg, *, now, archive, total_deadline, base_dir=ROOT, strategy_id=BULL_FLAG):
+def produce(parent_root, parent_spec, cfg, *, now, archive, total_deadline, base_dir=ROOT, strategy_id=BULL_FLAG, dataset=None):
     """Reuse the complete parent capture, with no new provider request.
 
     Failure after the primary archive is complete never reverses that archive.
@@ -85,6 +85,7 @@ def produce(parent_root, parent_spec, cfg, *, now, archive, total_deadline, base
     from scripts.research_testing import save_json
     from scripts.strategy_scanner import run_scan
     root = Path(parent_root)/'companions'/strategy_id
+    started = time.monotonic(); phase = 'COMPANION_SCAN'
     try:
         root.mkdir(parents=True, exist_ok=False)
         spec = deepcopy(parent_spec)
@@ -93,7 +94,9 @@ def produce(parent_root, parent_spec, cfg, *, now, archive, total_deadline, base
         save_json(root/'study.json', spec)
         result = run_scan(spec, as_of=spec['folds'][0]['test_end'], output=root/'scan',
             strategy_ids=[strategy_id], fold_id=cfg['episode_id'], cost_case_id=cfg['cost_case']['id'],
-            now=now, total_deadline=min(total_deadline, time.monotonic()+policy['max_scan_seconds']))
+            now=now, total_deadline=min(total_deadline, time.monotonic()+policy['max_scan_seconds']),
+            **({'dataset': dataset} if dataset is not None else {}))
+        phase = 'COMPANION_ARCHIVE'
         proof = archive(result, root, dict(cfg, strategy_id=strategy_id))
         value = dict(status='COMPLETED_COMPANION_SCREEN', strategy_id=strategy_id,
             archive=proof, candidates=len(result['top_candidates']), provider_gets=0,
@@ -101,8 +104,9 @@ def produce(parent_root, parent_spec, cfg, *, now, archive, total_deadline, base
         save_json(root/'completion.json', value)
         return value
     except Exception as error:
+        from scripts.strategy_runtime_diagnostics import diagnostic
         failure = dict(status='COMPANION_UNAVAILABLE_PRIMARY_PRESERVED', strategy_id=strategy_id,
-                       error_type=type(error).__name__, provider_gets=0)
+                       **diagnostic(error, phase, started, deadline=total_deadline), provider_gets=0)
         if root.is_dir() and not (root/'failure.json').exists():
             save_json(root/'failure.json', failure)
         return failure
@@ -141,7 +145,7 @@ def _publish(record, spec_sha, *, env):
         connection.rollback(); connection.close()
 
 
-def prepare_primary(primary, *, env, base_dir=ROOT, strategy_id=BULL_FLAG):
+def prepare_primary(primary, *, env, base_dir=ROOT, strategy_id=BULL_FLAG, dataset=None):
     """Separate exact-session Backtest/Metrics and immutable DB publication.
 
     No canonical candidate rows/views, primary report, existing strategy policy
@@ -154,6 +158,7 @@ def prepare_primary(primary, *, env, base_dir=ROOT, strategy_id=BULL_FLAG):
     from scripts.research_store import connect
     from scripts.strategy_backtest import run_candidate_backtest
     from scripts.strategy_metrics import build_metrics
+    started=time.monotonic(); phase='COMPANION_ARCHIVE_READBACK'
     try:
         cfg = dict(load_config(Path(base_dir)/'config/strategy_scan_daily.json'), strategy_id=strategy_id)
         connection = connect(env=env)
@@ -163,9 +168,11 @@ def prepare_primary(primary, *, env, base_dir=ROOT, strategy_id=BULL_FLAG):
                                                strategy_id=strategy_id)
         finally:
             connection.rollback(); connection.close()
-        dataset = pipeline.verified_dataset(value, archived[0], base_dir=base_dir, strategy_id=strategy_id)
+        dataset = pipeline.verified_dataset(value, archived[0], base_dir=base_dir, strategy_id=strategy_id,
+            **({'dataset': dataset} if dataset is not None else {}))
         spec = strict_json((Path(value['output_root'])/'study.json').read_bytes())
         batch = pipeline.selection_batch(value, primary['session'])
+        phase='COMPANION_BACKTEST_METRICS'
         backtest = run_candidate_backtest(batch, primary_run_id=primary['run_id'],
                                          dataset=dataset, specification=spec)
         metrics = build_metrics(batch, backtest, primary_run_id=primary['run_id'])
@@ -178,13 +185,15 @@ def prepare_primary(primary, *, env, base_dir=ROOT, strategy_id=BULL_FLAG):
         from scripts import pipeline_postflight as health
         require(all(health._binding(health._read(Path(base_dir)/name,health.MAX_SOURCE_BYTES))==pin
                     for name,pin in primary['source_bindings'].items()),'companion_source_changed_during_run')
+        phase='COMPANION_PRIMARY_PUBLICATION'
         _publish(record, archived[0].strip(), env=env)
         value = dict(status=record['status'], run_id=record['run_id'], result_sha256=digest(record),
             primary_run_id=primary['run_id'], candidates=batch['candidate_count'],
             backtest_result_id=backtest['result_id'], metrics_result_id=metrics['result_id'])
     except Exception as error:
+        from scripts.strategy_runtime_diagnostics import diagnostic
         value = dict(status='COMPANION_UNAVAILABLE_PRIMARY_PRESERVED', primary_run_id=primary['run_id'],
-                     error_type=type(error).__name__)
+                     **diagnostic(error,phase,started))
     _status(value, base_dir, strategy_id)
     return value
 

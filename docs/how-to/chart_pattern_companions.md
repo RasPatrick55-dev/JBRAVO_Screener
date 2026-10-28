@@ -32,6 +32,9 @@ configuration makes the new companions unavailable while the original primary
 and Bull Flag remain isolated. Each added pattern has a 600-second scan/replay
 budget. All producer work stays inside the existing 7,200-second total budget;
 a late companion failure cannot reverse an already committed primary archive.
+The [runtime recovery contract](strategy_runtime_recovery.md) requires every
+enabled screen to complete before the producer reports success, and a complete
+unified publication before primary postflight succeeds.
 
 The producer reuses one captured SIP/USD universe, raw and split bars, actions
 and calendar, without additional provider requests. Each strategy has its own
@@ -76,7 +79,7 @@ the registered strategies declared by its study. The additions
 use a separate adapter with the established exit kernel, durable engine,
 cancellation and reconciliation paths.
 
-Rollout requires a new merged source package and pinned launcher, all **64**
+Rollout requires a new merged source package and pinned launcher, all **66**
 pipeline bindings verified, a flat native paper account with empty durable
 ownership before lifecycle changes, and the existing monitor restart. Fresh
 scheduled producer and primary results must precede entries. Never rewrite old

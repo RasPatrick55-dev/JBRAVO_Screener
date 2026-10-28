@@ -26,7 +26,8 @@ from scripts.pattern_strategy import PATTERNS, plan_from_row
 SOURCE_FILES = ('screener.py', 'strategy_scanner.py', 'strategy_library.py', 'research_dataset.py',
                 'research_testing.py', 'research_strategies.py', 'research_simulation.py',
                 'research_store.py', 'backtest_core.py', 'indicators.py',
-                'strategy_universe.py', 'strategy_market_replay.py', 'bull_flag_strategy.py', 'chart_patterns.py', 'pattern_strategy.py', 'swing_patterns.py', 'setup_selection.py')
+                'strategy_universe.py', 'strategy_market_replay.py', 'strategy_prepared_market.py',
+                'strategy_runtime_diagnostics.py', 'bull_flag_strategy.py', 'chart_patterns.py', 'pattern_strategy.py', 'swing_patterns.py', 'setup_selection.py')
 
 
 def signal_id(strategy, episode_id, symbol, session):
@@ -270,7 +271,7 @@ def _report(results):
 
 
 def run_scan(spec, *, as_of, output, strategy_ids=None, fold_id=None, cost_case_id='base_cost', now=None,
-             total_deadline=None):
+             total_deadline=None, dataset=None):
     validate_spec(spec)
     if date.fromisoformat(as_of).isoformat() != as_of:
         raise ValueError('Noncanonical scanner session')
@@ -297,9 +298,14 @@ def run_scan(spec, *, as_of, output, strategy_ids=None, fold_id=None, cost_case_
     output.mkdir(parents=True, exist_ok=False)
     save_json(output/'claim.json', dict(status='CLAIMED_NO_REPLAY', as_of=as_of,
         strategy_ids=[strategy.id for strategy in selected], broker_operations=0))
+    started = clock.monotonic(); phase = 'DATASET_VALIDATION'; deadline = None
     try:
         deadline = min(clock.monotonic()+spec['max_seconds'], total_deadline or float('inf'))
-        dataset = load_dataset(spec)
+        if dataset is None:
+            dataset = load_dataset(spec)
+        else:
+            from scripts.strategy_prepared_market import reuse_dataset
+            reuse_dataset(dataset, spec)
         if as_of not in dataset.calendar.index:
             raise ValueError('Scanner session is absent from supplied exchange calendar')
         source = output/'source'
@@ -312,6 +318,7 @@ def run_scan(spec, *, as_of, output, strategy_ids=None, fold_id=None, cost_case_
         save_json(output/'specification.json', spec)
         save_json(output/'dataset.json', dataset.provenance)
         results = []
+        phase = 'STRATEGY_REPLAY'
         for strategy in selected:
             result = evaluate_strategy(dataset, spec, strategy, folds[0], costs[0], as_of,
                                        deadline=deadline, stop_file=output/'STOP')
@@ -376,8 +383,9 @@ def run_scan(spec, *, as_of, output, strategy_ids=None, fold_id=None, cost_case_
         save_json(output/'manifest.json', dict(bindings=bindings))
         return summary
     except Exception as error:
-        save_json(output/'failure.json', dict(status='FAILED_NO_REPLAY', error_type=type(error).__name__,
-                                             broker_operations=0))
+        from scripts.strategy_runtime_diagnostics import diagnostic
+        save_json(output/'failure.json', dict(status='FAILED_NO_REPLAY',
+            **diagnostic(error, phase, started, deadline=deadline), broker_operations=0))
         raise
 
 

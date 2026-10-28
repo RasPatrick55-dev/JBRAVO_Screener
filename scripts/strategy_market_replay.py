@@ -12,10 +12,19 @@ from scripts.research_simulation import availability_clock
 
 
 def prepare_market(dataset, spec, strategy, fold, *, deadline=None, stop_file=None):
+    if 'prepared_market' in spec:
+        from scripts.strategy_prepared_market import read_prepared
+        return read_prepared(dataset, spec, strategy, fold, deadline=deadline, stop_file=stop_file)
+    return prepare_symbols(dataset, spec, strategy, fold, spec['universe']['symbols'],
+                           deadline=deadline, stop_file=stop_file)
+
+
+def prepare_symbols(dataset, spec, strategy, fold, symbols, *, deadline=None, stop_file=None):
+    """The same rule kernel and sparse-row policy, also used by the shared builder."""
     data, latest, dividends, observations = {}, {}, [], 0
-    for symbol in spec['universe']['symbols']:
-        if (deadline is not None and time.monotonic() >= deadline) or (stop_file and stop_file.exists()):
-            raise RuntimeError('Market preparation stopped by deadline or stop file')
+    for symbol in symbols:
+        from scripts.strategy_runtime_diagnostics import checkpoint
+        checkpoint('MARKET_PREPARATION', deadline=deadline, stop_file=stop_file)
         try:
             frame = dataset.prepare(symbol, strategy, fold)
         except ValueError as error:

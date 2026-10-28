@@ -8,6 +8,9 @@ testing; `research_qualified=false` and premarket performance qualification
 remain pending. Completing this workflow does not change an earlier research
 HOLD or authorize a different trading mode.
 
+For complete six-strategy preparation, blocked status and exact unified-handoff
+requirements, see [strategy runtime recovery](strategy_runtime_recovery.md).
+
 For frozen six-strategy scorecards, entry/exit comparisons, complete qualifying
 cohorts, experiment registration and prospective paper audits, use the
 [swing research lab](swing_research_lab.md). Its isolated results do not change
