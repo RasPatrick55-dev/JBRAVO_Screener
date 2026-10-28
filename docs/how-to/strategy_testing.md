@@ -15,6 +15,13 @@ the deployed trading rules or establish profitability.
 
 ## Department workflow
 
+The [October 28 production run review](../reference/pipeline_run_review_2026-10-28.json)
+records the first fresh published Pullback batch and its completed Backtest and
+Metrics, alongside four failed pattern screens, unavailable unified selection
+and a failed zero-order executor run. The primary return code alone did not
+prove the all-strategy handoff was ready. This dated evidence is separate from
+the earlier isolated audit and from any future corrected run.
+
 | Stage | Implementation and operator guide | Required handoff |
 | --- | --- | --- |
 | Research | `research_testing.py`; this guide | Frozen specification, data/action provenance, scenario results and source hashes |
