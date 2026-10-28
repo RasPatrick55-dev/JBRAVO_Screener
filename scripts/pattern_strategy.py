@@ -60,24 +60,43 @@ def plan_from_row(symbol,row):
     return dict(value,symbol=symbol)
 
 
-def prepare(raw,split,fold,strategy_id):
-    require(strategy_id in STRATEGIES,'unknown_pattern_strategy')
+def prepare_many(raw,split,fold,strategy_ids,*,enrich_common=False,checkpoint=None):
+    strategy_ids=tuple(strategy_ids)
+    require(strategy_ids and len(strategy_ids)==len(set(strategy_ids)) and
+            set(strategy_ids)<=set(STRATEGIES),'unknown_pattern_strategy')
+    from scripts.setup_selection import enrich
     frame=prepare_signals(raw,split,BASELINE,fold)
-    frame['score']=np.nan
+    if enrich_common:
+        # Technical ranking features do not depend on which pattern matched.
+        # Compute them once, then copy them into each independent strategy frame.
+        frame=enrich(frame,split)
     candidate=((split.close>split.open)&(split.volume>=split.volume.shift(1).rolling(20).mean()*1.5)&
                (split.close>split.close.shift(1).rolling(2).max()))
-    plans={}
-    for day in frame.index[frame.entry_ready & candidate.reindex(frame.index).fillna(False)]:
-        signal=DETECTORS[strategy_id](split.loc[:day].tail(141))
-        if signal is None:continue
-        plan=asdict(signal)
-        factor=float(raw.loc[day,'close']/split.loc[day,'close'])
-        for key in ('entry','resistance','invalidation','target'):plan[key]*=factor
-        plans[day]=plan
-        frame.loc[day,'score']=100*(plan['target']/plan['entry']-1)+min(signal.metrics['volume_ratio'],10)
-    frame['entry_details']=[dict(signal=d in plans,failures=[] if d in plans else ['NO_CONFIRMED_PATTERN'],
-                                 pattern_exit=plans.get(d)) for d in frame.index]
-    return frame
+    days=frame.index[frame.entry_ready & candidate.reindex(frame.index).fillna(False)]
+    output={}
+    for strategy_id in strategy_ids:
+        if checkpoint is not None:checkpoint()
+        current=frame.copy(deep=True)
+        current['score']=np.nan
+        plans={}
+        for day in days:
+            if checkpoint is not None:checkpoint()
+            signal=DETECTORS[strategy_id](split.loc[:day].tail(141))
+            if signal is None:continue
+            plan=asdict(signal)
+            factor=float(raw.loc[day,'close']/split.loc[day,'close'])
+            for key in ('entry','resistance','invalidation','target'):plan[key]*=factor
+            plans[day]=plan
+            current.loc[day,'score']=100*(plan['target']/plan['entry']-1)+min(signal.metrics['volume_ratio'],10)
+        current['entry_details']=[dict(signal=d in plans,failures=[] if d in plans else ['NO_CONFIRMED_PATTERN'],
+                                       pattern_exit=plans.get(d)) for d in current.index]
+        output[strategy_id]=current
+    return output
+
+
+def prepare(raw,split,fold,strategy_id):
+    require(strategy_id in STRATEGIES,'unknown_pattern_strategy')
+    return prepare_many(raw,split,fold,(strategy_id,))[strategy_id]
 
 
 class PatternMixin(BullFlagMixin):

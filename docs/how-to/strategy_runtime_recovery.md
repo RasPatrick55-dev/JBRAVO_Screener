@@ -10,10 +10,21 @@ reason or phase, so an exact cause cannot be reconstructed from them.
 ## Shared preparation
 
 The repaired producer loads and verifies one complete market capture. It visits
-each symbol once and calls all six existing preparation adapters while that
-symbol's raw/split history remains in the bounded dataset cache. This avoids six
-full manifest validations and six passes loading the same history. Rule adapters,
-sparse-row policy, complete current decisions and portfolio rules stay unchanged.
+each symbol once and prepares the four swing-pattern strategies from one shared
+baseline indicator frame while that symbol's raw/split history remains in the
+bounded dataset cache. Pullback/Reclaim and Bull Flag retain their independent
+adapters. This avoids repeated baseline feature calculation as well as repeated
+history loads. Pattern predicates, thresholds, sparse-row policy, complete
+current decisions and portfolio rules stay unchanged. The four pattern source
+hashes change when their implementation is optimized, so a run must bind the
+current definitions and cannot reuse prior source-bound strategy artifacts.
+
+Ascending Triangle and Cup and Handle scan their existing windows through NumPy
+arrays rather than repeated Pandas slices. The five-bar pivot predicate remains
+strict, including its tie behavior. No lookback, threshold, ranking or entry
+rule is relaxed. `shared_pattern_group_seconds` reports the shared work; the
+per-strategy timing values report each strategy's remaining preparation and
+serialization work.
 
 `<session>/prepared/manifest.json` binds compressed input chunks, full symbol
 population, capture provenance, folds, portfolio settings, preparation sources
@@ -65,7 +76,10 @@ owned-position lifecycle continues under its original source guards.
 
 Tests compare all six original and prepared-input replays, including positive
 synthetic examples for all four patterns, with exact candidates, fills, lifecycle
-and metrics. They also cover tampering, full symbol accounting, deadline
+and metrics. A separate local equivalence check compared the optimized four
+pattern frames against the previous implementation on a retained ten-symbol
+October 23 sample; this is a small local performance experiment, not native
+full-market timing proof. Tests also cover tampering, full symbol accounting, deadline
 diagnostics, blocked completion and fresh entry receipts. These are software
 tests, not profitable-strategy or completed-purchase evidence.
 
