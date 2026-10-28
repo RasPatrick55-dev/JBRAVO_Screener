@@ -1,0 +1,762 @@
+{
+  "stats": {
+    "ok": true,
+    "status": "ready",
+    "source": "postgres",
+    "view_scope": "RECORDED_GROSS",
+    "pnl_basis": "PAPER_GROSS_RECORDED_PRICES_AND_AUDITED_FILLS_V1",
+    "performance_status": "RECORDED_GROSS_ONLY",
+    "policy_validation_status": "VALIDATED_POLICY",
+    "range": "all",
+    "mode": "winners",
+    "rows": [
+      {
+        "key": "d",
+        "label": "DAILY",
+        "winRatePct": 50.0,
+        "totalPL": "12",
+        "topTrade": {
+          "symbol": "AAA",
+          "pl": "10"
+        },
+        "worstLoss": {
+          "symbol": "AAA",
+          "pl": "-3"
+        },
+        "tradesCount": 4,
+        "coverage": {
+          "included": 4,
+          "excluded": 1,
+          "unknown": 0,
+          "unscoped_unknown": 0,
+          "reasons": {}
+        }
+      },
+      {
+        "key": "w",
+        "label": "WEEKLY",
+        "winRatePct": 50.0,
+        "totalPL": "12",
+        "topTrade": {
+          "symbol": "AAA",
+          "pl": "10"
+        },
+        "worstLoss": {
+          "symbol": "AAA",
+          "pl": "-3"
+        },
+        "tradesCount": 4,
+        "coverage": {
+          "included": 4,
+          "excluded": 1,
+          "unknown": 0,
+          "unscoped_unknown": 0,
+          "reasons": {}
+        }
+      },
+      {
+        "key": "m",
+        "label": "MONTHLY",
+        "winRatePct": 50.0,
+        "totalPL": "12",
+        "topTrade": {
+          "symbol": "AAA",
+          "pl": "10"
+        },
+        "worstLoss": {
+          "symbol": "AAA",
+          "pl": "-3"
+        },
+        "tradesCount": 4,
+        "coverage": {
+          "included": 4,
+          "excluded": 1,
+          "unknown": 0,
+          "unscoped_unknown": 0,
+          "reasons": {}
+        }
+      },
+      {
+        "key": "y",
+        "label": "YEARLY",
+        "winRatePct": 40.0,
+        "totalPL": "-51.38",
+        "topTrade": {
+          "symbol": "AAA",
+          "pl": "10"
+        },
+        "worstLoss": {
+          "symbol": "CRC",
+          "pl": "-63.38"
+        },
+        "tradesCount": 5,
+        "coverage": {
+          "included": 5,
+          "excluded": 1,
+          "unknown": 0,
+          "unscoped_unknown": 0,
+          "reasons": {}
+        }
+      },
+      {
+        "key": "all",
+        "label": "ALL",
+        "winRatePct": 40.0,
+        "totalPL": "-51.38",
+        "topTrade": {
+          "symbol": "AAA",
+          "pl": "10"
+        },
+        "worstLoss": {
+          "symbol": "CRC",
+          "pl": "-63.38"
+        },
+        "tradesCount": 5,
+        "coverage": {
+          "included": 5,
+          "excluded": 1,
+          "unknown": 0,
+          "unscoped_unknown": 0,
+          "reasons": {}
+        }
+      }
+    ],
+    "coverage": {
+      "included": 5,
+      "excluded": 1,
+      "unknown": 0,
+      "unscoped_unknown": 0,
+      "reasons": {}
+    },
+    "closed_population_count": 6,
+    "gross_input_complete": true,
+    "input_fingerprint": "67986a44d64889fe0cf0039b9d32610261945b71a3dc1b6d9b02eb8d2ea38eb6",
+    "observation_basis": "FULL_BOUNDED_CLOSED_ROWS_WITH_CURRENT_POLICY",
+    "date_basis": "UTC exit instant; rolling1/7/30/365days; ALL has no date cutoff",
+    "observed_at": "2026-10-27T22:00:00+00:00",
+    "fees": null,
+    "net_pnl": null,
+    "fees_status": "UNKNOWN",
+    "net_status": "UNKNOWN",
+    "net_eligible": false,
+    "accounting_complete": false,
+    "recovery_complete": false,
+    "entry_ready": false,
+    "qualified_net_status": "NOT_ESTABLISHED_BY_RECORDED_GROSS"
+  },
+  "winners": {
+    "ok": true,
+    "status": "ready",
+    "source": "postgres",
+    "view_scope": "RECORDED_GROSS",
+    "pnl_basis": "PAPER_GROSS_RECORDED_PRICES_AND_AUDITED_FILLS_V1",
+    "performance_status": "RECORDED_GROSS_ONLY",
+    "policy_validation_status": "VALIDATED_POLICY",
+    "range": "all",
+    "mode": "winners",
+    "rows": [
+      {
+        "rank": 1,
+        "symbol": "AAA",
+        "pl": "7"
+      },
+      {
+        "rank": 2,
+        "symbol": "BBB",
+        "pl": "5"
+      }
+    ],
+    "coverage": {
+      "included": 5,
+      "excluded": 1,
+      "unknown": 0,
+      "unscoped_unknown": 0,
+      "reasons": {}
+    },
+    "closed_population_count": 6,
+    "gross_input_complete": true,
+    "input_fingerprint": "67986a44d64889fe0cf0039b9d32610261945b71a3dc1b6d9b02eb8d2ea38eb6",
+    "observation_basis": "FULL_BOUNDED_CLOSED_ROWS_WITH_CURRENT_POLICY",
+    "date_basis": "UTC exit instant; rolling1/7/30/365days; ALL has no date cutoff",
+    "observed_at": "2026-10-27T22:00:00+00:00",
+    "fees": null,
+    "net_pnl": null,
+    "fees_status": "UNKNOWN",
+    "net_status": "UNKNOWN",
+    "net_eligible": false,
+    "accounting_complete": false,
+    "recovery_complete": false,
+    "entry_ready": false,
+    "qualified_net_status": "NOT_ESTABLISHED_BY_RECORDED_GROSS"
+  },
+  "losers": {
+    "ok": true,
+    "status": "ready",
+    "source": "postgres",
+    "view_scope": "RECORDED_GROSS",
+    "pnl_basis": "PAPER_GROSS_RECORDED_PRICES_AND_AUDITED_FILLS_V1",
+    "performance_status": "RECORDED_GROSS_ONLY",
+    "policy_validation_status": "VALIDATED_POLICY",
+    "range": "all",
+    "mode": "losers",
+    "rows": [
+      {
+        "rank": 1,
+        "symbol": "CRC",
+        "pl": "-63.38"
+      }
+    ],
+    "coverage": {
+      "included": 5,
+      "excluded": 1,
+      "unknown": 0,
+      "unscoped_unknown": 0,
+      "reasons": {}
+    },
+    "closed_population_count": 6,
+    "gross_input_complete": true,
+    "input_fingerprint": "67986a44d64889fe0cf0039b9d32610261945b71a3dc1b6d9b02eb8d2ea38eb6",
+    "observation_basis": "FULL_BOUNDED_CLOSED_ROWS_WITH_CURRENT_POLICY",
+    "date_basis": "UTC exit instant; rolling1/7/30/365days; ALL has no date cutoff",
+    "observed_at": "2026-10-27T22:00:00+00:00",
+    "fees": null,
+    "net_pnl": null,
+    "fees_status": "UNKNOWN",
+    "net_status": "UNKNOWN",
+    "net_eligible": false,
+    "accounting_complete": false,
+    "recovery_complete": false,
+    "entry_ready": false,
+    "qualified_net_status": "NOT_ESTABLISHED_BY_RECORDED_GROSS"
+  },
+  "partial": {
+    "ok": true,
+    "status": "partial",
+    "source": "postgres",
+    "view_scope": "RECORDED_GROSS",
+    "pnl_basis": "PAPER_GROSS_RECORDED_PRICES_AND_AUDITED_FILLS_V1",
+    "performance_status": "RECORDED_GROSS_ONLY",
+    "policy_validation_status": "VALIDATED_POLICY",
+    "range": "all",
+    "mode": "winners",
+    "rows": [
+      {
+        "key": "d",
+        "label": "DAILY",
+        "winRatePct": 50.0,
+        "totalPL": "12",
+        "topTrade": {
+          "symbol": "AAA",
+          "pl": "10"
+        },
+        "worstLoss": {
+          "symbol": "AAA",
+          "pl": "-3"
+        },
+        "tradesCount": 4,
+        "coverage": {
+          "included": 4,
+          "excluded": 1,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "reasons": {
+            "EXIT_PRICE_UNKNOWN_OR_INVALID": 1
+          }
+        }
+      },
+      {
+        "key": "w",
+        "label": "WEEKLY",
+        "winRatePct": 50.0,
+        "totalPL": "12",
+        "topTrade": {
+          "symbol": "AAA",
+          "pl": "10"
+        },
+        "worstLoss": {
+          "symbol": "AAA",
+          "pl": "-3"
+        },
+        "tradesCount": 4,
+        "coverage": {
+          "included": 4,
+          "excluded": 1,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "reasons": {
+            "EXIT_PRICE_UNKNOWN_OR_INVALID": 1
+          }
+        }
+      },
+      {
+        "key": "m",
+        "label": "MONTHLY",
+        "winRatePct": 50.0,
+        "totalPL": "12",
+        "topTrade": {
+          "symbol": "AAA",
+          "pl": "10"
+        },
+        "worstLoss": {
+          "symbol": "AAA",
+          "pl": "-3"
+        },
+        "tradesCount": 4,
+        "coverage": {
+          "included": 4,
+          "excluded": 1,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "reasons": {
+            "EXIT_PRICE_UNKNOWN_OR_INVALID": 1
+          }
+        }
+      },
+      {
+        "key": "y",
+        "label": "YEARLY",
+        "winRatePct": 40.0,
+        "totalPL": "-51.38",
+        "topTrade": {
+          "symbol": "AAA",
+          "pl": "10"
+        },
+        "worstLoss": {
+          "symbol": "CRC",
+          "pl": "-63.38"
+        },
+        "tradesCount": 5,
+        "coverage": {
+          "included": 5,
+          "excluded": 1,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "reasons": {
+            "EXIT_PRICE_UNKNOWN_OR_INVALID": 1
+          }
+        }
+      },
+      {
+        "key": "all",
+        "label": "ALL",
+        "winRatePct": 40.0,
+        "totalPL": "-51.38",
+        "topTrade": {
+          "symbol": "AAA",
+          "pl": "10"
+        },
+        "worstLoss": {
+          "symbol": "CRC",
+          "pl": "-63.38"
+        },
+        "tradesCount": 5,
+        "coverage": {
+          "included": 5,
+          "excluded": 1,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "reasons": {
+            "EXIT_PRICE_UNKNOWN_OR_INVALID": 1
+          }
+        }
+      }
+    ],
+    "coverage": {
+      "included": 5,
+      "excluded": 1,
+      "unknown": 1,
+      "unscoped_unknown": 0,
+      "reasons": {
+        "EXIT_PRICE_UNKNOWN_OR_INVALID": 1
+      }
+    },
+    "closed_population_count": 7,
+    "gross_input_complete": false,
+    "input_fingerprint": "0178aadeeca6daa55bec085c7ac48f89a1dab8a87ce678e94791069c0f9e1c2f",
+    "observation_basis": "FULL_BOUNDED_CLOSED_ROWS_WITH_CURRENT_POLICY",
+    "date_basis": "UTC exit instant; rolling1/7/30/365days; ALL has no date cutoff",
+    "observed_at": "2026-10-27T22:00:00+00:00",
+    "fees": null,
+    "net_pnl": null,
+    "fees_status": "UNKNOWN",
+    "net_status": "UNKNOWN",
+    "net_eligible": false,
+    "accounting_complete": false,
+    "recovery_complete": false,
+    "entry_ready": false,
+    "qualified_net_status": "NOT_ESTABLISHED_BY_RECORDED_GROSS"
+  },
+  "unknown": {
+    "ok": true,
+    "status": "partial",
+    "source": "postgres",
+    "view_scope": "RECORDED_GROSS",
+    "pnl_basis": "PAPER_GROSS_RECORDED_PRICES_AND_AUDITED_FILLS_V1",
+    "performance_status": "RECORDED_GROSS_ONLY",
+    "policy_validation_status": "VALIDATED_POLICY",
+    "range": "all",
+    "mode": "winners",
+    "rows": [
+      {
+        "key": "d",
+        "label": "DAILY",
+        "winRatePct": null,
+        "totalPL": null,
+        "topTrade": {
+          "symbol": "--",
+          "pl": null
+        },
+        "worstLoss": {
+          "symbol": "--",
+          "pl": null
+        },
+        "tradesCount": 0,
+        "coverage": {
+          "included": 0,
+          "excluded": 0,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "reasons": {
+            "EXIT_PRICE_UNKNOWN_OR_INVALID": 1
+          }
+        }
+      },
+      {
+        "key": "w",
+        "label": "WEEKLY",
+        "winRatePct": null,
+        "totalPL": null,
+        "topTrade": {
+          "symbol": "--",
+          "pl": null
+        },
+        "worstLoss": {
+          "symbol": "--",
+          "pl": null
+        },
+        "tradesCount": 0,
+        "coverage": {
+          "included": 0,
+          "excluded": 0,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "reasons": {
+            "EXIT_PRICE_UNKNOWN_OR_INVALID": 1
+          }
+        }
+      },
+      {
+        "key": "m",
+        "label": "MONTHLY",
+        "winRatePct": null,
+        "totalPL": null,
+        "topTrade": {
+          "symbol": "--",
+          "pl": null
+        },
+        "worstLoss": {
+          "symbol": "--",
+          "pl": null
+        },
+        "tradesCount": 0,
+        "coverage": {
+          "included": 0,
+          "excluded": 0,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "reasons": {
+            "EXIT_PRICE_UNKNOWN_OR_INVALID": 1
+          }
+        }
+      },
+      {
+        "key": "y",
+        "label": "YEARLY",
+        "winRatePct": null,
+        "totalPL": null,
+        "topTrade": {
+          "symbol": "--",
+          "pl": null
+        },
+        "worstLoss": {
+          "symbol": "--",
+          "pl": null
+        },
+        "tradesCount": 0,
+        "coverage": {
+          "included": 0,
+          "excluded": 0,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "reasons": {
+            "EXIT_PRICE_UNKNOWN_OR_INVALID": 1
+          }
+        }
+      },
+      {
+        "key": "all",
+        "label": "ALL",
+        "winRatePct": null,
+        "totalPL": null,
+        "topTrade": {
+          "symbol": "--",
+          "pl": null
+        },
+        "worstLoss": {
+          "symbol": "--",
+          "pl": null
+        },
+        "tradesCount": 0,
+        "coverage": {
+          "included": 0,
+          "excluded": 0,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "reasons": {
+            "EXIT_PRICE_UNKNOWN_OR_INVALID": 1
+          }
+        }
+      }
+    ],
+    "coverage": {
+      "included": 0,
+      "excluded": 0,
+      "unknown": 1,
+      "unscoped_unknown": 0,
+      "reasons": {
+        "EXIT_PRICE_UNKNOWN_OR_INVALID": 1
+      }
+    },
+    "closed_population_count": 1,
+    "gross_input_complete": false,
+    "input_fingerprint": "cf182fccc1f70f440cbf7fb54636dbd1bacea5a22393d74cf5e635983c87703e",
+    "observation_basis": "FULL_BOUNDED_CLOSED_ROWS_WITH_CURRENT_POLICY",
+    "date_basis": "UTC exit instant; rolling1/7/30/365days; ALL has no date cutoff",
+    "observed_at": "2026-10-27T22:00:00+00:00",
+    "fees": null,
+    "net_pnl": null,
+    "fees_status": "UNKNOWN",
+    "net_status": "UNKNOWN",
+    "net_eligible": false,
+    "accounting_complete": false,
+    "recovery_complete": false,
+    "entry_ready": false,
+    "qualified_net_status": "NOT_ESTABLISHED_BY_RECORDED_GROSS"
+  },
+  "unknown_leaders": {
+    "ok": true,
+    "status": "partial",
+    "source": "postgres",
+    "view_scope": "RECORDED_GROSS",
+    "pnl_basis": "PAPER_GROSS_RECORDED_PRICES_AND_AUDITED_FILLS_V1",
+    "performance_status": "RECORDED_GROSS_ONLY",
+    "policy_validation_status": "VALIDATED_POLICY",
+    "range": "all",
+    "mode": "winners",
+    "rows": [],
+    "coverage": {
+      "included": 0,
+      "excluded": 0,
+      "unknown": 1,
+      "unscoped_unknown": 0,
+      "reasons": {
+        "EXIT_PRICE_UNKNOWN_OR_INVALID": 1
+      }
+    },
+    "closed_population_count": 1,
+    "gross_input_complete": false,
+    "input_fingerprint": "cf182fccc1f70f440cbf7fb54636dbd1bacea5a22393d74cf5e635983c87703e",
+    "observation_basis": "FULL_BOUNDED_CLOSED_ROWS_WITH_CURRENT_POLICY",
+    "date_basis": "UTC exit instant; rolling1/7/30/365days; ALL has no date cutoff",
+    "observed_at": "2026-10-27T22:00:00+00:00",
+    "fees": null,
+    "net_pnl": null,
+    "fees_status": "UNKNOWN",
+    "net_status": "UNKNOWN",
+    "net_eligible": false,
+    "accounting_complete": false,
+    "recovery_complete": false,
+    "entry_ready": false,
+    "qualified_net_status": "NOT_ESTABLISHED_BY_RECORDED_GROSS"
+  },
+  "empty": {
+    "ok": true,
+    "status": "ready",
+    "source": "postgres",
+    "view_scope": "RECORDED_GROSS",
+    "pnl_basis": "PAPER_GROSS_RECORDED_PRICES_AND_AUDITED_FILLS_V1",
+    "performance_status": "RECORDED_GROSS_ONLY",
+    "policy_validation_status": "VALIDATED_POLICY",
+    "range": "all",
+    "mode": "winners",
+    "rows": [
+      {
+        "key": "d",
+        "label": "DAILY",
+        "winRatePct": null,
+        "totalPL": "0",
+        "topTrade": {
+          "symbol": "--",
+          "pl": null
+        },
+        "worstLoss": {
+          "symbol": "--",
+          "pl": null
+        },
+        "tradesCount": 0,
+        "coverage": {
+          "included": 0,
+          "excluded": 0,
+          "unknown": 0,
+          "unscoped_unknown": 0,
+          "reasons": {}
+        }
+      },
+      {
+        "key": "w",
+        "label": "WEEKLY",
+        "winRatePct": null,
+        "totalPL": "0",
+        "topTrade": {
+          "symbol": "--",
+          "pl": null
+        },
+        "worstLoss": {
+          "symbol": "--",
+          "pl": null
+        },
+        "tradesCount": 0,
+        "coverage": {
+          "included": 0,
+          "excluded": 0,
+          "unknown": 0,
+          "unscoped_unknown": 0,
+          "reasons": {}
+        }
+      },
+      {
+        "key": "m",
+        "label": "MONTHLY",
+        "winRatePct": null,
+        "totalPL": "0",
+        "topTrade": {
+          "symbol": "--",
+          "pl": null
+        },
+        "worstLoss": {
+          "symbol": "--",
+          "pl": null
+        },
+        "tradesCount": 0,
+        "coverage": {
+          "included": 0,
+          "excluded": 0,
+          "unknown": 0,
+          "unscoped_unknown": 0,
+          "reasons": {}
+        }
+      },
+      {
+        "key": "y",
+        "label": "YEARLY",
+        "winRatePct": null,
+        "totalPL": "0",
+        "topTrade": {
+          "symbol": "--",
+          "pl": null
+        },
+        "worstLoss": {
+          "symbol": "--",
+          "pl": null
+        },
+        "tradesCount": 0,
+        "coverage": {
+          "included": 0,
+          "excluded": 0,
+          "unknown": 0,
+          "unscoped_unknown": 0,
+          "reasons": {}
+        }
+      },
+      {
+        "key": "all",
+        "label": "ALL",
+        "winRatePct": null,
+        "totalPL": "0",
+        "topTrade": {
+          "symbol": "--",
+          "pl": null
+        },
+        "worstLoss": {
+          "symbol": "--",
+          "pl": null
+        },
+        "tradesCount": 0,
+        "coverage": {
+          "included": 0,
+          "excluded": 0,
+          "unknown": 0,
+          "unscoped_unknown": 0,
+          "reasons": {}
+        }
+      }
+    ],
+    "coverage": {
+      "included": 0,
+      "excluded": 0,
+      "unknown": 0,
+      "unscoped_unknown": 0,
+      "reasons": {}
+    },
+    "closed_population_count": 0,
+    "gross_input_complete": true,
+    "input_fingerprint": "4457c2a0d76de28a686ab0cf077ea65cd5aed06f805f322a989896b1b6d4d0fd",
+    "observation_basis": "FULL_BOUNDED_CLOSED_ROWS_WITH_CURRENT_POLICY",
+    "date_basis": "UTC exit instant; rolling1/7/30/365days; ALL has no date cutoff",
+    "observed_at": "2026-10-27T22:00:00+00:00",
+    "fees": null,
+    "net_pnl": null,
+    "fees_status": "UNKNOWN",
+    "net_status": "UNKNOWN",
+    "net_eligible": false,
+    "accounting_complete": false,
+    "recovery_complete": false,
+    "entry_ready": false,
+    "qualified_net_status": "NOT_ESTABLISHED_BY_RECORDED_GROSS"
+  },
+  "empty_leaders": {
+    "ok": true,
+    "status": "ready",
+    "source": "postgres",
+    "view_scope": "RECORDED_GROSS",
+    "pnl_basis": "PAPER_GROSS_RECORDED_PRICES_AND_AUDITED_FILLS_V1",
+    "performance_status": "RECORDED_GROSS_ONLY",
+    "policy_validation_status": "VALIDATED_POLICY",
+    "range": "all",
+    "mode": "winners",
+    "rows": [],
+    "coverage": {
+      "included": 0,
+      "excluded": 0,
+      "unknown": 0,
+      "unscoped_unknown": 0,
+      "reasons": {}
+    },
+    "closed_population_count": 0,
+    "gross_input_complete": true,
+    "input_fingerprint": "4457c2a0d76de28a686ab0cf077ea65cd5aed06f805f322a989896b1b6d4d0fd",
+    "observation_basis": "FULL_BOUNDED_CLOSED_ROWS_WITH_CURRENT_POLICY",
+    "date_basis": "UTC exit instant; rolling1/7/30/365days; ALL has no date cutoff",
+    "observed_at": "2026-10-27T22:00:00+00:00",
+    "fees": null,
+    "net_pnl": null,
+    "fees_status": "UNKNOWN",
+    "net_status": "UNKNOWN",
+    "net_eligible": false,
+    "accounting_complete": false,
+    "recovery_complete": false,
+    "entry_ready": false,
+    "qualified_net_status": "NOT_ESTABLISHED_BY_RECORDED_GROSS"
+  },
+  "fixture_kind": "FICTIONAL_PUBLIC_RECORDED_GROSS_TEST_NOT_LIVE_TOTALS"
+}

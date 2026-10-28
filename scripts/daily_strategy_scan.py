@@ -259,29 +259,77 @@ def run_daily(cfg,provider,output,*,now=None,bootstrap_latest=False,archive=None
     root=output/session;root.mkdir(mode=0o700,exist_ok=False)
     save_json(root/'claim.json',dict(status='CLAIMED_NO_REPLAY',signal_session=session,started_at_utc=now.isoformat(),
         configuration=cfg,pipeline=PIPELINE,bootstrap_latest=bootstrap_latest))
+    phase = 'CAPTURE'
     try:
         (root/'calendar-response.json').write_bytes(raw)
         spec=capture(provider,cfg,calendar,session,root,now=now)
         from scripts.strategy_universe import market_config
+        dataset = None
         if market_config(cfg):
             remaining=cfg['max_total_seconds']-(clock.monotonic()-started)
             require(remaining>=1,'DAILY_TOTAL_BUDGET_EXCEEDED')
+            from scripts.research_dataset import load_dataset
+            from scripts.strategy_prepared_market import build_prepared
+            from scripts.setup_selection import required_strategies
+            phase = 'SHARED_MARKET_PREPARATION'
+            dataset = load_dataset(spec)
+            spec['prepared_market'] = build_prepared(dataset, spec, required_strategies(), root/'prepared',
+                deadline=min(started+cfg['max_total_seconds'], clock.monotonic()+cfg['max_scan_seconds']),
+                stop_file=root/'STOP')
+            # This session is exclusively claimed; freeze the prepared reference
+            # before any scan/archive. Preserve the original captured study too.
+            (root/'study.json').rename(root/'captured-study.json')
+            save_json(root/'study.json', spec)
+        phase = 'PRIMARY_SCAN'
         result=run_scan(spec,as_of=session,output=root/'scan',strategy_ids=[cfg['strategy_id']],
             fold_id=cfg['episode_id'],cost_case_id=cfg['cost_case']['id'],now=now,
-            total_deadline=started+cfg['max_total_seconds'] if market_config(cfg) else None)
+            total_deadline=started+cfg['max_total_seconds'] if market_config(cfg) else None,
+            **({'dataset': dataset} if dataset is not None else {}))
         save_json(root/'provider-requests.json',provider.receipts)
         require(archive is not None,'DAILY_POSTGRES_ARCHIVE_REQUIRED')
         proof=archive(result,root,cfg)
+        from scripts.bull_flag_companion import produce
+        companion = dict(status='DISABLED')
+        phase = 'COMPANION_SCANS'
+        if market_config(cfg):
+            try:
+                companion = produce(root, spec, cfg, now=now, archive=archive,
+                                    total_deadline=started+cfg['max_total_seconds'], dataset=dataset)
+            except Exception as error:
+                companion=dict(status='COMPANION_UNAVAILABLE_PRIMARY_PRESERVED',error_type=type(error).__name__)
+        companions={}
+        if market_config(cfg):
+            from scripts.swing_patterns import STRATEGIES as extra_patterns
+            for strategy_id in extra_patterns:
+                try:
+                    outcome=produce(root,spec,cfg,now=now,archive=archive,
+                        total_deadline=started+cfg['max_total_seconds'],strategy_id=strategy_id, dataset=dataset)
+                except Exception as error:
+                    outcome=dict(status='COMPANION_UNAVAILABLE_PRIMARY_PRESERVED',error_type=type(error).__name__)
+                if outcome.get('status')!='DISABLED':companions[strategy_id]=outcome
+        if market_config(cfg):
+            from scripts.bull_flag_strategy import BULL_FLAG
+            outcomes={cfg['strategy_id']:dict(status='COMPLETED_COMPANION_SCREEN'), BULL_FLAG:companion, **companions}
+            unavailable=[sid for sid in required_strategies() if
+                outcomes.get(sid, {}).get('status') != 'COMPLETED_COMPANION_SCREEN']
+            if unavailable:
+                save_json(root/'blocked.json', dict(status='DAILY_STRATEGY_SCAN_BLOCKED',
+                    unavailable_strategies=unavailable, outcomes=outcomes, broker_operations=0))
+                raise DailyError('REQUIRED_STRATEGY_SCREENS_UNAVAILABLE')
         value=dict(status='DAILY_STRATEGY_SCAN_COMPLETE',pipeline=PIPELINE,signal_session=session,
             strategy_id=cfg['strategy_id'],scan_run_id=result['run_id'],candidates=len(result['top_candidates']),
             provider_gets=len(provider.receipts),archive=proof,output_root=str(root),
             research_qualified=False,order_submission_authorized=False,broker_operations=0)
         if market_config(cfg):value['coverage']=result['coverage']
+        if companion.get('status') != 'DISABLED':value['companion']=companion
+        if companions:value['companions']=companions
         save_json(root/'completion.json',value)
         return value
     except Exception as error:
+        from scripts.strategy_runtime_diagnostics import diagnostic
         save_json(root/'failure.json',dict(status='DAILY_STRATEGY_SCAN_FAILED_NO_REPLAY',signal_session=session,
-            error_type=type(error).__name__,code=str(error) if isinstance(error,DailyError) else 'DAILY_VALIDATION_OR_SCAN_FAILED',
+            **dict(diagnostic(error, phase, started, deadline=started+cfg.get('max_total_seconds',cfg['max_scan_seconds'])),
+                **({'code':str(error)} if isinstance(error,DailyError) else {})),
             broker_operations=0,provider_gets=len(provider.receipts)))
         raise
 

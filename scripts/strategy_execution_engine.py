@@ -9,6 +9,7 @@ from datetime import datetime,time,timezone
 from decimal import Decimal,ROUND_FLOOR
 import hashlib
 
+from scripts.pattern_strategy import PATTERNS
 from scripts.strategy_backtest import require
 from scripts import strategy_execution as rules
 
@@ -112,7 +113,7 @@ class Engine:
         self.store.observed(key,order)
         return order
 
-    def enter(self,handoff,references,*,now,clock,account,positions,open_orders):
+    def enter(self,handoff,references,*,now,clock,account,positions,open_orders,max_new_entries=3,selected_signal_ids=None):
         require(handoff['paper_only'] is True and handoff['inspection_mode'] is False,
                 'strategy_entry_handoff_not_actionable')
         held=set(positions)
@@ -120,9 +121,19 @@ class Engine:
         occupied=held|pending
         ceiling=available_cash(account);reserved=Decimal(0)
         active={s['signal_id']:s for s in self.store.signals(active=False)}
+        occupied |= {s['payload']['proposal']['symbol'] for s in active.values()
+                     if s['state'] not in {'CLOSED','EXPIRED'}}
+        require(type(max_new_entries) is int and 0<=max_new_entries<=3,'strategy_daily_entry_budget_invalid')
+        attempted=0
         if any(r['state'] in {'CLAIMED','UNKNOWN'} for s in active.values() for r in self.store.orders(s['signal_id'])):
             self.note(None,'UNRESOLVED_ACCOUNT_ORDER_BLOCKS_NEW_ENTRIES');return
+        selected=set(selected_signal_ids) if selected_signal_ids is not None else None
+        require(selected is None or (len(selected)==len(selected_signal_ids) and selected<=
+            {p['signal_id'] for p in handoff['proposals']}),'strategy_selected_signal_not_in_handoff')
         for proposal in handoff['proposals']:
+            if selected is not None and proposal['signal_id'] not in selected:continue
+            if attempted>=max_new_entries:
+                self.note(None,'SHARED_DAILY_ENTRY_CAP');break
             sid,symbol=proposal['signal_id'],proposal['symbol']
             if sid in active:
                 self.note(active[sid],'SIGNAL_ALREADY_ENROLLED_NO_SECOND_BUY');continue
@@ -142,12 +153,17 @@ class Engine:
                 self.note(None,'ENTRY_MONITOR_QUOTE_UNAVAILABLE');continue
             fresh_account=self.broker.account()
             cash=min(available_cash(fresh_account),ceiling-reserved)
-            plan=rules.build_entry_order(handoff,signal_id=sid,account_id=self.store.account_id,cash=cash,
-                reference=reference,occupied_slots=len(occupied),now=self.now(),
-                clock_next_regular_open=clock['next_open'],clock_timestamp=clock['timestamp'])
+            try:
+                plan=rules.build_entry_order(handoff,signal_id=sid,account_id=self.store.account_id,cash=cash,
+                    reference=reference,occupied_slots=len(occupied),now=self.now(),
+                    clock_next_regular_open=clock['next_open'],clock_timestamp=clock['timestamp'])
+            except ValueError as error:
+                if str(error) not in {'bull_flag_entry_outside_levels','pattern_entry_outside_levels'}:raise
+                self.note(None,'BULL_FLAG_ENTRY_OUTSIDE_LEVELS' if str(error).startswith('bull_flag') else 'PATTERN_ENTRY_OUTSIDE_LEVELS');continue
             if plan['request']['qty']==0:
                 self.note(None,'WHOLE_SHARE_BUDGET_EMPTY');continue
             signal=self.store.enroll(handoff,proposal,reference)
+            attempted+=1
             signal['payload']['entry_plan']=plan
             self.store.save(signal,state='ENTRY_PENDING')
             order=self._perform(signal,'entry',0,plan['request'])
@@ -246,6 +262,11 @@ class Engine:
                 'strategy_completed_bar_regressed')
         result=rules.completed_bar(payload['position'],frame,session=session,next_session=next_session,
             now=now,rsi_memory=payload['rsi_memory'])
+        if payload['proposal'].get('strategy_id') in PATTERNS:
+            plan=payload['proposal']['pattern_exit']
+            result['position']['atr_stop']=max(result['position']['atr_stop'] or 0,plan['invalidation'])
+            result['pending_exit_reasons']=[r for r in result['pending_exit_reasons'] if r!='PARTIAL_5PCT']
+            if not result['pending_exit_reasons']:result['pending_exit_session']=None
         payload.update(position=result['position'],rsi_memory=result['rsi_memory'],last_completed_session=session)
         # An existing full exit intent remains active even if a later bar would
         # look better; only observed fills can complete that lifecycle.
@@ -271,6 +292,15 @@ class Engine:
         stop=stops[0] if stops else None
         target=max(position['trailing_stop'] or 0,position['atr_stop'] or 0)
         breached=quote is not None and rules.number(quote['bid'],positive=True)<=Decimal(str(target))
+        if payload['proposal'].get('strategy_id') in PATTERNS:
+            plan=payload['proposal']['pattern_exit']
+            reached=quote is not None and rules.number(quote['bid'],positive=True)>=Decimal(str(plan['target']))
+            if reached and not payload['pending_exit_reasons']:
+                payload=deepcopy(payload)
+                payload.update(pending_exit_reasons=['PATTERN_TARGET'],pending_exit_session=local.date().isoformat())
+                self.store.save(signal,payload=payload);self.note(signal,'PATTERN_TARGET')
+            if breached:
+                self.note(signal,'PATTERN_INVALIDATION' if target==plan['invalidation'] else 'EXISTING_PROTECTIVE_STOP')
         queued=bool(payload['pending_exit_reasons']) and local.date().isoformat()>=payload['pending_exit_session']
         if queued and not breached and payload['pending_exit_reasons']==['PARTIAL_5PCT'] and own_qty==1:
             payload=deepcopy(payload);payload.update(pending_exit_reasons=[],pending_exit_session=None)

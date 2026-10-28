@@ -8,6 +8,14 @@ testing; `research_qualified=false` and premarket performance qualification
 remain pending. Completing this workflow does not change an earlier research
 HOLD or authorize a different trading mode.
 
+For complete six-strategy preparation, blocked status and exact unified-handoff
+requirements, see [strategy runtime recovery](strategy_runtime_recovery.md).
+
+For frozen six-strategy scorecards, entry/exit comparisons, complete qualifying
+cohorts, experiment registration and prospective paper audits, use the
+[swing research lab](swing_research_lab.md). Its isolated results do not change
+the deployed trading rules or establish profitability.
+
 ## Department workflow
 
 ### Six-department review in Paqiyd
@@ -32,17 +40,21 @@ actual worker and department reports, job/run IDs, source bindings and any
 the proposed next action are separate outcomes; do not invent clean background
 runs or human reviews to satisfy trust thresholds.
 
-The recurring local department review is scheduled for weekdays at 09:15
-America/Chicago. It reviews fresh native receipts and meaningful new session
-evidence, preserving prior reports. This Codex follow-up depends on its host;
+The October 27 operations record documents a recurring local department review
+scheduled for weekdays at 09:15 America/Chicago. Each review requires fresh
+native receipts and meaningful new session evidence, preserving prior reports.
+Refresh readiness baselines against the currently reviewed producer configuration
+before claiming a new review completed; a configured follow-up is not proof of
+successful execution. This Codex follow-up depends on its host;
 the existing PythonAnywhere producer, primary, paper-entry and always-on
 monitor remain the separate hosted execution path. Browser/voice use also
 requires Paqiyd's configured trusted Owner-session issuer and authentication;
 local report generation does not prove that interface is provisioned.
 
 Research HOLD and unqualified historical results must not be interpreted as
-revoking already authorized experimental paper testing. The existing finite
-first-candidate observation is already authorized. Department reports cannot
+revoking already authorized experimental paper testing. The October 27 record
+identifies an already authorized finite first-candidate observation. That dated
+record is not a fresh execution release. Department reports cannot
 grant a new trading mode, alter risk settings, replay an old dispatch or submit
 an order themselves. New proposed actions retain their owning approval gates.
 
@@ -50,7 +62,18 @@ The [October 27 six-department operations record](../reference/department_operat
 retains this integration's actual results and remaining gates separately from
 the earlier technical strategy verification below.
 
+These six completed reviews and their pending proofs are the October 27
+snapshot. Later production-run evidence below has its own date and scope;
+neither record establishes current fills, research qualification or promotion.
+
 ### Strategy pipeline stages
+
+The [October 28 production run review](../reference/pipeline_run_review_2026-10-28.json)
+records the first fresh published Pullback batch and its completed Backtest and
+Metrics, alongside four failed pattern screens, unavailable unified selection
+and a failed zero-order executor run. The primary return code alone did not
+prove the all-strategy handoff was ready. This dated evidence is separate from
+the earlier isolated audit and from any future corrected run.
 
 | Stage | Implementation and operator guide | Required handoff |
 | --- | --- | --- |
@@ -63,12 +86,11 @@ the earlier technical strategy verification below.
 | Production publication | [Primary strategy route](primary_strategy_screen.md) | Atomic PostgreSQL publication of candidates, Backtest and Metrics; completed primary report |
 | Paper execution and monitor | [Execution handoff](strategy_execution_handoff.md) | Fresh production handoff, actual paper-account ownership, observed orders/fills and protective lifecycle evidence |
 
-The production route currently supports one strategy,
-`trend_pullback_reclaim_qualifying_close_v2`, version `2`. Adding an entry to the
-scanner registry does not automatically connect its production publication,
-account allocation, executor or exit monitoring. Several strategies can be
-compared in isolated studies; shared paper-account capital across strategies
-still needs an explicit contract.
+The production route supports Pullback/Reclaim, Bull Flag and the
+[four additional patterns](chart_pattern_companions.md), with a common ranking,
+no family priority, shared capital/position limits and one exit owner per stock.
+Adding a future entry to the scanner registry does not automatically connect its
+production publication, account allocation, executor or exit monitoring.
 
 For a new strategy, retain its research proposal and review decision; freeze
 its data convention, causal buy/exit rules, costs, risk settings and versioned

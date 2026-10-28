@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from scripts.research_strategies import CHALLENGER, prepare_signals
+from scripts.swing_patterns import STRATEGIES as EXTRA_PATTERNS
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,12 @@ class Strategy:
             for name in ('strategy_library.py', 'research_strategies.py', 'indicators.py',
                          'research_simulation.py', 'backtest_core.py')
         }
+        if self.id == 'bull_flag_breakout_v1':
+            result['source_sha256'].update({name: sha256((directory/name).read_bytes()).hexdigest()
+                for name in ('bull_flag_strategy.py', 'chart_patterns.py')})
+        if self.id in EXTRA_PATTERNS:
+            result['source_sha256'].update({name: sha256((directory/name).read_bytes()).hexdigest()
+                for name in ('pattern_strategy.py','swing_patterns.py','bull_flag_strategy.py','chart_patterns.py')})
         definition = dict(result)
         # Adding another catalog entry must not change this strategy's logical
         # signal IDs. The catalog file is still bound in each batch's sources.
@@ -40,10 +47,31 @@ class Strategy:
         return result
 
     def prepare(self, raw, split, fold):
-        return prepare_signals(raw, split, self.research_method, fold, self.warmup_sessions)
+        if self.id in EXTRA_PATTERNS:
+            from scripts.pattern_strategy import prepare
+            from scripts.setup_selection import enrich
+            return enrich(prepare(raw,split,fold,self.id),split)
+        if self.id == 'bull_flag_breakout_v1':
+            from scripts.bull_flag_strategy import prepare
+            from scripts.setup_selection import enrich
+            return enrich(prepare(raw, split, fold),split)
+        from scripts.setup_selection import enrich
+        return enrich(prepare_signals(raw, split, self.research_method, fold, self.warmup_sessions),split)
 
 
 _STRATEGIES = {
+    'bull_flag_breakout_v1': Strategy(
+        'bull_flag_breakout_v1', 'Bull Flag Breakout', '1', 'bull_flag_breakout_v1',
+        'PAPER_TEST_CANDIDATE', 250,
+        ('3-10-bar pole gains at least 8%; 3-10-bar sideways/falling flag',
+         'flag retraces at most 50% of pole; flag volume at most 80% of pole mean',
+         'bullish close > resistance by 0.1%, at most 5% extended',
+         'breakout volume >= 1.5 times preceding 20 sessions',
+         'fixed raw-price stop 0.1% below flag low; target signal close plus pole height',
+         'full target exit; no percentage partial; existing protective/time/risk exits can precede',
+         'shared account: unified best-setup selection, remaining cash/slots only, no duplicate symbols'),
+        paper_scan_enabled=True,
+    ),
     CHALLENGER: Strategy(
         CHALLENGER, 'Trend Pullback / Reclaim', '2', CHALLENGER, 'PAPER_TEST_CANDIDATE', 250,
         ('close > MA50 > MA200; MA50 higher than ten sessions ago',
@@ -59,6 +87,36 @@ _STRATEGIES = {
 }
 
 
+for _id,_name,_rules in (
+    (EXTRA_PATTERNS[0],'Ascending Triangle Breakout',
+     ('15-60 sessions; two separated resistance touches within 1%',
+      'confirmed reaction lows rise by at least 0.5% of resistance each; at least 2% total',
+      'contracting formation volume; close breakout by 0.1%, at most 5% extended',
+      'bullish breakout volume >= 1.5 times preceding 20 sessions',
+      'stop below last confirmed reaction low; target resistance plus formation height')),
+    (EXTRA_PATTERNS[1],'Double Bottom Breakout',
+     ('two confirmed troughs 20-80 sessions apart and within 3%',
+      'preceding 20-session decline >= 10%; intervening rebound >= 10%',
+      'second-trough volume no greater than first; no previous neckline close breakout',
+      'bullish neckline close breakout by 0.1%, at most 5% extended; volume >= 1.5 prior20',
+      'stop below lower trough; target neckline plus formation height')),
+    (EXTRA_PATTERNS[2],'Cup and Handle Breakout',
+     ('prior 20-session advance >= 10%; cup 30-100 sessions with rims within 3%',
+      'cup depth 12-40%; central bottom and at least 25% of cup closes in lower half',
+      'falling 5-15-session handle retraces at most one third of cup; volume contracts',
+      'bullish resistance close breakout by 0.1%, at most 5% extended; volume >= 1.5 prior20',
+      'stop below handle low; target resistance plus cup depth')),
+    (EXTRA_PATTERNS[3],'Inverse Head and Shoulders Breakout',
+     ('prior 20-session decline >= 10%; three confirmed consecutive reaction lows',
+      'head at least 5% below shoulders; shoulders and neckline highs match within 3%',
+      'shoulder span 20-80 sessions; head 5-40 sessions from each shoulder',
+      'right shoulder volume no greater than left; no earlier neckline close breakout',
+      'bullish neckline close breakout by 0.1%, at most 5% extended; volume >= 1.5 prior20',
+      'stop below right shoulder; target neckline plus head-to-neckline height')),
+):
+    _STRATEGIES[_id]=Strategy(_id,_name,'1',_id,'PAPER_TEST_CANDIDATE',250,_rules,paper_scan_enabled=True)
+
+
 def get_strategy(strategy_id):
     try:
         return _STRATEGIES[strategy_id]
@@ -67,11 +125,12 @@ def get_strategy(strategy_id):
 
 
 def list_strategies():
-    return [strategy.describe() for strategy in _STRATEGIES.values()]
+    return [_STRATEGIES[key].describe() for key in sorted(_STRATEGIES)]
 
 
 def select_strategies(ids=None):
-    chosen = [key for key, value in _STRATEGIES.items() if value.paper_scan_enabled] if ids is None else list(ids)
+    # Enumeration order is not an execution or selection preference.
+    chosen = sorted(k for k,v in _STRATEGIES.items() if v.paper_scan_enabled) if ids is None else list(ids)
     if not chosen or len(chosen) != len(set(chosen)):
         raise ValueError('Select at least one strategy, without duplicates')
     strategies = [get_strategy(strategy_id) for strategy_id in chosen]

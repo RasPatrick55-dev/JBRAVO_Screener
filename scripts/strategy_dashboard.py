@@ -50,11 +50,18 @@ def snapshot():
             if backtest is None:raise ValueError('strategy_metrics_backtest_missing')
             from scripts.strategy_metrics import validate_metrics
             validate_metrics(metrics,backtest,selected_batch(batch[3]),primary[0])
+        from scripts.setup_selection import dashboard_selection,dashboard_rows
+        unified=dashboard_selection(conn,batch,primary[0])
+        rows=dashboard_rows(unified)
         return dict(result,ok=True,status='COMPLETE' if rows else 'EMPTY',
+            setup_selection=unified['record']['selection'],
+            _unified_reports=unified['reports'],_unified_selection=unified['record']['selection'],
+            unified_selection_run_id=unified['record']['run_id'],strategy_priority=False,
             run_date=batch[0].isoformat(),run_ts_utc=stamp.isoformat(),rows=rows,rows_final=len(rows),
-            source_detail='strategy_primary:'+batch[3]['outcome'],archive_id=batch[3]['archive_id'],
+            source_detail='unified_strategy_screen:BEST_SETUPS',archive_id=unified['record']['run_id'],
             coverage=clean(batch[3].get('coverage')),
-            scan_run_id=batch[3]['scan_run_id'],strategy_contract=batch[3].get('strategy_contract'),
+            scan_run_id=unified['record']['run_id'],strategy_contract=dict(strategy_id='ALL_STRATEGIES',
+                strategy_version='1',definition_sha256=unified['record']['selection']['model_sha256']),
             _strategy_backtest=backtest,_strategy_metrics=metrics)
     except Exception:
         return result
@@ -67,6 +74,8 @@ def api_payload(kind, args):
     result=dict(snapshot())
     backtest=result.pop('_strategy_backtest',None)
     metrics=result.pop('_strategy_metrics',None)
+    unified=result.pop('_unified_selection',None)
+    unified_reports=result.pop('_unified_reports',None)
     requested=args.get('run_ts_utc')
     if requested:
         try:
@@ -74,6 +83,9 @@ def api_payload(kind, args):
         except (ValueError,TypeError):same=False
         if not same:
             return dict(result,ok=False,status='ERROR',rows=[],rows_final=0,source_detail='strategy_primary:batch_changed')
+    if unified is not None and kind in {'metrics','backtest'}:
+        from scripts.setup_selection import dashboard_reports
+        return dashboard_reports(kind,result,unified,unified_reports,args)
     if kind=='metrics':
         if not result.get('ok'):
             return dict(result,rows=[],rows_final=0)
@@ -131,5 +143,6 @@ def api_payload(kind, args):
             dollar_volume=r['close']*r['volume'],final_score=r['score'],
             signal_id=proposal['signal_id'],strategy_id=proposal['strategy_id'],
             strategy_version=proposal['strategy_version'],next_open_at=proposal['next_open_at'],
-            metric_basis='STRATEGY_BUY_SIGNAL'))
+            metric_basis='UNIFIED_SETUP_BUY_SIGNAL' if unified is not None else 'STRATEGY_BUY_SIGNAL',
+            matching_strategies=r['score_breakdown'].get('matching_strategies',[proposal['strategy_id']])))
     return dict(result,rows=projected,rows_final=len(projected))

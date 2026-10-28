@@ -17,9 +17,14 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 - [Swing Research Department workflow and handoff](how-to/strategy_testing.md)
 - [October 27 Pullback/Reclaim verification snapshot](reference/pullback_reclaim_verification_2026-10-27.json)
 - [October 27 six-department operational review](reference/department_operations_2026-10-27.json)
+- [October 28 production run review: candidates published, unified execution blocked](reference/pipeline_run_review_2026-10-28.json)
 
 ## How-To
 
+- [Complete strategy preparation, blocked reporting and unified handoff](how-to/strategy_runtime_recovery.md)
+- [Swing research scorecards and isolated entry/exit comparisons](how-to/swing_research_lab.md)
+- [Bull flag companion alongside Pullback/Reclaim](how-to/bull_flag_companion.md)
+- [Four additional swing chart-pattern companions](how-to/chart_pattern_companions.md)
 - [Market-wide daily strategy screening](how-to/market_wide_strategy_screen.md)
 - [Strategy execution handoff and activation requirements](how-to/strategy_execution_handoff.md)
 - [Strategy Metrics stage](how-to/strategy_metrics_stage.md)

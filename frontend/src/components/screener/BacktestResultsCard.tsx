@@ -1,15 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {canDisplay, useSource, type SourceKind, type SourcePayload} from "../ui/sourceState";
+import { useEffect, useMemo, useState } from "react";
 import type { LiveDataSyncState } from "../navbar/liveStatus";
-import type { BacktestResponse, BacktestRow, BacktestWindow } from "./types";
+import type { BacktestRow, BacktestWindow } from "./types";
 import {
-  fetchNoStoreJson,
   formatNumber,
   formatPercent,
   formatRunBadge,
   formatSignedCurrency,
   normalizeSymbol,
   parseNumber,
-  withTs,
 } from "./utils";
 
 const defaultWindow: BacktestWindow = "6M";
@@ -44,75 +43,27 @@ const valueTone = (value: number | null): string => {
   }
   return "text-primary";
 };
-const REFRESH_INTERVAL_MS = 20_000;
-const REQUEST_TIMEOUT_MS = 15_000;
-
 type BacktestResultsCardProps = {
   onSyncStateChange?: (state: LiveDataSyncState) => void;
 };
 
+export function BacktestCompletionBadge({payload, kind}: {payload: SourcePayload | null; kind: SourceKind}) {
+  const status = String(payload?.status ?? "").toUpperCase();
+  const complete = payload?.ok === true && payload.completion_status === "verified" && status === "COMPLETE";
+  const label = kind === "loading" ? "LOADING" : kind === "stale" ? "STALE" : kind === "held" ? "HELD"
+    : kind === "unavailable" ? "UNAVAILABLE" : status === "ERROR" ? "ERROR" : complete ? "COMPLETE" : "UNVERIFIED";
+  const tone = label === "COMPLETE" ? "jbravo-status-success" : ["ERROR", "UNAVAILABLE"].includes(label) ? "jbravo-status-error" : "text-secondary";
+  return <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase ring-1 ring-inset ${tone}`}>{label}</span>;
+}
+
 export default function BacktestResultsCard({ onSyncStateChange }: BacktestResultsCardProps) {
-  const [rows, setRows] = useState<BacktestRow[]>([]);
-  const [runTsUtc, setRunTsUtc] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
-  const hasLoadedRef = useRef(false);
-
-  useEffect(() => {
-    let isMounted = true;
-    let inFlight = false;
-
-    const load = async () => {
-      if (inFlight) {
-        return;
-      }
-      inFlight = true;
-      setIsLoading(!hasLoadedRef.current);
-      const params = new URLSearchParams({
-        window: defaultWindow,
-        limit: "50",
-      });
-
-      try {
-        const payload = await fetchNoStoreJson<BacktestResponse>(
-          withTs(`/api/screener/backtest?${params.toString()}`),
-          REQUEST_TIMEOUT_MS
-        );
-        if (!isMounted) {
-          return;
-        }
-        const normalizedRows = (payload.rows ?? [])
-          .map((row) => normalizeBacktestRow(row, defaultWindow))
-          .filter((row) => row.symbol !== "--");
-        setRows(normalizedRows);
-        setRunTsUtc(payload.run_ts_utc ?? null);
-        setErrorMessage(null);
-      } catch (error) {
-        if (!isMounted) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : "Unable to load backtest results.";
-        setErrorMessage(message);
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-          hasLoadedRef.current = true;
-        }
-        inFlight = false;
-      }
-    };
-
-    void load();
-    const intervalId = window.setInterval(() => {
-      void load();
-    }, REFRESH_INTERVAL_MS);
-
-    return () => {
-      isMounted = false;
-      window.clearInterval(intervalId);
-    };
-  }, [reloadToken]);
+  const result = useSource(`/api/screener/backtest?window=${defaultWindow}&limit=50&view=${reloadToken}`);
+  const rows = canDisplay(result.kind) && Array.isArray(result.payload?.rows)
+    ? (result.payload.rows as Partial<BacktestRow>[]).map(row => normalizeBacktestRow(row, defaultWindow)).filter(row => row.symbol !== "--") : [];
+  const runTsUtc = typeof result.payload?.run_ts_utc === "string" ? result.payload.run_ts_utc : null;
+  const isLoading = result.kind === "loading";
+  const errorMessage = ["held", "unavailable", "stale"].includes(result.kind) ? `Backtest ${result.kind}; completion is not established.` : null;
 
   useEffect(() => {
     if (!onSyncStateChange) {
@@ -141,9 +92,7 @@ export default function BacktestResultsCard({ onSyncStateChange }: BacktestResul
           <span className="max-w-full truncate rounded-full px-2 py-1 font-cousine text-[10px] font-semibold uppercase tracking-[0.06em] text-secondary outline outline-1 outline-slate-300/80 dark:outline-slate-600/80 sm:px-2.5 sm:text-[11px]">
             {formatRunBadge(runTsUtc)}
           </span>
-          <span className="inline-flex items-center rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] ring-1 ring-inset jbravo-status-success sm:px-2.5 sm:text-[11px]">
-            COMPLETE
-          </span>
+          <BacktestCompletionBadge payload={result.payload} kind={result.kind}/>
         </div>
       </header>
 

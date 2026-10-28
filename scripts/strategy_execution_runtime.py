@@ -8,6 +8,8 @@ import tempfile
 import time
 
 from scripts import strategy_execution as rules
+from scripts.pattern_strategy import PATTERNS
+from scripts.swing_patterns import STRATEGIES as EXTRA_PATTERNS
 from scripts import pipeline_postflight as health
 from scripts.strategy_backtest import require
 
@@ -20,6 +22,9 @@ COMPONENTS=(CONFIG,'scripts/strategy_execution.py','scripts/strategy_execution_h
 LIFECYCLE_COMPONENTS=tuple(p for p in COMPONENTS if p not in {
     'scripts/strategy_execution_handoff.py','scripts/execute_trades.py'})+(
     'scripts/backtest_core.py','scripts/strategy_library.py')
+LIFECYCLE_COMPONENTS += ('config/strategy_companions.json','scripts/bull_flag_strategy.py',
+                        'scripts/chart_patterns.py','scripts/bull_flag_companion.py',
+                        'scripts/pattern_strategy.py','scripts/swing_patterns.py','config/chart_pattern_companions.json','scripts/setup_selection.py')
 _FEATURE_CACHE={}
 
 
@@ -100,6 +105,43 @@ def readonly_handoff(env,*,base_dir=ROOT,inspection=False):
     finally:conn.rollback();conn.close()
 
 
+def companion_handoff(env, parent, *, base_dir=ROOT, inspection=False, strategy_id='bull_flag_breakout_v1'):
+    from scripts.bull_flag_companion import policy_for, read_handoff
+    if policy_for(strategy_id,base_dir) is None:return None
+    from scripts.research_store import connect
+    connection=connect(env=env)
+    try:
+        return read_handoff(connection,parent,now=datetime.now(timezone.utc),
+                            inspection=inspection,base_dir=base_dir,strategy_id=strategy_id)
+    finally:connection.rollback();connection.close()
+
+
+def additional_handoffs(env,parent,*,base_dir=ROOT,inspection=False):
+    result=[]
+    for strategy_id in EXTRA_PATTERNS:
+        try:value=companion_handoff(env,parent,base_dir=base_dir,inspection=inspection,strategy_id=strategy_id)
+        except Exception:value=None
+        if value:result.append(value)
+    return result
+
+
+def unified_handoff(env,parent,*,base_dir=ROOT):
+    from scripts.research_store import connect
+    from scripts.setup_selection import read_selection
+    connection=connect(env=env)
+    try:return read_selection(connection,parent,now=datetime.now(timezone.utc),base_dir=base_dir)
+    finally:connection.rollback();connection.close()
+
+
+def available_entry_budget(store, next_session):
+    # Count durable entry attempts, including rejected/uncertain attempts, across
+    # both strategies. Restarting a worker cannot replenish the daily budget.
+    used=sum(any(row['role']=='entry' for row in store.orders(signal['signal_id']))
+             for signal in store.signals(active=False)
+             if signal['payload']['proposal']['next_session']==next_session)
+    return max(0,3-used)
+
+
 def store_connection(env,broker):
     from scripts.research_store import connect
     from scripts import db
@@ -128,6 +170,12 @@ def guard_for(env,*,base_dir=ROOT):
         handoff=signal['payload']['handoff'];source_guard(handoff,base_dir=base_dir,lifecycle=(kind=='lifecycle'))
         if kind=='entry':
             current=readonly_handoff(env,base_dir=base_dir,inspection=True)
+            from scripts.setup_selection import execution_queue
+            verified=unified_handoff(env,current,base_dir=base_dir)
+            matching=[r for r in execution_queue(verified) if r['proposal']['signal_id']==signal['signal_id']]
+            require(len(matching)==1 and matching[0]['handoff']['unified_selection']==handoff.get('unified_selection'),
+                    'strategy_signal_not_in_current_unified_selection')
+            current=verified['handoffs'][handoff['strategy_contract']['strategy_id']]
             require(current['primary_report_sha256']==handoff['primary_report_sha256'] and
                 current['candidate_values']==handoff['candidate_values'] and
                 current['batch_sha256']==handoff['batch_sha256'],'strategy_entry_batch_changed_before_post')
@@ -194,6 +242,23 @@ def features(env,handoff,*,base_dir=ROOT,symbols=None):
 
 
 def run_entry(config,*,base_dir=ROOT,wait=None):
+    progress = dict(phase='ENTRY_PREFLIGHT', broker_started=False)
+    try:
+        return _run_entry(config, base_dir=base_dir, wait=wait, progress=progress)
+    except Exception as error:
+        # The outer task already fails closed. Also replace the strategy receipt
+        # so yesterday's skipped/green result cannot masquerade as this run.
+        value = dict(status='blocked', exit_reason='STRATEGY_ENTRY_UNAVAILABLE',
+            error_type=type(error).__name__, phase=progress['phase'],
+            orders_submitted=None if progress['broker_started'] else 0,
+            orders_filled=None if progress['broker_started'] else 0,
+            broker_outcome='NOT_ESTABLISHED' if progress['broker_started'] else 'NOT_CONTACTED',
+            paper_only=True, finished_at=datetime.now(timezone.utc).isoformat())
+        write_report(value, role='entry', base_dir=base_dir)
+        raise
+
+
+def _run_entry(config,*,base_dir=ROOT,wait=None,progress):
     """Called by the existing task after its normal reconciliation gate."""
     from scripts.strategy_execution_broker import PaperBroker
     from scripts.strategy_execution_engine import Engine
@@ -212,19 +277,28 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
     with source_lease(base_dir):
         inspected=readonly_handoff(env,base_dir=base_dir,inspection=True)
         source_guard(inspected,base_dir=base_dir)
-        if not inspected['proposals'] or config.dry_run:
+        from scripts.setup_selection import execution_queue,contract as selection_contract
+        progress['phase']='UNIFIED_SELECTION_HANDOFF'
+        verified=unified_handoff(env,inspected,base_dir=base_dir)
+        queue=execution_queue(verified)
+        selection=verified['record']['selection']
+        if not queue or config.dry_run:
             value=dict(status='skipped',exit_reason='STRATEGY_DRY_RUN_INPUTS_ONLY' if config.dry_run else 'NO_STRATEGY_BUY_SIGNALS',
-                candidate_count=len(inspected['proposals']),
-                orders_submitted=0,orders_filled=0,handoff_id=inspected['handoff_id'],
-                strategy_contract=inspected['strategy_contract'],paper_only=True,broker_operations=0,
-                finished_at=now.isoformat(),source_bindings=inspected['source_bindings'])
+                candidate_count=len(queue),orders_submitted=0,orders_filled=0,handoff_id=inspected['handoff_id'],
+                strategy_contract=selection_contract(),paper_only=True,broker_operations=0,
+                finished_at=now.isoformat(),source_bindings=inspected['source_bindings'],
+                selection=selection,unified_selection_run_id=verified['record']['run_id'])
             write_report(value,role='entry',base_dir=base_dir);return value
         handoff=readonly_handoff(env,base_dir=base_dir)
+        verified=unified_handoff(env,handoff,base_dir=base_dir)
+        queue=execution_queue(verified);selection=verified['record']['selection']
+        progress.update(phase='BROKER_PREFLIGHT',broker_started=True)
         broker=PaperBroker(env,max_requests=192)
         try:
             account=broker.account();clock=broker.clock()
             monitor_ready(handoff,broker.account_id,now=now,base_dir=base_dir)
-            references=broker.references([p['symbol'] for p in handoff['proposals']],handoff['session']['signal_session'],now=now)
+            proposals=[r['proposal'] for r in queue]
+            references=broker.references(sorted({p['symbol'] for p in proposals}),handoff['session']['signal_session'],now=now)
         except Exception:broker.close();raise
     try:
         opening=rules.utc(handoff['execution_policy']['entry_open_at'])
@@ -239,10 +313,16 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
             conn,store=store_connection(env,broker)
             try:
                 with entry_lease(store,opening,wait=sleeper):
+                    progress['phase']='STRATEGY_PAPER_ENTRY'
                     engine=Engine(store,broker,guard=guard_for(env,base_dir=base_dir))
                     before={r['client_order_id'] for s in store.signals(active=False) for r in store.orders(s['signal_id'])}
-                    engine.enter(handoff,references,now=now,clock=clock,account=account,
-                        positions=broker.positions(),open_orders=broker.open_orders())
+                    for setup in queue:
+                        origin=setup['handoff']
+                        source_guard(origin,base_dir=base_dir)
+                        engine.enter(origin,references,now=now,clock=broker.clock(),account=broker.account(),
+                            positions=broker.positions(),open_orders=broker.open_orders(),
+                            max_new_entries=available_entry_budget(store,handoff['session']['next_session']),
+                            selected_signal_ids=[setup['proposal']['signal_id']])
                     # Observe fills and attach protection promptly. The always-on
                     # monitor resumes durable pending orders and the 35m deadline.
                     deadline=time.monotonic()+15
@@ -257,14 +337,21 @@ def run_entry(config,*,base_dir=ROOT,wait=None):
                     refused=any(e['code']=='BROKER_REJECTED' for e in engine.events) or any(o['status']=='rejected' for o in observations)
                     value=dict(status='blocked' if unresolved or refused else 'ok',
                         exit_reason='ORDER_OUTCOME_UNKNOWN' if unresolved else 'BROKER_REJECTED' if refused else 'STRATEGY_PAPER_EXECUTION',
-                        candidate_count=len(handoff['proposals']),orders_submitted=len(observations),
+                        candidate_count=len(proposals),orders_submitted=len(observations),
                         orders_filled=sum(o['status']=='filled' for o in observations),order_observations=observations,
-                        handoff_id=handoff['handoff_id'],strategy_contract=handoff['strategy_contract'],
+                        handoff_id=handoff['handoff_id'],strategy_contract=selection_contract(),
                         primary_report_sha256=handoff['primary_report_sha256'],source_bindings=handoff['source_bindings'],
                         cancellation_deadline=handoff['execution_policy']['cancel_at'],
                         paper_only=True,events=engine.events,finished_at=datetime.now(timezone.utc).isoformat(),
-                        preflight=dict(status='pass',candidate_binding=handoff['candidate_values'],
-                            entry_authorization='paper_strategy_test',strategy_contract=handoff['strategy_contract']))
+                        preflight=dict(status='pass',candidate_binding=dict(
+                            unified_selection_run_id=verified['record']['run_id'],result_sha256=verified['result_sha256'],
+                            selected_setups=selection['selected_setups']),
+                            entry_authorization='paper_strategy_test',strategy_contract=selection_contract()))
+                    value['selection']=selection
+                    value['unified_selection_run_id']=verified['record']['run_id']
+                    value['unified_selection_sha256']=verified['result_sha256']
+                    value['candidate_counts_by_strategy']={sid:sum(p['strategy_id']==sid for p in proposals)
+                        for sid in verified['handoffs']}
                     write_report(value,role='entry',base_dir=base_dir);return value
             finally:conn.rollback();conn.close()
     finally:broker.close()
@@ -289,6 +376,14 @@ def monitor_cycle(*,base_dir=ROOT):
                 entry_sources_ready=True
                 try:source_guard(template,base_dir=base_dir)
                 except ValueError:entry_sources_ready=False
+                selection_ready=False
+                if entry_sources_ready:
+                    try:
+                        inspected=readonly_handoff(env,base_dir=base_dir,inspection=True)
+                        unified_handoff(env,inspected,base_dir=base_dir)
+                        selection_ready=True
+                    except Exception:
+                        pass
                 # A changed dashboard/producer must block new entries, without
                 # interrupting protection using unchanged frozen exit code.
                 for signal in signals:source_guard(signal['payload']['handoff'],base_dir=base_dir,lifecycle=True)
@@ -329,7 +424,9 @@ def monitor_cycle(*,base_dir=ROOT):
                             covered_symbols.add(position['symbol'])
                 covered=len(covered_symbols)
                 value=dict(status='blocked' if failures else 'ok',paper_only=True,account_id=broker.account_id,
-                    entry_ready=entry_sources_ready and not failures,
+                    entry_ready=entry_sources_ready and selection_ready and not failures,
+                    entry_sources_ready=entry_sources_ready,unified_selection_ready=selection_ready,
+                    entry_block_reason=None if selection_ready else 'UNIFIED_SELECTION_UNAVAILABLE',
                     source_bindings=record['source_bindings'],owned_symbols=result['owned_symbols'],native_covered=covered,
                     events=engine.events,finished_at=datetime.now(timezone.utc).isoformat(),
                     native_stops_trigger_only_regular_hours=True)

@@ -27,11 +27,16 @@ EXTRA_SOURCES += tuple('scripts/'+name for name in (
     'strategy_scanner.py', 'strategy_library.py', 'research_dataset.py',
     'research_testing.py', 'research_strategies.py', 'research_simulation.py',
     'research_store.py', 'backtest_core.py', 'indicators.py',
-    'strategy_universe.py', 'strategy_market_replay.py'))
+    'strategy_universe.py', 'strategy_market_replay.py', 'strategy_prepared_market.py',
+    'strategy_runtime_diagnostics.py'))
 EXTRA_SOURCES += ('config/strategy_execution.json',)+tuple('scripts/'+name for name in (
     'strategy_execution.py','strategy_execution_handoff.py','strategy_execution_store.py',
     'strategy_execution_broker.py','strategy_execution_engine.py','strategy_execution_runtime.py',
     'execute_trades.py','monitor_positions.py'))
+EXTRA_SOURCES += ('config/strategy_companions.json', 'scripts/bull_flag_strategy.py',
+                  'scripts/chart_patterns.py', 'scripts/bull_flag_companion.py',
+                  'scripts/pattern_strategy.py','scripts/swing_patterns.py','config/chart_pattern_companions.json',
+                  'scripts/setup_selection.py')
 
 
 def require(condition, reason):
@@ -85,22 +90,23 @@ def session_context(calendar, now):
         execution_model='NEXT_SUPPLIED_REGULAR_SESSION_OPEN')
 
 
-def validate_archive(row, cfg, session, *, base_dir=ROOT):
+def validate_archive(row, cfg, session, *, base_dir=ROOT, strategy_id=STRATEGY):
     """Verify the DB envelope before trusting any filesystem path or proposal."""
     from scripts.daily_strategy_scan import PIPELINE
     from scripts.research_dataset import canonical_hash
     from scripts.strategy_library import get_strategy
+    strategy = get_strategy(strategy_id)
     from scripts.strategy_scanner import SOURCE_FILES
     require(row is not None and len(row) == 3, 'strategy_scan_not_archived_for_session')
     spec_sha, result_sha, value = row
     require(isinstance(value, dict) and digest(encoded(value)) == result_sha.strip(), 'strategy_archive_hash_mismatch')
     day = session['signal_session']
     expected_id = canonical_hash(dict(schema='jbravo.daily-strategy-archive-id.v1', pipeline=PIPELINE,
-        strategy_id=STRATEGY, signal_session=day))
+        strategy_id=strategy_id, signal_session=day))
     require(value.get('schema') == 'jbravo.daily-strategy-scan.v1' and
         value.get('status') == 'COMPLETED_PAPER_SCREEN' and value.get('pipeline') == PIPELINE and
         value.get('run_id') == expected_id and value.get('signal_session') == day and
-        value.get('strategy_id') == STRATEGY and value.get('configuration_sha256') == canonical_hash(cfg),
+        value.get('strategy_id') == strategy_id and value.get('configuration_sha256') == canonical_hash(cfg),
         'strategy_archive_scope_mismatch')
     require(all(value.get(k) is False for k in
         ('research_qualified', 'execution_authorized', 'order_submission_authorized')), 'strategy_archive_authority_mismatch')
@@ -117,7 +123,7 @@ def validate_archive(row, cfg, session, *, base_dir=ROOT):
     require(summary.get('source_sha256') == current_sources, 'strategy_scan_source_changed')
     strategies = summary.get('strategies')
     require(isinstance(strategies, list) and len(strategies) == 1 and
-        encoded(strategies[0]['strategy']) == encoded(get_strategy(STRATEGY).describe()) and
+        encoded(strategies[0]['strategy']) == encoded(strategy.describe()) and
         strategies[0]['as_of'] == day, 'strategy_definition_changed')
     require(re.fullmatch('[0-9a-f]{64}', spec_sha.strip()) is not None, 'invalid_strategy_specification_binding')
     proposals = handoff['proposals']
@@ -129,9 +135,9 @@ def validate_archive(row, cfg, session, *, base_dir=ROOT):
                    if market_config(cfg) else p['symbol'] in cfg['symbols'])
         require(allowed and p['symbol'] not in seen, 'invalid_strategy_symbol_population')
         seen.add(p['symbol'])
-        expected_signal = canonical_hash(dict(strategy_id=STRATEGY, version='2',
+        expected_signal = canonical_hash(dict(strategy_id=strategy_id, version=strategy.version,
             episode_id=strategies[0]['episode_id'], symbol=p['symbol'], signal_session=day))
-        require(p['strategy_id'] == STRATEGY and p['strategy_version'] == '2' and
+        require(p['strategy_id'] == strategy_id and p['strategy_version'] == strategy.version and
             p['signal_id'] == expected_signal and p['side'] == 'BUY' and p['signal_session'] == day and
             p['next_session'] == session['next_session'] and
             datetime.fromisoformat(p['next_open_at']) == datetime.fromisoformat(session['next_open_at']) and
@@ -146,7 +152,7 @@ def validate_archive(row, cfg, session, *, base_dir=ROOT):
     return value
 
 
-def verified_dataset(value, spec_sha, *, base_dir=ROOT):
+def verified_dataset(value, spec_sha, *, base_dir=ROOT, strategy_id=STRATEGY, dataset=None):
     from scripts.pipeline_postflight import _read
     from scripts.research_dataset import load_dataset, strict_json
     from scripts.research_testing import validate_spec
@@ -154,9 +160,14 @@ def verified_dataset(value, spec_sha, *, base_dir=ROOT):
     from scripts.research_dataset import canonical_hash
     from scripts.strategy_universe import market_config
     cfg = load_config(Path(base_dir)/'config/strategy_scan_daily.json')
+    cfg = dict(cfg, strategy_id=strategy_id)
     market = market_config(cfg)
     root = Path(value['output_root'])
     expected = Path(json.loads((Path(base_dir)/'config/strategy_pipeline.json').read_bytes())['producer_root']) / value['signal_session']
+    if strategy_id != STRATEGY:
+        from scripts.pattern_strategy import PATTERNS
+        require(strategy_id in PATTERNS, 'unknown_companion_strategy')
+        expected = expected/'companions'/strategy_id
     require(root == expected, 'strategy_archive_path_mismatch')
     raw = _read(root/'scan/manifest.json', 65536)
     require(digest(raw) == value['scan_manifest_sha256'], 'strategy_scan_manifest_changed')
@@ -189,13 +200,18 @@ def verified_dataset(value, spec_sha, *, base_dir=ROOT):
     else:
         require(spec['universe']==dict(symbols=cfg['symbols'],benchmark=cfg['benchmark'],excluded={}),
             'strategy_scan_universe_changed')
-    require(spec['portfolio'] == cfg['portfolio'] and spec['strategies'] == [STRATEGY] and
+    require(spec['portfolio'] == cfg['portfolio'] and spec['strategies'] == [strategy_id] and
         spec['cost_cases'] == [cfg['cost_case']] and spec['folds'] == [dict(id=cfg['episode_id'],
         warmup_start=cfg['warmup_start'],test_start=cfg['episode_start'],test_end=value['signal_session'])],
         'strategy_scan_specification_scope_changed')
-    require(Path(spec['capture_manifest']) == root/'capture/analysis/manifest.json' and
-        Path(spec['actions_capture']['path']) == root/'actions.json', 'strategy_capture_path_mismatch')
-    dataset = load_dataset(spec)
+    capture_root = root if strategy_id == STRATEGY else root.parents[1]
+    require(Path(spec['capture_manifest']) == capture_root/'capture/analysis/manifest.json' and
+        Path(spec['actions_capture']['path']) == capture_root/'actions.json', 'strategy_capture_path_mismatch')
+    if dataset is None:
+        dataset = load_dataset(spec)
+    else:
+        from scripts.strategy_prepared_market import reuse_dataset
+        reuse_dataset(dataset, spec)
     if market:
         require(getattr(dataset,'market_wide',False) and dataset.coverage['policy']==cfg['universe'] and
             value['summary'].get('coverage')==dataset.provenance['selection'] and
@@ -399,7 +415,8 @@ def main(argv, *, base_dir=ROOT):
     finally:
         conn.rollback(); conn.close()
     finished = datetime.now(timezone.utc)
-    record = dict(schema=SCHEMA, run_id=args.handoff_invocation, invocation_id=args.handoff_invocation,
+    record = dict(schema=SCHEMA, status='PRIMARY_STAGES_COMPLETE_PENDING_UNIFIED_SELECTION',
+        run_id=args.handoff_invocation, invocation_id=args.handoff_invocation,
         started_at=started.isoformat(), finished_at=finished.isoformat(), pipeline_rc=0,
         session=session, batch=batch, candidate_run_ts_utc=started.isoformat(), source_bindings=sources,
         handoff=value['handoff'], backtest=backtest, metrics=metrics,
@@ -414,10 +431,38 @@ def main(argv, *, base_dir=ROOT):
                 'strategy_primary_source_changed_during_run')
     health._save_control(base_dir, 'run-'+record['run_id']+'.json', record)
     health._save_control(base_dir, 'latest.json', record)
+    selection = finish_strategy_handoff(record, env=env, base_dir=base_dir, dataset=dataset)
+    if selection.get('status') != 'COMPLETED_UNIFIED_SETUP_SELECTION':
+        print(json.dumps(dict(status='PRIMARY_STRATEGY_SCREEN_BLOCKED',
+            reason='REQUIRED_UNIFIED_SELECTION_UNAVAILABLE', run_id=record['run_id'],
+            signal_session=session['signal_session'], broker_operations=0)), flush=True)
+        return 1
     print(json.dumps(dict(status='PRIMARY_STRATEGY_SCREEN_COMPLETE', strategy_id=STRATEGY,
         signal_session=session['signal_session'], candidates=len(rows), outcome=batch['outcome'],
         scan_run_id=value['scan_run_id'], archive_id=archive_id, broker_operations=0)), flush=True)
     return 0
+
+
+def finish_strategy_handoff(record, *, env, base_dir=ROOT, dataset=None):
+    from scripts.bull_flag_companion import prepare_primary, _status
+    from scripts.setup_selection import publish, required_strategies
+    from scripts.research_strategies import CHALLENGER
+    unavailable=[]
+    for strategy_id in required_strategies(base_dir):
+        if strategy_id == CHALLENGER:
+            continue
+        try:
+            result=prepare_primary(record, env=env, base_dir=base_dir, strategy_id=strategy_id, dataset=dataset)
+            if result.get('status') != 'COMPLETED_COMPANION_PRIMARY':
+                unavailable.append(strategy_id)
+        except Exception:
+            unavailable.append(strategy_id)
+    if unavailable:
+        result=dict(status='UNIFIED_SETUP_SELECTION_UNAVAILABLE', primary_run_id=record['run_id'],
+            parent_report_sha256=digest(encoded(record)), unavailable_strategies=unavailable)
+        _status(result, base_dir, 'unified_setups')
+        return result
+    return publish(record, env=env, base_dir=base_dir)
 
 
 def assess(record, *, now, max_age_seconds=7200, not_before=None, inspection=False):
@@ -467,6 +512,11 @@ def check_report(record, data, base_dir, *, now, max_age_seconds, not_before, re
     directory = Path(base_dir)/'reports/pipeline_postflight'
     require(h._read(directory/('run-'+record['run_id']+'.json'), h.MAX_REPORT_BYTES) == data,
             'strategy_postflight_history_changed')
+    from scripts.setup_selection import selection_id
+    unified = json.loads(h._read(Path(base_dir)/'reports/strategy_companions/unified_setups/latest.json',65536))
+    require(unified.get('status') == 'COMPLETED_UNIFIED_SETUP_SELECTION' and
+        unified.get('run_id') == selection_id(record['run_id']) and
+        unified.get('parent_report_sha256') == digest(encoded(record)), 'strategy_postflight_unified_selection_unavailable')
     active = json.loads(h._read(directory/'active-primary.json', 4096))
     require(record['invocation_id'] == active['id'] == record['run_id'] and
         h._utc(record['started_at']) >= h._utc(active['started_at']), 'strategy_primary_invocation_mismatch')

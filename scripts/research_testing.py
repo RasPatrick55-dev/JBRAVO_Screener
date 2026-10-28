@@ -15,6 +15,7 @@ import pandas as pd
 
 from scripts.research_dataset import bounded_read, canonical_hash, digest_bytes, load_dataset, strict_json
 from scripts.research_simulation import ResearchPortfolio
+from scripts.pattern_strategy import PATTERNS
 from scripts.research_strategies import BASELINE, BENCHMARK, CHALLENGER, METHODS, prepare_signals
 
 REPO = Path(__file__).resolve().parents[1]
@@ -39,12 +40,19 @@ def save_json(path, value):
 def validate_spec(spec):
     required = {"schema", "purpose", "capture_manifest", "actions_capture", "universe", "folds",
                 "strategies", "cost_cases", "portfolio", "max_runs", "max_seconds", "research_qualified", "execution_authorized"}
-    if set(spec) != required or spec["schema"] != "jbravo.strategy-study.v1":
+    if set(spec) not in (required, required | {'prepared_market'}) or spec["schema"] != "jbravo.strategy-study.v1":
         raise ValueError("Unexpected strategy study schema/fields")
+    if 'prepared_market' in spec:
+        import re
+        ref = spec['prepared_market']
+        if (not isinstance(ref, dict) or set(ref) != {'path', 'sha256'} or
+                not isinstance(ref['path'], str) or not isinstance(ref['sha256'], str) or
+                re.fullmatch('[0-9a-f]{64}', ref['sha256']) is None):
+            raise ValueError('Malformed prepared market reference')
     if spec["purpose"] != "exploratory_research" or spec["research_qualified"] is not False or spec["execution_authorized"] is not False:
         raise ValueError("Only explicit exploratory research is supported")
-    if not 1 <= len(spec["strategies"]) <= 2 or len(set(spec["strategies"])) != len(spec["strategies"]) or not set(spec["strategies"]) <= set(METHODS):
-        raise ValueError("Unknown/duplicate strategy; v1 has two frozen methods")
+    if not 1 <= len(spec["strategies"]) <= len(set((*METHODS,*PATTERNS))) or len(set(spec["strategies"])) != len(spec["strategies"]) or not set(spec["strategies"]) <= set((*METHODS, *PATTERNS)):
+        raise ValueError("Unknown/duplicate registered strategy")
     folds = spec["folds"]
     if not 1 <= len(folds) <= 10:
         raise ValueError("Fold count limit exceeded")
@@ -129,7 +137,7 @@ def report_html(output, result, curves):
             for key, frame in curves.items():
                 if key[1] == fold:
                     figure.add_trace(go.Scatter(x=frame.index, y=frame["equity"], name=key[0] + "/" + key[2]))
-            figure.update_layout(title="Fold " + fold + " — modeled NAV including dividend receivables", yaxis_title="USD")
+            figure.update_layout(title="Fold " + fold + " â€” modeled NAV including dividend receivables", yaxis_title="USD")
             plots += plot(figure, include_plotlyjs=True if not plots else False, output_type="div")
     except ImportError:
         plots = "<p>Plotly is unavailable; full equity CSV files are included.</p>"
@@ -175,14 +183,25 @@ def run_study(spec, output, *, stop_file=None):
                     if time.monotonic() >= deadline or stop_file.exists():
                         raise RuntimeError("Research stopped before next trial")
                     symbols = spec["universe"]["symbols"] if method != BENCHMARK else [spec["universe"]["benchmark"]]
-                    data = {symbol: prepare_signals(dataset.raw[symbol], dataset.features[symbol], method, fold) for symbol in symbols}
+                    if method in PATTERNS:
+                        from scripts.strategy_library import get_strategy
+                        data = {symbol: get_strategy(method).prepare(dataset.raw[symbol], dataset.features[symbol], fold) for symbol in symbols}
+                    else:
+                        data = {symbol: prepare_signals(dataset.raw[symbol], dataset.features[symbol], method, fold) for symbol in symbols}
                     options = dict(spec["portfolio"], trade_cost=cost["fee_per_fill"], slippage=cost["slippage_bps"] / 10000)
                     if method == BENCHMARK:
                         options.update(alloc_pct=1.0, top_n=1, max_positions=1, trail_pct=None, atr_multiple=0,
                                        max_hold_days=100000, enable_macd_exit=False, enable_partial_exit=False,
                                        enable_rsi_divergence=False, enable_candlestick_exit=False,
                                        enable_ema_exit=False, enable_trailing_exit=False)
-                    engine = ResearchPortfolio(data, method=method, dividends=dataset.dividends,
+                    if method in PATTERNS:
+                        from scripts.bull_flag_strategy import research_portfolio_class
+                        if method != 'bull_flag_breakout_v1':
+                            from scripts.pattern_strategy import research_portfolio_class
+                        engine = research_portfolio_class()(data, dividends=dataset.dividends,
+                                               deadline=deadline, stop_file=stop_file, **options)
+                    else:
+                        engine = ResearchPortfolio(data, method=method, dividends=dataset.dividends,
                                                deadline=deadline, stop_file=stop_file, **options)
                     engine.run()
                     metrics = engine.summary()
