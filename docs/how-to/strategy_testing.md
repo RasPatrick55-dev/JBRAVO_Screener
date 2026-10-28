@@ -18,6 +18,56 @@ the deployed trading rules or establish profitability.
 
 ## Department workflow
 
+### Six-department review in Paqiyd
+
+Paqiyd coordinates the following review sequence around this existing strategy
+pipeline. Each department receives the dated source evidence and preceding
+department reports, creates a durable job, and returns its own report.
+
+| Department | Runtime ID | Review output |
+| --- | --- | --- |
+| Research | `jbravo_research` | Hypothesis, research findings, assumptions and missing qualification |
+| Data Provenance | `jbravo_data_provenance` | Session, source hashes, feed/adjustments, lineage and evidence limits |
+| Backtest | `jbravo_backtest` | Supplied results, comparison limits and missing evaluation checks |
+| Strategy / Trading Strategies | `jbravo_strategy` | Versioned strategy interpretation, risk settings and a qualified disposition |
+| Monitoring | `jbravo_monitoring` | Publication/order/fill/protection/exit checklist and exception review |
+| Compliance / Governance | `jbravo_compliance_governance` | Approval boundaries, unresolved gates and an owner-facing decision packet |
+
+An `active` registry entry establishes configuration, not successful execution,
+research qualification or permission to operate an external system. Retain the
+actual worker and department reports, job/run IDs, source bindings and any
+`needs_approval`, blocked or failed disposition. Report delivery and approval of
+the proposed next action are separate outcomes; do not invent clean background
+runs or human reviews to satisfy trust thresholds.
+
+The October 27 operations record documents a recurring local department review
+scheduled for weekdays at 09:15 America/Chicago. Each review requires fresh
+native receipts and meaningful new session evidence, preserving prior reports.
+Refresh readiness baselines against the currently reviewed producer configuration
+before claiming a new review completed; a configured follow-up is not proof of
+successful execution. This Codex follow-up depends on its host;
+the existing PythonAnywhere producer, primary, paper-entry and always-on
+monitor remain the separate hosted execution path. Browser/voice use also
+requires Paqiyd's configured trusted Owner-session issuer and authentication;
+local report generation does not prove that interface is provisioned.
+
+Research HOLD and unqualified historical results must not be interpreted as
+revoking already authorized experimental paper testing. The October 27 record
+identifies an already authorized finite first-candidate observation. That dated
+record is not a fresh execution release. Department reports cannot
+grant a new trading mode, alter risk settings, replay an old dispatch or submit
+an order themselves. New proposed actions retain their owning approval gates.
+
+The [October 27 six-department operations record](../reference/department_operations_2026-10-27.json)
+retains this integration's actual results and remaining gates separately from
+the earlier technical strategy verification below.
+
+These six completed reviews and their pending proofs are the October 27
+snapshot. Later production-run evidence below has its own date and scope;
+neither record establishes current fills, research qualification or promotion.
+
+### Strategy pipeline stages
+
 The [October 28 production run review](../reference/pipeline_run_review_2026-10-28.json)
 records the first fresh published Pullback batch and its completed Backtest and
 Metrics, alongside four failed pattern screens, unavailable unified selection
