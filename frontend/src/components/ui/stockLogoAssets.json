@@ -1,0 +1,411 @@
+{
+  "ALGT": {
+    "ticker": "ALGT",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/ALGT-1ca54621bea02d11aa241ce6c8c791fdcf8e569852d355ff77bcb1b7309d28d3.png",
+    "sha256": "1ca54621bea02d11aa241ce6c8c791fdcf8e569852d355ff77bcb1b7309d28d3",
+    "providerBrandId": "brand_g47gqnqm9x30h287eyrbkf35tc",
+    "providerEtag": "6090e3ff72eb017b0585e0bd0b5c8c3e897dd5fb8fe6efc7b7d3364a181b047b",
+    "resolution": {
+      "type": "ticker",
+      "value": "ALGT",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "AMC": {
+    "ticker": "AMC",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/AMC-fd6b2608018277879728afb96e3339e472302d63c9da136ea6d2833f485ffdaa.png",
+    "sha256": "fd6b2608018277879728afb96e3339e472302d63c9da136ea6d2833f485ffdaa",
+    "providerBrandId": "brand_wr3z4mbdqx4n770n4p6dpxb3kc",
+    "providerEtag": "6cf3468cd9c7ad5cc232a291a9040b003c4cd25c6a2b9374337168b7cbb15bad",
+    "resolution": {
+      "type": "ticker",
+      "value": "AMC",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "APH": {
+    "ticker": "APH",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/APH-404b9a7289ab35a2e4a971222e405dc409609d358e60ed38ef6d3968ca45f3ce.png",
+    "sha256": "404b9a7289ab35a2e4a971222e405dc409609d358e60ed38ef6d3968ca45f3ce",
+    "providerBrandId": "brand_6wptd3xh2946547g0v4c3d1wnm",
+    "providerEtag": "068ee6f24fa660e346aed994a4798fa598d747363e146795a57809fdf9a69bfa",
+    "resolution": {
+      "type": "ticker",
+      "value": "APH",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "AVT": {
+    "ticker": "AVT",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/AVT-056fe0ec51f5f7edbd8fa9f5780be739cf7a4d11c4d6d4afaf42b1b98353d95c.png",
+    "sha256": "056fe0ec51f5f7edbd8fa9f5780be739cf7a4d11c4d6d4afaf42b1b98353d95c",
+    "providerBrandId": "brand_2zg54ds1497an7hss03rtfa8xc",
+    "providerEtag": "b808ca40dbfba58e1f3b5f546b9c30007557f0c7068d98caf30d9cb75afcd4c4",
+    "resolution": {
+      "type": "ticker",
+      "value": "AVT",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "CRC": {
+    "ticker": "CRC",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/CRC-9096a9826d55a7b01dd8048994e7f54da85fbf4d113af433ff9d9286fc468b3f.png",
+    "sha256": "9096a9826d55a7b01dd8048994e7f54da85fbf4d113af433ff9d9286fc468b3f",
+    "providerBrandId": "brand_5g0f3tm5dx65n2wyctm3rp4erm",
+    "providerEtag": "9ff357763a18b01802fbd1e26788038fe3c39e30216077bb2aca501265d1f316",
+    "resolution": {
+      "type": "ticker",
+      "value": "CRC",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "CRM": {
+    "ticker": "CRM",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/CRM-a52083c817f4f6ea15adc50d72adb1e7fa22b70537ab1edca6a8d3020ed7bbfb.png",
+    "sha256": "a52083c817f4f6ea15adc50d72adb1e7fa22b70537ab1edca6a8d3020ed7bbfb",
+    "providerBrandId": "brand_1bkasca3rd6f5079fegm40esgr",
+    "providerEtag": "6f992bec214375ba394f6193f5bb3710b77249503df3c654fc4ab90dd51aad1e",
+    "resolution": {
+      "type": "ticker",
+      "value": "CRM",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "DT": {
+    "ticker": "DT",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/DT-eb7be15afd5d4911bd35c1fecae1e71d2c444174d78432a3f0c4accd9a981bb7.png",
+    "sha256": "eb7be15afd5d4911bd35c1fecae1e71d2c444174d78432a3f0c4accd9a981bb7",
+    "providerBrandId": "brand_8ernb74awn1mz89fvktcsgtadc",
+    "providerEtag": "fd9d7cf8dc443a6aeb704cc2d4430a396611fa9e884ff605591cb7aef185a914",
+    "resolution": {
+      "type": "ticker",
+      "value": "DT",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "ELAN": {
+    "ticker": "ELAN",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/ELAN-4cf0d2747530759c572744a9b56cc94ac0e72b057c2f9c4c813b3a66395ce554.png",
+    "sha256": "4cf0d2747530759c572744a9b56cc94ac0e72b057c2f9c4c813b3a66395ce554",
+    "providerBrandId": "brand_9n3et23jd5577cc1vspaq3tf2m",
+    "providerEtag": "5988ffed55a1bc2569bbdd2f5df5cb6c45c784ecf49e5c5a5b176724819804c3",
+    "resolution": {
+      "type": "ticker",
+      "value": "ELAN",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "ENVA": {
+    "ticker": "ENVA",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/ENVA-8cd9608cdc9522a57a6f3cce6a382073e93801b24bac0385086907ebbe86aa7b.png",
+    "sha256": "8cd9608cdc9522a57a6f3cce6a382073e93801b24bac0385086907ebbe86aa7b",
+    "providerBrandId": "brand_rt69nt04yx771cpzb0etacxzd8",
+    "providerEtag": "21f09b97335912aef19d0bee746088fa8bc68ec7664804755a1ef5761f5b4963",
+    "resolution": {
+      "type": "ticker",
+      "value": "ENVA",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "ETSY": {
+    "ticker": "ETSY",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/ETSY-cae807119ed34bd0e2efb6dd82b46b5ac8958496c7178ea9101e8b231eb3ba8e.png",
+    "sha256": "cae807119ed34bd0e2efb6dd82b46b5ac8958496c7178ea9101e8b231eb3ba8e",
+    "providerBrandId": "brand_kckaacqxgx4fx5ggjgtyaz3vp4",
+    "providerEtag": "0e16bb51da6648d5f3d841b48b67dae94851539a821d93708f4c0044a213325c",
+    "resolution": {
+      "type": "ticker",
+      "value": "ETSY",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "FULT": {
+    "ticker": "FULT",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/FULT-907394da5afeb2db8e75726764a6481b47e3f8e68d86b69c6d55713c22b20a90.png",
+    "sha256": "907394da5afeb2db8e75726764a6481b47e3f8e68d86b69c6d55713c22b20a90",
+    "providerBrandId": "brand_8es5da4a356yd966x1n390twj4",
+    "providerEtag": "6e79b7615b78de64d5736b370522ec28e810cf4563281b3e3a8bdc0ebbf8a88a",
+    "resolution": {
+      "type": "ticker",
+      "value": "FULT",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "GDS": {
+    "ticker": "GDS",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/GDS-f52ca54b6e2f17ee5d20addc64f91c83bc7af02c1eccb502c07d5ae7278547a3.png",
+    "sha256": "f52ca54b6e2f17ee5d20addc64f91c83bc7af02c1eccb502c07d5ae7278547a3",
+    "providerBrandId": "brand_hfs65ewab54yq6mycpkdttb7hc",
+    "providerEtag": "9f550cb4eadcabff2fe469d3fd8220f08c64b6d2e011aa07a1ceb95739874008",
+    "resolution": {
+      "type": "ticker",
+      "value": "GDS",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "IESC": {
+    "ticker": "IESC",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/IESC-d12f911c71222d481ecc29c67e9f6a33218e142a01cd1a2f21fe85950b1a23fc.png",
+    "sha256": "d12f911c71222d481ecc29c67e9f6a33218e142a01cd1a2f21fe85950b1a23fc",
+    "providerBrandId": "brand_ka1pqq3bx174vaw6b3vkjm07ew",
+    "providerEtag": "7d68d5715147a74a56c1c8ae272c4142faa80728db259a129f5d0a47ebc0cc3d",
+    "resolution": {
+      "type": "ticker",
+      "value": "IESC",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "MOD": {
+    "ticker": "MOD",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/MOD-e7b919bdafb2d726a912d6cce65b5ffd76f5995ac6a412badc7a3f9ce0b658f0.png",
+    "sha256": "e7b919bdafb2d726a912d6cce65b5ffd76f5995ac6a412badc7a3f9ce0b658f0",
+    "providerBrandId": "brand_f24z9aw60953hcdj9k70zvfgh0",
+    "providerEtag": "bcc285964bdfd50226ff78708f89d84bf01718638ce8d20ae4b62929df088426",
+    "resolution": {
+      "type": "ticker",
+      "value": "MOD",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "MUR": {
+    "ticker": "MUR",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/MUR-bd3beacb78f55619966a70e7f6b71a96ee9bc3de8bc145605a40fa6fa8fc1072.png",
+    "sha256": "bd3beacb78f55619966a70e7f6b71a96ee9bc3de8bc145605a40fa6fa8fc1072",
+    "providerBrandId": "brand_y0d4xbbgms5s1ej0747yayswq0",
+    "providerEtag": "6d039563e46a4d674d2ddc174104f8db2328f33f42cdfb307b4e32e0b949ba1a",
+    "resolution": {
+      "type": "ticker",
+      "value": "MUR",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "PATH": {
+    "ticker": "PATH",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/PATH-1a6c93183093e0c1bd1ff73610a5c11f0c14e76a5f775cf95f1daabdbb7358eb.png",
+    "sha256": "1a6c93183093e0c1bd1ff73610a5c11f0c14e76a5f775cf95f1daabdbb7358eb",
+    "providerBrandId": "brand_6g4wb6sh3n183ew2sz7v2y11v4",
+    "providerEtag": "fa69cc27ee35e04316889df3752ed9e6e2c60630f45cd307fb88f077fd0db355",
+    "resolution": {
+      "type": "ticker",
+      "value": "PATH",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "RTX": {
+    "ticker": "RTX",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/RTX-470e3dce785c53fa5137b35f0db7a37cfa4de4f7f82649f4510c4c0b46196d04.png",
+    "sha256": "470e3dce785c53fa5137b35f0db7a37cfa4de4f7f82649f4510c4c0b46196d04",
+    "providerBrandId": "brand_p31psqtzyn5b153p769mnw1wvg",
+    "providerEtag": "130f3495f685fb81d3adecb58c65a32fda1850a996fa2da91cbc3064196e7080",
+    "resolution": {
+      "type": "ticker",
+      "value": "RTX",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 253
+  },
+  "RYTM": {
+    "ticker": "RYTM",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/RYTM-de835a7af00ba0204029c18f03729d7cb8812f1ca0dbf3b467cd2b0178dbd63d.png",
+    "sha256": "de835a7af00ba0204029c18f03729d7cb8812f1ca0dbf3b467cd2b0178dbd63d",
+    "providerBrandId": "brand_3g81x6z4y533vczwv5f48sw758",
+    "providerEtag": "88d5c00c7307f68f8212e29af994ffb7c3b95f53788d31778c6823bba815e899",
+    "resolution": {
+      "type": "ticker",
+      "value": "RYTM",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "SGI": {
+    "ticker": "SGI",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/SGI-53cb0cab94e5b325eeeb637fdac72196b642a4d28d0944c81efdca51a967d718.png",
+    "sha256": "53cb0cab94e5b325eeeb637fdac72196b642a4d28d0944c81efdca51a967d718",
+    "providerBrandId": "brand_nmbh7cy3295wde6pevey1708b0",
+    "providerEtag": "3748eb880dede8b9eb7d6c06bbe46b3093abac7a110f6a97c1c688f614a3f3be",
+    "resolution": {
+      "type": "ticker",
+      "value": "SGI",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 198,
+    "height": 256
+  },
+  "SHLS": {
+    "ticker": "SHLS",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/SHLS-656a717bf7f99ab2e99229e3ce07631f33c2c25e41566dc08e1287451e95c4d4.png",
+    "sha256": "656a717bf7f99ab2e99229e3ce07631f33c2c25e41566dc08e1287451e95c4d4",
+    "providerBrandId": "brand_mmrc41w3v51x55h8pgk9v84w38",
+    "providerEtag": "9843e1989d7f87a193bb344ad46cab031e929d77b8f278ee378b6fc3f4ba5474",
+    "resolution": {
+      "type": "ticker",
+      "value": "SHLS",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "STRL": {
+    "ticker": "STRL",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/STRL-41a58ad82b28c910dd98ea49fd41c055b0d0c8a070ab4926888f358e5d1b97e8.png",
+    "sha256": "41a58ad82b28c910dd98ea49fd41c055b0d0c8a070ab4926888f358e5d1b97e8",
+    "providerBrandId": "brand_nceqpkqb810d3des7cb4zbxbz4",
+    "providerEtag": "68fec2647fb96da94f6162a438ca7e4ce26053e0b620471e866649cf5f0c96b9",
+    "resolution": {
+      "type": "ticker",
+      "value": "STRL",
+      "method": "security"
+    },
+    "downloadedAtUTC": "2026-10-29T13:45:57.925936+00:00",
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "WMG": {
+    "ticker": "WMG",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/WMG-9b74784937fa8ccd9c5faada82728463bb9198e734ab9f919a9364e4e824d469.png",
+    "sha256": "9b74784937fa8ccd9c5faada82728463bb9198e734ab9f919a9364e4e824d469",
+    "providerBrandId": "brand_rpmde8g69530h7cvqfh2h06rx0",
+    "providerEtag": "641e3bcf1ed3c3ee9c8f027a658179d5c64a354e787c0c0d40b5fb5cae9b66e2",
+    "resolution": {
+      "type": "ticker",
+      "value": "WMG",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "WULF": {
+    "ticker": "WULF",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/WULF-80ee003e1c97258c35ef41ea8591af186ef00dab82043471750478493f791f4a.png",
+    "sha256": "80ee003e1c97258c35ef41ea8591af186ef00dab82043471750478493f791f4a",
+    "providerBrandId": "brand_hspqgr2hfd1z75j13dg87s217g",
+    "providerEtag": "99d2ae5ecbac91d20ea51b5524f6cf1b5164ee4b0190d54ee072cd409954be66",
+    "resolution": {
+      "type": "ticker",
+      "value": "WULF",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  },
+  "YPF": {
+    "ticker": "YPF",
+    "provider": "Logo.dev",
+    "sourceKind": "OAuth MCP logo API asset",
+    "src": "/assets/company-logos/YPF-fc718a66f3876949d97533b52c7341518d3b8f9c1dffdb0fffe4053bc81a8b1a.png",
+    "sha256": "fc718a66f3876949d97533b52c7341518d3b8f9c1dffdb0fffe4053bc81a8b1a",
+    "providerBrandId": "brand_cr7bwmg8sh6zx9tk3n2rg2b5z8",
+    "providerEtag": "44a042c068bc1b7c4bc2ee6eb346f64a3f914a65919b069bca5bd9414f7d9b62",
+    "resolution": {
+      "type": "ticker",
+      "value": "YPF",
+      "method": "security"
+    },
+    "format": "png",
+    "width": 256,
+    "height": 256
+  }
+}
