@@ -28,6 +28,11 @@ credentials, weaken restrictions, or commit local `.env` files to repair a logo.
 See [Logo.dev ticker lookups](https://www.logo.dev/docs/logo-images/ticker) and
 [Logo.dev key/domain policy](https://www.logo.dev/docs/platform/api-keys).
 
+The eight-second deadline is a display deadline: it labels the visible ticker as
+delayed while preserving the same pending image request. A later successful load
+with valid dimensions may display that exact image. An actual image error remains
+terminal until its symbol/source is remounted; no automatic retry is introduced.
+
 ## OAuth-exported company logos
 
 Reviewed Logo.dev API assets can be served locally without a CDN key. The exact-ticker

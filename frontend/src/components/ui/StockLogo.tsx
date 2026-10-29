@@ -18,7 +18,7 @@ const logoToken = logoPublishableToken(
 );
 
 export const LOGO_LOAD_TIMEOUT_MS = 8000;
-export type LogoStatus = "loading" | "loaded" | "fallback";
+export type LogoStatus = "loading" | "delayed" | "loaded" | "fallback";
 
 export function normalizeLogoSymbol(symbol: string): string {
   return typeof symbol === "string" ? symbol.trim().toUpperCase() : "";
@@ -87,7 +87,9 @@ export function StockLogoImage({ symbol, src }: { symbol: string; src: string | 
   const [status, setStatus] = useState<LogoStatus>(src ? "loading" : "fallback");
   useEffect(() => {
     if (!src || status !== "loading") return;
-    const timeout = setTimeout(() => setStatus(current => current === "loading" ? "fallback" : current), LOGO_LOAD_TIMEOUT_MS);
+    // The display deadline must not cancel a legitimate slow image request.
+    // Keep the ticker visible and the same image mounted; no extra request/retry.
+    const timeout = setTimeout(() => setStatus(current => current === "loading" ? "delayed" : current), LOGO_LOAD_TIMEOUT_MS);
     return () => clearTimeout(timeout);
   }, [src, status]);
 
@@ -95,7 +97,7 @@ export function StockLogoImage({ symbol, src }: { symbol: string; src: string | 
   const fallbackText = ticker.length > 5 ? `${ticker.slice(0, 4)}…` : ticker;
   const description = status === "loaded"
     ? `${ticker} company logo`
-    : `${ticker} ticker; logo ${status === "loading" ? "loading" : "unavailable"}`;
+    : `${ticker} ticker; logo ${status === "loading" ? "loading" : status === "delayed" ? "delayed" : "unavailable"}`;
 
   return (
     <span className="relative h-8 w-8 flex-shrink-0" role="img" aria-label={description}>
@@ -115,7 +117,7 @@ export function StockLogoImage({ symbol, src }: { symbol: string; src: string | 
           className={"absolute inset-0 h-8 w-8 rounded-md border jbravo-border-success bg-slate-50 object-contain p-1 " + (status === "loaded" ? "opacity-100" : "opacity-0")}
           onLoad={(event) => {
             const valid = event.currentTarget.naturalWidth >= 2 && event.currentTarget.naturalHeight >= 2;
-            setStatus(current => current === "loading" ? (valid ? "loaded" : "fallback") : current);
+            setStatus(current => current === "loading" || current === "delayed" ? (valid ? "loaded" : "fallback") : current);
           }}
           onError={() => setStatus("fallback")}
           referrerPolicy="origin"
@@ -125,9 +127,9 @@ export function StockLogoImage({ symbol, src }: { symbol: string; src: string | 
       <span
         aria-hidden="true"
         className={"absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full " + (
-          status === "loaded" ? "jbravo-status-dot-success" : status === "fallback" ? "bg-amber-300" : "bg-cyan-300"
+          status === "loaded" ? "jbravo-status-dot-success" : status === "loading" ? "bg-cyan-300" : "bg-amber-300"
         )}
-        title={status === "loaded" ? "Logo loaded" : status === "fallback" ? "Logo unavailable" : "Logo loading"}
+        title={status === "loaded" ? "Logo loaded" : status === "fallback" ? "Logo unavailable" : status === "delayed" ? "Logo delayed" : "Logo loading"}
       />
     </span>
   );
