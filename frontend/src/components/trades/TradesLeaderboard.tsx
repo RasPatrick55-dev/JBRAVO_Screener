@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { formatSignedCurrency } from "../dashboard/formatters";
 import StockLogo from "../ui/StockLogo";
+import LogoAttribution from "../ui/LogoAttribution";
 import TradesRangePills from "./TradesRangePills";
 import type { LeaderRow, LeaderboardMode, RangeKey } from "./types";
 
@@ -142,6 +143,7 @@ export default function TradesLeaderboard({
           </tbody>
         </table>
       </div>
+      <LogoAttribution />
     </section>
   );
 }
