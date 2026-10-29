@@ -181,12 +181,15 @@ describe("actual image handlers and rendered lifecycle", () => {
     expect(html()).toContain("logo unavailable");
     expect(image(frame())).toBeUndefined();
   });
-  it("times out to a visible terminal fallback and ignores a late load", () => {
+  it("keeps the same pending request after the display deadline and accepts a valid delayed load", () => {
     const node=frame();
     vi.advanceTimersByTime(LOGO_LOAD_TIMEOUT_MS);
+    expect(html()).toContain("SYN ticker; logo delayed");
+    expect(image(frame())!.props.src).toBe(src);
+    expect(vi.getTimerCount()).toBe(0);
     image(node)!.props.onLoad({currentTarget:{naturalWidth:64,naturalHeight:64}});
-    expect(html()).toContain("logo unavailable");
-    expect(image(frame())).toBeUndefined();
+    expect(html()).toContain("SYN company logo");
+    expect(image(frame())!.props.src).toBe(src);
   });
   it("cleans the loading deadline once loaded or unmounted", () => {
     const node=frame();
@@ -197,6 +200,26 @@ describe("actual image handlers and rendered lifecycle", () => {
     expect(html()).toContain("company logo");
     hooks.status=undefined; frame(); hooks.cleanup?.();
     expect(vi.getTimerCount()).toBe(0);
+  });
+  it("retains one pending image and visible ticker through repeated delayed renders without timer retries", () => {
+    frame();vi.advanceTimersByTime(LOGO_LOAD_TIMEOUT_MS);
+    for(let i=0;i<5;i++) {
+      const node=frame();expect(image(node)!.props.src).toBe(src);
+      expect(html()).toContain(">SYN</span>");expect(html()).toContain("opacity-0");
+    }
+    vi.advanceTimersByTime(LOGO_LOAD_TIMEOUT_MS*10);
+    expect(vi.getTimerCount()).toBe(0);expect(image(frame())!.props.src).toBe(src);
+  });
+  it("keeps an actual failed request terminal even after the display deadline or a late success event", () => {
+    const img=image(frame())!;vi.advanceTimersByTime(LOGO_LOAD_TIMEOUT_MS);
+    img.props.onError();img.props.onLoad({currentTarget:{naturalWidth:256,naturalHeight:256}});
+    expect(html()).toContain("logo unavailable");expect(image(frame())).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("rejects invalid late image dimensions rather than promoting a delayed tracking pixel", () => {
+    const img=image(frame())!;vi.advanceTimersByTime(LOGO_LOAD_TIMEOUT_MS);
+    img.props.onLoad({currentTarget:{naturalWidth:1,naturalHeight:1}});
+    expect(html()).toContain("logo unavailable");expect(image(frame())).toBeUndefined();
   });
   it("keys the actual wrapper by both symbol and source, keeping repeated renders stable", () => {
     const a=StockLogo({symbol:"SYN",logoUrl:src});
