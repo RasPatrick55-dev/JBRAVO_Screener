@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -318,6 +319,34 @@ def _run_type_hint() -> str:
     return "pre-market" if age_seconds <= 12 * 3600 else "nightly"
 
 
+def _connection_timestamp(payload: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """Normalize producer aliases without borrowing freshness or inventing a time."""
+    stamps = []
+    for key in ("timestamp", "ts_utc", "last_run_utc", "last_run"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        if (not isinstance(value, str) or len(value) > 128
+                or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})", value) is None):
+            return None, "timestamp_invalid"
+        # fromisoformat normalizes overflowing offset minutes (e.g. +00:60).
+        # Reject their lexical form before parsing so it cannot create freshness.
+        if value[-1] != "Z" and (int(value[-5:-3]) > 23 or int(value[-2:]) > 59):
+            return None, "timestamp_invalid"
+        try:
+            stamp = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if stamp.utcoffset() is None:
+                return None, "timestamp_invalid"
+            stamps.append(stamp.astimezone(dt.timezone.utc))
+        except (ValueError, TypeError, OverflowError):
+            return None, "timestamp_invalid"
+    if not stamps:
+        return None, None
+    if any(stamp != stamps[0] for stamp in stamps[1:]):
+        return None, "timestamp_conflict"
+    return stamps[0].isoformat(), None
+
+
 def load_connection_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
     base = Path(base_dir) if base_dir else DATA_DIR
     primary = base / "connection_health.json"
@@ -329,9 +358,7 @@ def load_connection_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
         payload = _read_json_safe(fallback)
         source = "connectivity.json" if payload else None
 
-    timestamp = payload.get("timestamp") or payload.get("last_run_utc") or payload.get("last_run")
-    if timestamp is not None:
-        timestamp = str(timestamp)
+    timestamp, timestamp_error = _connection_timestamp(payload)
 
     normalized = {
         "source": source,
@@ -341,6 +368,7 @@ def load_connection_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
         "data_status": _coerce_int(payload.get("data_status")),
         "feed": _normalize_feed(payload.get("feed")),
         "timestamp": timestamp,
+        "timestamp_error": timestamp_error,
         "buying_power": _coerce_float(payload.get("buying_power")),
     }
 
@@ -442,12 +470,19 @@ def connection_check_snapshot(connection: Dict[str, Any], *, now=None) -> Dict[s
               "freshness": {"age_seconds": None, "freshness_level": "gray"}}
     if result["source"] is None:
         return result
+    timestamp_error = connection.get("timestamp_error")
+    if timestamp_error in {"timestamp_invalid", "timestamp_conflict"}:
+        result["reason"] = timestamp_error
+        return result
     text = connection.get("timestamp")
     if not isinstance(text, str) or not text or len(text) > 128:
         result["reason"] = "timestamp_missing"
         return result
     try:
-        stamp = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        normalized, error = _connection_timestamp({"timestamp": text})
+        if error is not None or normalized is None:
+            raise ValueError("invalid timestamp")
+        stamp = dt.datetime.fromisoformat(normalized)
         if stamp.utcoffset() is None:
             raise ValueError("naive timestamp")
         stamp = stamp.astimezone(dt.timezone.utc)
