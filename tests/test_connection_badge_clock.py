@@ -1,9 +1,10 @@
 """Actual health AST, synthetic artifacts/clock; no app/config/provider imports."""
 import ast
+import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 import pytest
 
 NOW = datetime(2026, 10, 27, 22, tzinfo=timezone.utc)
@@ -11,12 +12,12 @@ NOW = datetime(2026, 10, 27, 22, tzinfo=timezone.utc)
 
 def health(metrics_age, connection_stamp, *, source='connection_health.json', trading_ok=True):
     path = Path(__file__).parents[1] / 'dashboards/data_io.py'
-    names = {'_freshness', 'connection_check_snapshot', 'screener_health'}
+    names = {'_freshness', '_connection_timestamp', 'connection_check_snapshot', 'screener_health'}
     nodes = [n for n in ast.parse(path.read_bytes()).body if isinstance(n, ast.FunctionDef) and n.name in names]
     class Clock(datetime):
         @classmethod
         def now(cls, tz=None): return NOW
-    ns = dict(Any=Any, Dict=Dict, Optional=Optional, Path=Path, DATA_DIR=Path('synthetic-not-read'),
+    ns = dict(Any=Any, Dict=Dict, Optional=Optional, Tuple=Tuple, re=re, Path=Path, DATA_DIR=Path('synthetic-not-read'),
         dt=SimpleNamespace(datetime=Clock, timezone=timezone), os=SimpleNamespace(getenv=lambda *_: None),
         _mtime_iso=lambda _: None, _run_type_hint=lambda: 'nightly', _normalize_feed=lambda _: None,
         _update_coverage_history=lambda _: {},
@@ -64,12 +65,13 @@ def test_equivalent_timezone_and_failed_connection_evidence_preserved():
 
 def test_connection_loader_labels_actual_selected_artifact():
     path = Path(__file__).parents[1] / 'dashboards/data_io.py'
-    node = next(n for n in ast.parse(path.read_bytes()).body if isinstance(n, ast.FunctionDef) and n.name == 'load_connection_health')
+    nodes = [n for n in ast.parse(path.read_bytes()).body if isinstance(n, ast.FunctionDef) and n.name in {'load_connection_health', '_connection_timestamp'}]
     for primary in (True, False):
-        ns = dict(Any=Any, Dict=Dict, Optional=Optional, Path=Path, DATA_DIR=Path('synthetic'),
+        ns = dict(Any=Any, Dict=Dict, Optional=Optional, Tuple=Tuple, Path=Path,
+            dt=SimpleNamespace(datetime=datetime, timezone=timezone), re=re, DATA_DIR=Path('synthetic'),
             _read_json_safe=lambda p: {'timestamp': '2026-10-27T21:59:30Z', 'trading_ok': True} if (p.name == 'connection_health.json') == primary else {},
             _coerce_bool=lambda v: v if type(v) is bool else None, _coerce_int=lambda _: None,
             _coerce_float=lambda _: None, _normalize_feed=lambda _: None)
-        exec(compile(ast.Module(body=[node], type_ignores=[]), 'actual-connection-loader', 'exec'), ns)
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), 'actual-connection-loader', 'exec'), ns)
         result = ns['load_connection_health']()
         assert result['source'] == ('connection_health.json' if primary else 'connectivity.json')
