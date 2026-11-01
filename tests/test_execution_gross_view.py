@@ -22,6 +22,7 @@ def inputs(identifier=9001, symbol='FICT', qty='2'):
     def fill(key,side,quantity,price,offset):
         order=row['entry_order_id'] if side=='buy' else row['exit_order_id']
         return dict(activity_id=key,activity_type='FILL',order_id=order,symbol=symbol,side=side,
+            provider_transaction_time=(NOW-timedelta(hours=1,minutes=offset)).isoformat(),
             qty=quantity,price=price,transaction_time=(NOW-timedelta(hours=1,minutes=offset)).isoformat(),
             provider_id=key,provider_order_id=order,provider_symbol=symbol,provider_side=side,
             provider_qty=quantity,provider_price=price,provider_activity_type='FILL')
@@ -114,12 +115,15 @@ def test_crc110_canonical_allocation_once_with_real_pinned_row_guard_on_syntheti
     row.update(entry_price='65',exit_price=None,realized_pnl=None,exit_order_id=None)
     owner['exit_order_id']=None
     allocation=A.Allocation('fictional-allocation',110,'ACTIVE',1,Decimal(30),Decimal(30),Decimal('-63.38'),
-        'SYNTHETIC_ONLY',('fictional-fill',),('synthetic-entry-110','fictional-exit-one','fictional-exit-two'),('fictional-fill',))
+        'SYNTHETIC_ONLY',('fictional-fill',),('synthetic-entry-110','fictional-exit-one','fictional-exit-two'),('fictional-entry','fictional-fill'))
     reserved={order:110 for order in allocation.order_ids}
     overlay=A.result_read('VALIDATED',(allocation,),IDENTITY,2,reserved)
     p=D.Policy(*IDENTITY,2,(),'VALIDATED_PERFORMANCE',(allocation,),overlay._metadata_json)
     monkeypatch.setattr(A,'ROW_FINGERPRINT',D.fingerprint(row));monkeypatch.setattr(A,'ROW_VERSION',row['updated_at'])
     monkeypatch.setattr(A,'ENTRY_ORDER',row['entry_order_id'])
+    monkeypatch.setattr(A,'FILLS',(
+        (1,'fictional-entry','buy',row['entry_order_id'],'30','65',row['entry_time']),
+        (2,'fictional-fill','sell','fictional-exit-one','30','62',row['exit_time'])))
     result=project([row],[],[owner],p)
     assert result['coverage']['included']==1 and result['rows'][-1]['totalPL']=='-63.38'
     assert row['realized_pnl'] is None and row['exit_price'] is None
