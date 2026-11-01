@@ -70,9 +70,54 @@ def aware(value):
 
 
 @dataclass(frozen=True)
+class CompletionClock:
+    recorded_exit: datetime
+    started_at: datetime
+    completed_at: datetime
+    raw_clocks_match: bool
+    basis: str
+
+    @property
+    def ledger_delta_microseconds(self):
+        delta = self.completed_at - self.recorded_exit
+        return (delta.days * 86400 + delta.seconds) * 1000000 + delta.microseconds
+
+    @property
+    def holding_microseconds(self):
+        delta = self.completed_at - self.started_at
+        return (delta.days * 86400 + delta.seconds) * 1000000 + delta.microseconds
+
+
+def exact_raw_clock_matches(value, stored):
+    """Compare the primary raw clock without rounding sub-microsecond evidence.
+
+    Absence, fallback fields and unsupported precision never prove a late close.
+    This is internal consistency, not independent broker-origin attestation.
+    """
+    if not isinstance(value, str) or len(value) > 64:
+        return False
+    match = re.fullmatch(r'([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2})'
+                         r'(?:\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})', value)
+    if match is None:
+        return False
+    fraction = match[2] or ''
+    if any(char != '0' for char in fraction[6:]):
+        return False
+    offset = match[3]
+    if offset != 'Z' and (int(offset[1:3]) > 23 or int(offset[4:6]) > 59):
+        return False
+    text = match[1] + ('.' + fraction[:6].ljust(6, '0') if fraction else '') + offset
+    try:
+        return aware(text) == stored
+    except (ValueError, TypeError, OverflowError, D.TradePolicyError):
+        return False
+
+
+@dataclass(frozen=True)
 class Projection:
     gross: object
     unknown: object
+    completion: object
     records_hash: str
     policy_hash: str
     source_hash: str
@@ -80,6 +125,12 @@ class Projection:
     def verify(self, policy, records):
         require(self.records_hash == D.fingerprint({'rows': records})
                 and self.policy_hash == D.fingerprint(policy.metadata()), 'EXECUTION_BINDING_CHANGED')
+        require(set(self.completion) == set(self.gross), 'EXECUTION_CLOCK_POPULATION_CHANGED')
+        for row in records:
+            clock = self.completion.get(row['trade_id'])
+            if clock is not None:
+                require(type(clock) is CompletionClock and clock.recorded_exit == aware(row.get('exit_time')),
+                        'EXECUTION_CLOCK_BINDING_CHANGED')
 
 
 def reconstruct(policy, records, fills, owner_records, *, versions=None):
@@ -134,11 +185,13 @@ def reconstruct(policy, records, fills, owner_records, *, versions=None):
             qty, price = exact(row.get('qty'), positive=True), exact(row.get('price'), positive=True)
             require(quantities and all(qty == exact(value, positive=True) for value in quantities)
                     and price == exact(row.get('provider_price'), positive=True), 'EXECUTION_ALIAS_INVALID')
+            stamp = aware(row.get('transaction_time'))
             by_order[order].append(dict(qty=qty, price=price, side=row['side'],
-                                       symbol=row.get('symbol'), stamp=aware(row.get('transaction_time'))))
+                                       symbol=row.get('symbol'), stamp=stamp,
+                                       raw_clock_matches=exact_raw_clock_matches(row.get('provider_transaction_time'), stamp)))
         except (ValueError, ArithmeticError, D.TradePolicyError, TypeError):
             bad_orders.add(order)  # One unusable fill taints the entire order.
-    gross, unknown = {}, {}
+    gross, unknown, completion = {}, {}, {}
     for row in records:
         identifier = row['trade_id']
         if identifier in policy.excluded_ids:
@@ -147,7 +200,24 @@ def reconstruct(policy, records, fills, owner_records, *, versions=None):
             # The real canonical reader validates current source rows/fills;
             # project() also repeats the full pinned physical-row check.
             D.require_order_owner(policy, identifier, *allocations[identifier].order_ids)
+            # The canonical reader already validates these exact immutable fill
+            # identities, quantities and clocks against current native rows.
+            allocation = allocations[identifier]
+            canonical = [fill for fill in G.A.FILLS if fill[1] in allocation.activity_ids]
+            require({fill[1] for fill in canonical} == set(allocation.activity_ids), 'ALLOCATION_CLOCK_INPUT_MISSING')
+            outgoing = [fill for fill in canonical if fill[2] == 'sell']
+            incoming = [fill for fill in canonical if fill[2] == 'buy']
+            require(incoming and outgoing and all(fill[2] in ('buy', 'sell') for fill in canonical)
+                    and sum((exact(fill[4], positive=True) for fill in outgoing), Decimal(0)) == allocation.exit_quantity
+                    and max(aware(fill[6]) for fill in incoming) <= min(aware(fill[6]) for fill in outgoing),
+                    'ALLOCATION_CLOCK_INPUT_INVALID')
+            completed = max(aware(fill[6]) for fill in outgoing)
+            recorded = aware(row.get('exit_time'))
+            require(aware(row.get('entry_time')) <= recorded and aware(row.get('entry_time')) <= completed,
+                    'ALLOCATION_CLOCK_INPUT_INVALID')
             gross[identifier] = audited[identifier]
+            completion[identifier] = CompletionClock(recorded, min(aware(fill[6]) for fill in incoming),
+                completed, False, 'CANONICAL_VALIDATED_ALLOCATION_FILLS')
             continue
         try:
             entry, exit_ = order_id(row.get('entry_order_id')), order_id(row.get('exit_order_id'))
@@ -168,16 +238,22 @@ def reconstruct(policy, records, fills, owner_records, *, versions=None):
                                        or sum((f['qty'] for f in outgoing), Decimal(0)) != qty):
                     reason = 'QUANTITY_MISMATCH'
                 entered, exited = aware(row.get('entry_time')), aware(row.get('exit_time'))
-                if reason is None and (entered > exited or max(f['stamp'] for f in incoming) > min(f['stamp'] for f in outgoing)
-                                       or max(f['stamp'] for f in outgoing) > exited):
+                completed = max((f['stamp'] for f in outgoing), default=None)
+                clocks_match = all(f['raw_clock_matches'] for f in incoming + outgoing)
+                if reason is None and (entered > exited or entered > completed
+                                       or max(f['stamp'] for f in incoming) > min(f['stamp'] for f in outgoing)):
                     reason = 'EXECUTION_CHRONOLOGY_UNRESOLVED'
+                if reason is None and completed > exited and not clocks_match:
+                    reason = 'LATE_EXECUTION_RAW_CLOCK_UNRESOLVED'
                 if reason is None:
                     gross[identifier] = sum((f['qty'] * f['price'] for f in outgoing), Decimal(0)) - sum((f['qty'] * f['price'] for f in incoming), Decimal(0))
+                    completion[identifier] = CompletionClock(exited, min(f['stamp'] for f in incoming),
+                        completed, clocks_match, 'MATCHED_STORED_EXIT_EXECUTION')
             if reason:
                 unknown[identifier] = reason
         except (ValueError, ArithmeticError, D.TradePolicyError, TypeError):
             unknown[identifier] = 'ORDER_OR_EXECUTION_INPUT_UNAVAILABLE'
-    return Projection(MappingProxyType(gross), MappingProxyType(unknown), D.fingerprint({'rows': records}),
+    return Projection(MappingProxyType(gross), MappingProxyType(unknown), MappingProxyType(completion), D.fingerprint({'rows': records}),
                       D.fingerprint(policy.metadata()), D.fingerprint({'fills': fills, 'owners': owner_records, 'versions': versions}))
 
 
@@ -202,7 +278,7 @@ SCHEMA_SQL="SELECT c.relname,a.attname,t.typname FROM pg_catalog.pg_attribute a 
 LOCK_SQL='LOCK TABLE public.trades, public.alpaca_activities IN ACCESS SHARE MODE'
 TRADES_SQL=guarded("SELECT pg_catalog.jsonb_build_object('row',pg_catalog.to_jsonb(t),'version',t.xmin::text)::text AS body FROM ONLY public.trades t WHERE status='CLOSED' ORDER BY trade_id LIMIT 1001")
 OWNERS_SQL=guarded("SELECT pg_catalog.jsonb_build_object('row',pg_catalog.jsonb_build_object('trade_id',trade_id,'status',status,'entry_order_id',entry_order_id::text,'exit_order_id',exit_order_id::text),'version',xmin::text)::text AS body FROM ONLY public.trades WHERE trade_id=ANY(%s) OR entry_order_id::text=ANY(%s) OR exit_order_id::text=ANY(%s) ORDER BY trade_id LIMIT 1001")
-FILLS_SQL=guarded("SELECT pg_catalog.jsonb_build_object('row',pg_catalog.jsonb_build_object('activity_id',activity_id,'activity_type',activity_type,'order_id',order_id,'symbol',symbol,'side',side,'qty',qty::text,'price',price::text,'transaction_time',transaction_time,'provider_id',raw::jsonb->>'id','provider_activity_id',raw::jsonb->>'activity_id','provider_activity_type',raw::jsonb->>'activity_type','provider_order_id',raw::jsonb->>'order_id','provider_symbol',raw::jsonb->>'symbol','provider_side',raw::jsonb->>'side','provider_qty',raw::jsonb->>'qty','provider_quantity',raw::jsonb->>'quantity','provider_price',raw::jsonb->>'price'),'version',xmin::text)::text AS body FROM ONLY public.alpaca_activities WHERE activity_type='FILL' AND order_id::text=ANY(%s) ORDER BY activity_id LIMIT 4001")
+FILLS_SQL=guarded("SELECT pg_catalog.jsonb_build_object('row',pg_catalog.jsonb_build_object('activity_id',activity_id,'activity_type',activity_type,'order_id',order_id,'symbol',symbol,'side',side,'qty',qty::text,'price',price::text,'transaction_time',transaction_time,'provider_id',raw::jsonb->>'id','provider_activity_id',raw::jsonb->>'activity_id','provider_activity_type',raw::jsonb->>'activity_type','provider_transaction_time',raw::jsonb->>'transaction_time','provider_order_id',raw::jsonb->>'order_id','provider_symbol',raw::jsonb->>'symbol','provider_side',raw::jsonb->>'side','provider_qty',raw::jsonb->>'qty','provider_quantity',raw::jsonb->>'quantity','provider_price',raw::jsonb->>'price'),'version',xmin::text)::text AS body FROM ONLY public.alpaca_activities WHERE activity_type='FILL' AND order_id::text=ANY(%s) ORDER BY activity_id LIMIT 4001")
 READ_PLANS={"SET LOCAL lock_timeout = '500ms'":dict(kind='control',arity=0,order=None),
  "SET LOCAL idle_in_transaction_session_timeout = '8000ms'":dict(kind='control',arity=0,order=None),
  VISIBILITY_SQL:dict(kind='canonical',arity=7,order='q.c0'),

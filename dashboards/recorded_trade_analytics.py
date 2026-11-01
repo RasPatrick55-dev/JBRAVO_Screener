@@ -39,13 +39,14 @@ def project(policy, records, *, identity, now, kind='stats', period='all', mode=
         if type(execution) is not Projection:
             raise ValueError('execution_projection_required')
         execution.verify(policy, records)
-    known, unresolved, excluded, seen = [], [], [], set()
+    known, unresolved, excluded, seen, completed_by_id = [], [], [], set(), {}
     for row in records:
         identifier = D.positive_id(row.get('trade_id'))
         if identifier in seen or row.get('status') != 'CLOSED':
             raise ValueError('recorded_gross_population_invalid')
         seen.add(identifier)
-        exited = _time(row.get('exit_time'))
+        recorded_exit = _time(row.get('exit_time'))
+        exited = recorded_exit
         if identifier in policy.excluded_ids:
             excluded.append(exited)
             continue
@@ -56,11 +57,15 @@ def project(policy, records, *, identity, now, kind='stats', period='all', mode=
         reason = execution.unknown.get(identifier) if execution is not None else None
         if execution is not None and identifier not in execution.gross and reason is None:
             raise ValueError('execution_projection_incomplete')
+        if execution is not None:
+            clock = execution.completion.get(identifier)
+            exited = clock.completed_at if clock is not None else None
         symbol = row.get('symbol')
         if not isinstance(symbol, str) or not re.fullmatch(r'[A-Z0-9][A-Z0-9./^-]{0,31}', symbol):
             reason = 'SYMBOL_UNKNOWN'
         entered = _time(row.get('entry_time'))
-        if entered is None or exited is None or exited < entered or exited > now:
+        if (entered is None or recorded_exit is None or recorded_exit < entered or recorded_exit > now
+                or exited is not None and (exited < entered or exited > now)):
             reason = 'TIME_UNKNOWN_OR_INVALID'
         for field, positive in ([('qty', False)] if execution is not None else [('qty', False), ('entry_price', True), ('exit_price', True)]):
             if field == 'exit_price' and identifier in allocations:
@@ -71,9 +76,12 @@ def project(policy, records, *, identity, now, kind='stats', period='all', mode=
                 reason = field.upper() + '_UNKNOWN_OR_INVALID'
                 break
         if reason:
-            unresolved.append((exited if exited is not None and exited <= now else None, reason))
+            # A row without a validated execution completion has no known range.
+            # Count it as unknown in every execution range, never by ledger time.
+            unresolved.append((None if execution is not None else exited if exited is not None and exited <= now else None, reason))
         else:
             known.append(row)
+            completed_by_id[identifier] = exited
     # This retains full overlay/ownership validation. Missing/invalid allocation
     # inputs cannot be silently removed to make a gross snapshot pass.
     if execution is None:
@@ -82,7 +90,7 @@ def project(policy, records, *, identity, now, kind='stats', period='all', mode=
     else:
         gross_by_id = execution.gross
     def scoped(key):
-        included = [row for row in known if _selected(_time(row['exit_time']), key, now)]
+        included = [row for row in known if _selected(completed_by_id[row['trade_id']], key, now)]
         unknown = [reason for stamp, reason in unresolved if stamp is None or _selected(stamp, key, now)]
         coverage = dict(included=len(included), excluded=sum(_selected(stamp, key, now) for stamp in excluded),
                         unknown=len(unknown), unscoped_unknown=sum(stamp is None for stamp, _ in unresolved),
@@ -124,10 +132,23 @@ def project(policy, records, *, identity, now, kind='stats', period='all', mode=
         result.update(view_scope=SCOPE, pnl_basis=BASIS, performance_status='EXECUTION_GROSS_ONLY',
             qualified_net_status='NOT_ESTABLISHED_BY_EXECUTION_GROSS',
             observation_basis='BOUNDED_CURRENT_POSTGRES_EXECUTIONS_AND_ALL_ORDER_CLAIMS',
-            source_as_of=max((_time(row['exit_time']) for row in known), default=None),
-            source_as_of_basis='LATEST_INCLUDED_EXIT_NOT_PROVIDER_OR_INGESTION_WATERMARK',
+            date_basis='UTC validated exit-execution completion; rolling1/7/30/365days; ALL has no date cutoff',
+            excluded_date_basis='RECORDED_EXIT_POLICY_EXCLUDED_NO_EXECUTION_QUALIFICATION',
+            unknown_date_basis='UNSCOPED_UNTIL_EXECUTION_COMPLETION_VALIDATED',
+            source_as_of=max((completed_by_id[row['trade_id']] for row in known), default=None),
+            source_as_of_basis='LATEST_INCLUDED_EXECUTION_COMPLETION_NOT_PROVIDER_OR_INGESTION_WATERMARK',
             source_freshness='STORED_EXECUTIONS_NOT_BROKER_COMPLETENESS_PROOF',
             execution_fingerprint=execution.source_hash, policy_fingerprint=execution.policy_hash)
+        clocks = [execution.completion[row['trade_id']] for row in known]
+        deltas = [clock.ledger_delta_microseconds for clock in clocks]
+        result['completion_clock'] = dict(basis='VALIDATED_STORED_EXIT_EXECUTION_V1',
+            included=len(clocks), recorded_exit_preserved=True, ledger_writes=0,
+            holding_period_basis='FINAL_EXIT_EXECUTION_MINUS_FIRST_ENTRY_EXECUTION',
+            discrepancy_count=sum(delta != 0 for delta in deltas),
+            completion_after_recorded_count=sum(delta > 0 for delta in deltas),
+            completion_before_recorded_count=sum(delta < 0 for delta in deltas),
+            minimum_delta_microseconds=min(deltas, default=None), maximum_delta_microseconds=max(deltas, default=None),
+            independent_origin_attested=False)
         if result['source_as_of'] is not None:
             result['source_as_of'] = result['source_as_of'].isoformat()
     return result
