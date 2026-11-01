@@ -1,0 +1,309 @@
+{
+  "scope": "SYNTHETIC_BACKEND_PROJECTOR_FIXTURE_NO_REAL_ACCOUNT",
+  "stats": {
+    "ok": true,
+    "status": "partial",
+    "source": "postgres",
+    "view_scope": "EXECUTION_RECONSTRUCTED_GROSS",
+    "pnl_basis": "POSTGRES_MATCHED_EXECUTION_GROSS_V1",
+    "performance_status": "EXECUTION_GROSS_ONLY",
+    "policy_validation_status": "VALIDATED_POLICY",
+    "trade_policy": {
+      "policy": {
+        "deployment_id": "fictional-public-test",
+        "database_id": "00000000-0000-4000-8000-000000000901",
+        "policy_revision": 2,
+        "scope": "VALIDATED_PERFORMANCE",
+        "excluded_count": 1,
+        "exclusions": [
+          {
+            "case_id": "FICTIONAL-9004",
+            "trade_id": 9004,
+            "approval_ref": "SYNTHETIC_NOT_APPROVAL",
+            "classification": "TEST_ONLY",
+            "operational_scopes": [
+              "VALIDATED_PERFORMANCE"
+            ]
+          }
+        ],
+        "recovery_pending_cases": [
+          {
+            "case_id": "FICTIONAL-9004",
+            "trade_id": 9004,
+            "classification": "UNRESOLVED"
+          }
+        ],
+        "allocation_overlay": {
+          "active_count": 0,
+          "allocation_schema_version": 1,
+          "allocations": [],
+          "binding_fingerprint": "f43c5ce0fd99ef0383cfcada69c59adace8084b810ae0453c17bb2b6e92fac18",
+          "database_id": "00000000-0000-4000-8000-000000000901",
+          "deployment_id": "fictional-public-test",
+          "fees_status": "UNKNOWN",
+          "financial_eligible": false,
+          "net_status": "UNKNOWN",
+          "policy_revision": 2,
+          "reservation_cases": [],
+          "reserved_order_owners": {},
+          "status": "VALIDATED"
+        },
+        "recovery_complete": false,
+        "accounting_complete": false,
+        "provenance_proved": false
+      }
+    },
+    "range": "all",
+    "mode": "winners",
+    "rows": [
+      {
+        "key": "d",
+        "label": "DAILY",
+        "winRatePct": 50.0,
+        "totalPL": "4",
+        "topTrade": {
+          "symbol": "FICT",
+          "pl": "4"
+        },
+        "worstLoss": {
+          "symbol": "ZERO",
+          "pl": "0"
+        },
+        "tradesCount": 2,
+        "coverage": {
+          "included": 2,
+          "excluded": 1,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "unscoped_excluded": 0,
+          "reasons": {
+            "ORDER_FILL_MISSING": 1
+          }
+        }
+      },
+      {
+        "key": "w",
+        "label": "WEEKLY",
+        "winRatePct": 50.0,
+        "totalPL": "4",
+        "topTrade": {
+          "symbol": "FICT",
+          "pl": "4"
+        },
+        "worstLoss": {
+          "symbol": "ZERO",
+          "pl": "0"
+        },
+        "tradesCount": 2,
+        "coverage": {
+          "included": 2,
+          "excluded": 1,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "unscoped_excluded": 0,
+          "reasons": {
+            "ORDER_FILL_MISSING": 1
+          }
+        }
+      },
+      {
+        "key": "m",
+        "label": "MONTHLY",
+        "winRatePct": 50.0,
+        "totalPL": "4",
+        "topTrade": {
+          "symbol": "FICT",
+          "pl": "4"
+        },
+        "worstLoss": {
+          "symbol": "ZERO",
+          "pl": "0"
+        },
+        "tradesCount": 2,
+        "coverage": {
+          "included": 2,
+          "excluded": 1,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "unscoped_excluded": 0,
+          "reasons": {
+            "ORDER_FILL_MISSING": 1
+          }
+        }
+      },
+      {
+        "key": "y",
+        "label": "YEARLY",
+        "winRatePct": 50.0,
+        "totalPL": "4",
+        "topTrade": {
+          "symbol": "FICT",
+          "pl": "4"
+        },
+        "worstLoss": {
+          "symbol": "ZERO",
+          "pl": "0"
+        },
+        "tradesCount": 2,
+        "coverage": {
+          "included": 2,
+          "excluded": 1,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "unscoped_excluded": 0,
+          "reasons": {
+            "ORDER_FILL_MISSING": 1
+          }
+        }
+      },
+      {
+        "key": "all",
+        "label": "ALL",
+        "winRatePct": 50.0,
+        "totalPL": "4",
+        "topTrade": {
+          "symbol": "FICT",
+          "pl": "4"
+        },
+        "worstLoss": {
+          "symbol": "ZERO",
+          "pl": "0"
+        },
+        "tradesCount": 2,
+        "coverage": {
+          "included": 2,
+          "excluded": 1,
+          "unknown": 1,
+          "unscoped_unknown": 0,
+          "unscoped_excluded": 0,
+          "reasons": {
+            "ORDER_FILL_MISSING": 1
+          }
+        }
+      }
+    ],
+    "coverage": {
+      "included": 2,
+      "excluded": 1,
+      "unknown": 1,
+      "unscoped_unknown": 0,
+      "unscoped_excluded": 0,
+      "reasons": {
+        "ORDER_FILL_MISSING": 1
+      }
+    },
+    "closed_population_count": 4,
+    "gross_input_complete": false,
+    "input_fingerprint": "64b7febfb05c1d800dea8a4e69b3be683ae37f37cf861833d013d1c4d08f6800",
+    "observation_basis": "BOUNDED_CURRENT_POSTGRES_EXECUTIONS_AND_ALL_ORDER_CLAIMS",
+    "date_basis": "UTC exit instant; rolling1/7/30/365days; ALL has no date cutoff",
+    "observed_at": "2001-02-03T12:00:00+00:00",
+    "fees": null,
+    "net_pnl": null,
+    "fees_status": "UNKNOWN",
+    "net_status": "UNKNOWN",
+    "net_eligible": false,
+    "accounting_complete": false,
+    "recovery_complete": false,
+    "entry_ready": false,
+    "qualified_net_status": "NOT_ESTABLISHED_BY_EXECUTION_GROSS",
+    "source_as_of": "2001-02-03T11:00:00+00:00",
+    "source_as_of_basis": "LATEST_INCLUDED_EXIT_NOT_PROVIDER_OR_INGESTION_WATERMARK",
+    "source_freshness": "STORED_EXECUTIONS_NOT_BROKER_COMPLETENESS_PROOF",
+    "execution_fingerprint": "de15acb6dcc157c0805907efd9192e4db1d8754198b233d49cdbe2a4065c5e61",
+    "policy_fingerprint": "e824b2cfc018fa4aca07b54f27893f73d86995324c493176c87e3252e1166be7"
+  },
+  "winners": {
+    "ok": true,
+    "status": "partial",
+    "source": "postgres",
+    "view_scope": "EXECUTION_RECONSTRUCTED_GROSS",
+    "pnl_basis": "POSTGRES_MATCHED_EXECUTION_GROSS_V1",
+    "performance_status": "EXECUTION_GROSS_ONLY",
+    "policy_validation_status": "VALIDATED_POLICY",
+    "trade_policy": {
+      "policy": {
+        "deployment_id": "fictional-public-test",
+        "database_id": "00000000-0000-4000-8000-000000000901",
+        "policy_revision": 2,
+        "scope": "VALIDATED_PERFORMANCE",
+        "excluded_count": 1,
+        "exclusions": [
+          {
+            "case_id": "FICTIONAL-9004",
+            "trade_id": 9004,
+            "approval_ref": "SYNTHETIC_NOT_APPROVAL",
+            "classification": "TEST_ONLY",
+            "operational_scopes": [
+              "VALIDATED_PERFORMANCE"
+            ]
+          }
+        ],
+        "recovery_pending_cases": [
+          {
+            "case_id": "FICTIONAL-9004",
+            "trade_id": 9004,
+            "classification": "UNRESOLVED"
+          }
+        ],
+        "allocation_overlay": {
+          "active_count": 0,
+          "allocation_schema_version": 1,
+          "allocations": [],
+          "binding_fingerprint": "f43c5ce0fd99ef0383cfcada69c59adace8084b810ae0453c17bb2b6e92fac18",
+          "database_id": "00000000-0000-4000-8000-000000000901",
+          "deployment_id": "fictional-public-test",
+          "fees_status": "UNKNOWN",
+          "financial_eligible": false,
+          "net_status": "UNKNOWN",
+          "policy_revision": 2,
+          "reservation_cases": [],
+          "reserved_order_owners": {},
+          "status": "VALIDATED"
+        },
+        "recovery_complete": false,
+        "accounting_complete": false,
+        "provenance_proved": false
+      }
+    },
+    "range": "all",
+    "mode": "winners",
+    "rows": [
+      {
+        "rank": 1,
+        "symbol": "FICT",
+        "pl": "4"
+      }
+    ],
+    "coverage": {
+      "included": 2,
+      "excluded": 1,
+      "unknown": 1,
+      "unscoped_unknown": 0,
+      "unscoped_excluded": 0,
+      "reasons": {
+        "ORDER_FILL_MISSING": 1
+      }
+    },
+    "closed_population_count": 4,
+    "gross_input_complete": false,
+    "input_fingerprint": "64b7febfb05c1d800dea8a4e69b3be683ae37f37cf861833d013d1c4d08f6800",
+    "observation_basis": "BOUNDED_CURRENT_POSTGRES_EXECUTIONS_AND_ALL_ORDER_CLAIMS",
+    "date_basis": "UTC exit instant; rolling1/7/30/365days; ALL has no date cutoff",
+    "observed_at": "2001-02-03T12:00:00+00:00",
+    "fees": null,
+    "net_pnl": null,
+    "fees_status": "UNKNOWN",
+    "net_status": "UNKNOWN",
+    "net_eligible": false,
+    "accounting_complete": false,
+    "recovery_complete": false,
+    "entry_ready": false,
+    "qualified_net_status": "NOT_ESTABLISHED_BY_EXECUTION_GROSS",
+    "source_as_of": "2001-02-03T11:00:00+00:00",
+    "source_as_of_basis": "LATEST_INCLUDED_EXIT_NOT_PROVIDER_OR_INGESTION_WATERMARK",
+    "source_freshness": "STORED_EXECUTIONS_NOT_BROKER_COMPLETENESS_PROOF",
+    "execution_fingerprint": "de15acb6dcc157c0805907efd9192e4db1d8754198b233d49cdbe2a4065c5e61",
+    "policy_fingerprint": "e824b2cfc018fa4aca07b54f27893f73d86995324c493176c87e3252e1166be7"
+  }
+}

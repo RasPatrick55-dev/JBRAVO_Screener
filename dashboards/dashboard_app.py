@@ -5941,12 +5941,19 @@ def api_trades_history():
     return _json_no_store(source_contracts.physical_history(db.get_db_conn, limit=limit, before=before, derived_identity=derived_identity))
 
 
+def _execution_gross_db_conn():
+    from dashboards.execution_gross_projection import connect_current_db
+    return connect_current_db(db)
+
+
 @server.route("/api/trades/stats")
 def api_trades_stats():
     requested_range = _parse_trades_range(request.args.get("range"), default="all")
-    if request.args.get("basis") == "recorded_gross":
+    if request.args.get("basis") in ("recorded_gross", "execution_gross"):
         from dashboards.recorded_trade_analytics import read_view
-        return _json_no_store(read_view(db.get_db_conn, _dashboard_read_policy_identity(), period=requested_range))
+        factory = _execution_gross_db_conn if request.args["basis"] == "execution_gross" else db.get_db_conn
+        return _json_no_store(read_view(factory, _dashboard_read_policy_identity(), period=requested_range,
+                                       basis=request.args["basis"]))
     trades_frame, source, source_detail = _load_trades_analytics_frame()
     db_ready = _trades_api_db_ready(source, source_detail)
 
@@ -6005,10 +6012,11 @@ def api_trades_leaderboard():
         response.status_code = 400
         return response
 
-    if request.args.get("basis") == "recorded_gross":
+    if request.args.get("basis") in ("recorded_gross", "execution_gross"):
         from dashboards.recorded_trade_analytics import read_view
-        return _json_no_store(read_view(db.get_db_conn, _dashboard_read_policy_identity(),
-            kind="leaderboard", period=range_key, mode=mode, limit=limit))
+        factory = _execution_gross_db_conn if request.args["basis"] == "execution_gross" else db.get_db_conn
+        return _json_no_store(read_view(factory, _dashboard_read_policy_identity(),
+            kind="leaderboard", period=range_key, mode=mode, limit=limit, basis=request.args["basis"]))
 
     trades_frame, source, source_detail = _load_trades_analytics_frame()
     db_ready = _trades_api_db_ready(source, source_detail)

@@ -1,4 +1,5 @@
 import type { LeaderRow, LeaderboardMode, RangeKey } from "./types";
+export type GrossBasis = "recorded_gross" | "execution_gross";
 
 const asRecord = (value: unknown): Record<string, unknown> | null => {
   if (!value || typeof value !== "object") {
@@ -60,7 +61,7 @@ export const buildLeaderboardRequestPath = (
   range: RangeKey,
   mode: LeaderboardMode,
   limit: number,
-  basis?: "recorded_gross"
+  basis?: GrossBasis
 ): string => {
   const query = new URLSearchParams({
     range,

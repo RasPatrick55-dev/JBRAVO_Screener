@@ -7,14 +7,23 @@ import { buildLeaderboardRequestPath } from "../src/components/trades/leaderboar
 import type { SourcePayload, SourceResult } from "../src/components/ui/sourceState";
 import fixture from "./recordedGrossFixture.json";
 
+// Legacy-basis fixtures remain available to the pure legacy adapter tests.
+// The rendered tab now requests the explicit execution basis; this synthetic
+// cohort uses the same amounts, with its separate wire contract declared here.
+const execution=(payload:SourcePayload):SourcePayload=>payload.pnl_basis==="PAPER_GROSS_RECORDED_PRICES_AND_AUDITED_FILLS_V1" ?
+  {...payload,view_scope:"EXECUTION_RECONSTRUCTED_GROSS",pnl_basis:"POSTGRES_MATCHED_EXECUTION_GROSS_V1",performance_status:"EXECUTION_GROSS_ONLY",
+    fees:null,net_pnl:null,accounting_complete:false,entry_ready:false,execution_fingerprint:"a".repeat(64),policy_fingerprint:"b".repeat(64),
+    input_fingerprint:"c".repeat(64),observed_at:"2026-10-27T22:00:00Z",source_as_of:"2026-10-27T21:00:00Z",
+    source_freshness:"STORED_EXECUTIONS_NOT_BROKER_COMPLETENESS_PROOF"}:payload;
+
 function render(stats:SourcePayload,leaders:SourcePayload,leaderResult?:SourceResult) {
   const source=(payload:SourcePayload):SourceResult=>({payload,kind:sources.sourceKind(payload),validity:sources.sourceValidity(payload),freshness:"current",receivedAt:"2026-10-27T22:00:00Z"});
   const requested:string[]=[];
   vi.spyOn(sources,"useSource").mockImplementation(path=>{
     requested.push(path);
     if(path.includes("/history"))return source({ok:true,source:"postgres",rows:[]});
-    if(path.includes("/leaderboard"))return leaderResult ?? source(leaders);
-    if(path.includes("basis=recorded_gross"))return source(stats);
+    if(path.includes("/leaderboard"))return leaderResult ? {...leaderResult,payload:execution(leaders)} : source(execution(leaders));
+    if(path.includes("basis=execution_gross"))return source(execution(stats));
     return source({ok:false,source:"postgres",performance_status:"HELD_UNVALIDATED_PERFORMANCE",policy_validation_status:"VALIDATED_POLICY",rows:[]});
   });
   return {html:renderToStaticMarkup(<TradesTab/>),requested};
@@ -44,7 +53,7 @@ describe("retained gross coverage through freshness transitions",()=>{
         expect(result?.validity).toBe(scenario==="genuine-empty"?"empty":"partial");
         expect(result?.payload).toEqual(payload);
         const {html}=render(fixture.stats,payload,result);
-        expect(html).toContain("Recorded gross leaderboard STALE (stale read)");
+        expect(html).toContain("Execution gross leaderboard STALE (stale read)");
         if(scenario==="genuine-empty") {
           expect(html).toContain("No positive gross results in the selected period.");
           expect(html).not.toContain("unresolved records may change it");
@@ -62,7 +71,7 @@ describe("retained gross coverage through freshness transitions",()=>{
 describe("actual gross wire to original cards",()=>{
   it("populates both red-boxed cards from whole-population gross while qualified net stays held",()=>{
     const {html,requested}=render(fixture.stats,fixture.winners);
-    expect(html).toContain("Recorded gross performance READY");expect(html).toContain("5 included / 1 policy-excluded / 0 unknown");
+    expect(html).toContain("Execution gross performance READY");expect(html).toContain("5 included / 1 policy-excluded / 0 unknown");
     expect(html).toContain("Known Gross P/L");expect(html).toContain("-$51.38");expect(html).toContain("40.00%");
     expect(html).toContain("Best Gross Trade");expect(html).toContain("Worst Gross Trade");expect(html).toContain("TOP GROSS WINNERS");
     expect(html).toContain("+$7.00");expect(html).toContain("+$5.00");
@@ -70,13 +79,13 @@ describe("actual gross wire to original cards",()=>{
     expect(html).toContain("Before fees");expect(html).not.toContain("Audited fill calculations");
     // The physical page is empty in this fixture; neither card sums the page.
     expect(html).toContain("No recorded ledger trades in this page.");
-    expect(requested).toContain("/api/trades/stats?range=all");expect(requested).toContain("/api/trades/stats?range=all&basis=recorded_gross");
-    expect(requested).toContain("/api/trades/leaderboard?range=all&mode=winners&limit=12&basis=recorded_gross");
+    expect(requested).toContain("/api/trades/stats?range=all");expect(requested).toContain("/api/trades/stats?range=all&basis=execution_gross");
+    expect(requested).toContain("/api/trades/leaderboard?range=all&mode=winners&limit=12&basis=execution_gross");
     expect(html).toContain("xl:grid-cols-3");expect(html).toContain("order-3");expect(html).toContain("jbravo-panel-cyan");expect(html).toContain("jbravo-panel-violet");
   });
   it("shows known subtotal and explicit partial coverage instead of full performance",()=>{
     const {html}=render(fixture.partial,fixture.winners);
-    expect(html).toContain("Recorded gross performance PARTIAL");expect(html).toContain("5 included / 1 policy-excluded / 1 unknown");
+    expect(html).toContain("Execution gross performance PARTIAL");expect(html).toContain("5 included / 1 policy-excluded / 1 unknown");
     expect(html).toContain("1 missing/invalid exit price");
     expect(html).toContain("-$51.38");expect(html).toContain("1 unknown");
   });
@@ -98,7 +107,7 @@ describe("actual gross wire to original cards",()=>{
     if(damage==="policy")payload.policy_validation_status="UNAVAILABLE";
     if(damage==="source")payload.source="csv";
     expect(recordedGrossContract(payload)).toBe(false);expect(normalizeRecordedGrossStats(payload)).toEqual([]);
-    const {html}=render(payload,fixture.empty_leaders);expect(html).toContain("Recorded gross inputs unavailable");
+    const {html}=render(payload,fixture.empty_leaders);expect(html).toContain("Execution gross inputs unavailable");
   });
   it("keeps counts strict and malformed amounts unknown",()=>{
     const data=structuredClone(fixture.stats) as unknown as SourcePayload;
@@ -115,6 +124,6 @@ describe("actual gross wire to original cards",()=>{
   it.each(["rows","coverage","closed_population_count"])("fails closed on absent %s",key=>{
     const data=structuredClone(fixture.stats) as unknown as SourcePayload;delete data[key];
     expect(recordedGrossContract(data)).toBe(false);
-    expect(render(data,fixture.empty_leaders).html).toContain("Recorded gross inputs unavailable");
+    expect(render(data,fixture.empty_leaders).html).toContain("Execution gross inputs unavailable");
   });
 });
