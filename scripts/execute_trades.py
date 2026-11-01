@@ -373,11 +373,28 @@ def record_executed_trade(
     timestamp: Any | None = None,
     event_type: str | None = None,
     raw: Mapping[str, Any] | None = None,
-) -> None:
-    """Record a trade execution event in PostgreSQL."""
+    trade_id: int | None = None,
+    expected_policy_revision=None,
+) -> bool | None:
+    """Record observations; canonical sell fills use the guarded atomic writer."""
 
     side_value = (side or "").lower()
     event_label = (event_type or "").upper() or None
+    if side_value == "sell" and (event_label or "").endswith("FILL"):
+        # Do not publish a canonical SELL_FILL event before proving ownership.
+        # Preserve exact quantity/price/time; the atomic writer validates them.
+        try:
+            close_ok = db.close_trade_on_sell_fill(
+                symbol, order_id, timestamp, price, event_label,
+                trade_id=trade_id, qty=qty, status=status, raw=raw,
+                expected_policy_revision=expected_policy_revision,
+            )
+        except Exception as exc:
+            LOGGER.warning("[WARN] DB_TRADE_CLOSE_HELD error_type=%s", type(exc).__name__)
+            return False
+        if not close_ok:
+            LOGGER.warning("[WARN] DB_TRADE_CLOSE_HELD reason=fill_context_unresolved")
+        return close_ok is True
     try:
         qty_value = float(qty)
     except (TypeError, ValueError):
@@ -477,31 +494,6 @@ def record_executed_trade(
         except Exception as exc:  # pragma: no cover - defensive guard
             LOGGER.warning(
                 "[WARN] DB_TRADE_UPSERT_FAILED symbol=%s order_id=%s err=%s",
-                row["symbol"],
-                row["order_id"],
-                exc,
-            )
-    if side_value == "sell" and (event_label or "").upper().endswith("FILL"):
-        try:
-            close_ok = db.close_trade_on_sell_fill(
-                row["symbol"],
-                row["order_id"],
-                event_time_value,
-                price_value,
-                (event_label or "").upper(),
-            )
-            if not close_ok:
-                LOGGER.warning(
-                    "[WARN] DB_TRADE_CLOSE_FAILED symbol=%s order_id=%s",
-                    row["symbol"],
-                    row["order_id"],
-                )
-            else:
-                open_trades = db.count_open_trades()
-                LOGGER.info("OPEN_TRADES count=%s", open_trades)
-        except Exception as exc:  # pragma: no cover - defensive guard
-            LOGGER.warning(
-                "[WARN] DB_TRADE_CLOSE_FAILED symbol=%s order_id=%s err=%s",
                 row["symbol"],
                 row["order_id"],
                 exc,
