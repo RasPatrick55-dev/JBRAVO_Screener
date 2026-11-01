@@ -3899,6 +3899,7 @@ def reconcile_sell_fill(
                     cursor.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
                     policy = trade_policy(conn, expected_revision=expected_policy_revision)
                     disposition.require_writable(policy, trade_id)
+                    disposition.require_order_owner(policy, trade_id, order_id)
                     cursor.execute("SET LOCAL search_path = pg_catalog")
                     # Strongest table modes precede proof/owner reads. NOWAIT
                     # and try-lock refusal avoid mixed-writer waiting cycles.
@@ -3928,8 +3929,14 @@ def reconcile_sell_fill(
                     state = (row[0] or "").upper()
                     if state not in ("OPEN", "CLOSED") or (decorate and state != "CLOSED"):
                         raise ValueError("trade_state_mismatch")
+                    if not _lineage_time(row[10]) <= _lineage_time(normalized_time) <= datetime.now(timezone.utc):
+                        raise ValueError("fill_chronology_conflict")
                     if fill_qty != number(row[1]):
                         raise ValueError("partial_fill_allocation_unsupported")
+                    entry_order_id = _lineage_uuid(row[9])
+                    if entry_order_id == order_id:
+                        raise ValueError("fill_trade_ownership_conflict")
+                    disposition.require_order_owner(policy, trade_id, entry_order_id, order_id)
                     if row[4] != order_id:
                         if state != 'OPEN' or decorate or row[4] not in (None, ''):
                             raise ValueError("fill_allocation_unbound")
@@ -3973,13 +3980,17 @@ def reconcile_sell_fill(
                     # The order lock serializes claims by participating writers.
                     # Persist ownership in trades.exit_order_id in the same
                     # transaction as the event; never reuse another trade's fill.
-                    cursor.execute(
-                        """SELECT trade_id FROM public.trades
-                           WHERE exit_order_id=%(order_id)s OR entry_order_id=%(order_id)s LIMIT 2""",
-                        payload,
-                    )
-                    owners = cursor.fetchall()
-                    if owners and (len(owners) != 1 or owners[0][0] != trade_id):
+                    owners = _lineage_rows(cursor, """SELECT trade_id,
+                        CASE WHEN pg_catalog.octet_length(entry_order_id)<=128 THEN entry_order_id END AS entry_order_id,
+                        CASE WHEN pg_catalog.octet_length(exit_order_id)<=128 THEN exit_order_id END AS exit_order_id,
+                        COALESCE(pg_catalog.octet_length(entry_order_id)>128 OR pg_catalog.octet_length(exit_order_id)>128,false) AS identity_oversize
+                        FROM ONLY public.trades WHERE entry_order_id=ANY(%(binding_ids)s)
+                        OR exit_order_id=ANY(%(binding_ids)s) ORDER BY trade_id LIMIT 2""",
+                        {'binding_ids': [entry_order_id, order_id]}, 1)
+                    if (len(owners) != 1 or owners[0]['trade_id'] != trade_id
+                            or owners[0].get('entry_order_id') != entry_order_id
+                            or owners[0].get('exit_order_id') != row[4]
+                            or owners[0].get('identity_oversize') is True):
                         raise ValueError("fill_trade_ownership_conflict")
                     cursor.execute(
                         """SELECT symbol, qty, status, event_time FROM public.order_events
@@ -3990,8 +4001,8 @@ def reconcile_sell_fill(
                     if len(events) > 1:
                         raise ValueError("duplicate_fill_events")
                     if events:
-                        if not owners:
-                            # Legacy orphan events contain no trade identity.
+                        if row[4] != order_id:
+                            # Legacy orphan events contain no persisted exit owner.
                             # Matching fill fields cannot establish ownership.
                             raise ValueError("fill_trade_ownership_missing")
                         event = events[0]
@@ -4499,89 +4510,28 @@ def close_trade_on_sell_fill(
     exit_time: Any,
     exit_price: Any,
     exit_reason: str | None = None,
+    *,
+    trade_id: int | None = None,
+    qty: Any = None,
+    status: str | None = None,
+    raw: Mapping[str, Any] | None = None,
+    expected_policy_revision=None,
 ) -> bool:
-    conn = _conn_or_none()
-    if conn is None:
-        logger.warning(
-            "[WARN] DB_TRADE_CLOSE_FAILED symbol=%s exit_order_id=%s err=%s",
-            symbol or "",
-            exit_order_id or "",
-            "disabled",
-        )
-        return False
+    """Compatibility entry point; never select a lot by symbol or infer quantity.
 
-    normalized_exit_time = normalize_ts(exit_time, field="exit_time") or datetime.now(timezone.utc)
-    symbol_value = (symbol or "").upper()
-    try:
-        with conn:
-            _policy_write_lock(conn)
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT trade_id, qty, entry_price
-                    FROM trades
-                    WHERE symbol=%(symbol)s AND status='OPEN'
-                    ORDER BY entry_time DESC NULLS LAST, trade_id DESC
-                    LIMIT 1
-                    """,
-                    {"symbol": symbol_value},
-                )
-                row = cursor.fetchone()
-                if row is None:
-                    logger.warning(
-                        "[WARN] DB_TRADE_CLOSE_FAILED symbol=%s exit_order_id=%s err=%s",
-                        symbol_value,
-                        exit_order_id or "",
-                        "no_open_trade",
-                    )
-                    return False
-                trade_id = row[0]
-                qty_value = row[1]
-                entry_price_value = row[2]
-                realized_pnl = None
-                try:
-                    if exit_price is not None and entry_price_value is not None:
-                        realized_pnl = float(exit_price) - float(entry_price_value)
-                        if qty_value is not None:
-                            realized_pnl *= float(qty_value)
-                except Exception:
-                    realized_pnl = None
-                cursor.execute(
-                    """
-                    UPDATE trades
-                    SET exit_order_id=%(exit_order_id)s,
-                        exit_time=%(exit_time)s,
-                        exit_price=%(exit_price)s,
-                        realized_pnl=%(realized_pnl)s,
-                        exit_reason=%(exit_reason)s,
-                        status='CLOSED',
-                        updated_at=now()
-                    WHERE trade_id=%(trade_id)s
-                    """,
-                    {
-                        "exit_order_id": exit_order_id,
-                        "exit_time": normalized_exit_time,
-                        "exit_price": exit_price,
-                        "realized_pnl": realized_pnl,
-                        "exit_reason": exit_reason,
-                        "trade_id": trade_id,
-                    },
-                )
-        _log_write_result(True, "trades", 1)
-        return True
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning(
-            "[WARN] DB_TRADE_CLOSE_FAILED symbol=%s exit_order_id=%s err=%s",
-            symbol_value,
-            exit_order_id or "",
-            exc,
-        )
+    A complete, explicitly correlated exit uses the existing atomic writer.
+    Partial/aggregate fills and unproved replacements remain unresolved. An
+    identical replay is handled by that writer without closing another lot.
+    """
+    if type(trade_id) is not int or trade_id <= 0 or qty is None:
+        logger.warning("[WARN] DB_TRADE_CLOSE_HELD reason=explicit_fill_context_required")
         return False
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    return reconcile_sell_fill(
+        None, trade_id, symbol=symbol, qty=qty, order_id=exit_order_id,
+        status=status, event_time=exit_time, raw=raw, exit_price=exit_price,
+        exit_reason=exit_reason or "SELL_FILL",
+        expected_policy_revision=expected_policy_revision,
+    )
 
 
 def count_open_trades(symbol: str | None = None) -> int:
