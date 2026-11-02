@@ -17,11 +17,21 @@ def _input(bars):
         not bars.index.is_monotonic_increasing or bars.index.normalize().has_duplicates or
         not set(columns) <= set(bars.columns) or len(bars) < 31):
         return None
-    frame = bars.iloc[-141:][columns].apply(pd.to_numeric, errors='coerce')
+    frame = bars.iloc[-141:][columns]
+    dtypes = tuple(frame.dtypes)
+    native_prices = (len(dtypes) == 5 and all(dtype == np.dtype('float64') for dtype in dtypes[:4]) and
+                     dtypes[4] in (np.dtype('float64'), np.dtype('int64'), np.dtype('uint64')))
+    frame = frame.copy() if native_prices else frame.apply(pd.to_numeric, errors='coerce')
     values = frame.to_numpy(dtype=float)
-    if (not np.isfinite(values).all() or (values <= 0).any() or
-        (frame.high < frame[['open', 'close']].max(axis=1)).any() or
-        (frame.low > frame[['open', 'close']].min(axis=1)).any()):
+    if not np.isfinite(values).all() or (values <= 0).any():
+        return None
+    if native_prices:
+        invalid_ohlc = ((values[:, 1] < np.maximum(values[:, 0], values[:, 3])).any() or
+                        (values[:, 2] > np.minimum(values[:, 0], values[:, 3])).any())
+    else:
+        invalid_ohlc = ((frame.high < frame[['open', 'close']].max(axis=1)).any() or
+                        (frame.low > frame[['open', 'close']].min(axis=1)).any())
+    if invalid_ohlc:
         return None
     current = frame.iloc[-1]
     ratio = float(current.volume/frame.volume.iloc[-21:-1].mean())
