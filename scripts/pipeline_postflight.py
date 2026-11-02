@@ -164,6 +164,77 @@ def complete_primary(base_dir, invocation, result):
                   {'id': invocation['id'], 'report_binding': result['report_binding']})
 
 
+PRIMARY_FAILURE_CODES = frozenset((
+    'strategy_scan_not_archived_for_session', 'strategy_scan_source_changed',
+    'strategy_archive_scope_mismatch', 'incomplete_strategy_scan',
+    'strategy_postflight_unified_selection_unavailable',
+    'strategy_primary_invocation_mismatch', 'strategy_primary_source_changed_during_run',
+))
+
+
+def fail_primary(base_dir, invocation, *, phase, reason, error=None, pipeline_rc=None):
+    """Retain a terminal failure without rewriting hash-bound stage reports.
+
+    Exception messages, arguments and traceback locals are never retained. Only
+    explicitly reviewed validation codes can supplement the fixed caller reason.
+    """
+    if (not isinstance(invocation, dict) or
+            re.fullmatch('[0-9a-f]{32}', invocation.get('id', '')) is None or
+            phase not in {'PIPELINE', 'POSTFLIGHT', 'COMPLETION'} or
+            reason not in {'pipeline_unsuccessful', 'pipeline_exception', 'postflight_failed',
+                           'postflight_exception', 'postflight_completion_record_failed'}):
+        raise ValueError('invalid_primary_failure')
+    _utc(invocation['started_at'])
+    directory = Path(base_dir) / 'reports/pipeline_postflight'
+    active = json.loads(_read(directory/'active-primary.json', 4096))
+    if active != invocation:
+        raise ValueError('primary_failure_invocation_mismatch')
+    known_types = (ValueError, TypeError, KeyError, OSError, RuntimeError, ImportError)
+    error_type = next((kind.__name__ for kind in known_types if isinstance(error, kind)),
+                      'Exception' if error is not None else None)
+    code = (str(error) if type(error) is ValueError and str(error) in PRIMARY_FAILURE_CODES
+            else None)
+    record = dict(schema='jbravo.primary-failure.v1', status='failed',
+        run_id=invocation['id'], started_at=invocation['started_at'],
+        finished_at=datetime.now(timezone.utc).isoformat(), phase=phase, reason=reason,
+        error_type=error_type, code=code,
+        pipeline_rc=pipeline_rc if type(pipeline_rc) is int and -255 <= pipeline_rc <= 255 else None,
+        entry_ready=False, operating_acceptance=False, research_qualified=False)
+    name = 'failure-'+invocation['id']+'.json'
+    # Exclusive history survives a lost response and refuses a second attempt.
+    _ordinary(directory/name)
+    raw = (json.dumps(record, sort_keys=True, allow_nan=False)+'\n').encode()
+    with (directory/name).open('xb') as handle:
+        handle.write(raw)
+    if _read(directory/name, MAX_REPORT_BYTES) != raw:
+        raise OSError('primary_failure_readback_failed')
+    _save_control(base_dir, 'failed-primary.json',
+                  dict(id=invocation['id'], report_binding=_binding(raw)))
+    return record
+
+
+def current_primary_failure(base_dir):
+    """Return only the active invocation's fully bound failure; old ones remain history."""
+    directory = Path(base_dir) / 'reports/pipeline_postflight'
+    try:
+        raw = _read(directory/'failed-primary.json', 4096)
+    except FileNotFoundError:
+        return None
+    pointer = json.loads(raw, object_pairs_hook=_strict_object, parse_constant=_invalid_constant)
+    active = json.loads(_read(directory/'active-primary.json', 4096))
+    if pointer['id'] != active['id']:
+        return None
+    if re.fullmatch('[0-9a-f]{32}', pointer['id']) is None:
+        raise ValueError('invalid_primary_failure')
+    raw = _read(directory/('failure-'+pointer['id']+'.json'), MAX_REPORT_BYTES)
+    record = json.loads(raw, object_pairs_hook=_strict_object, parse_constant=_invalid_constant)
+    if (pointer != dict(id=active['id'], report_binding=_binding(raw)) or
+            record.get('schema') != 'jbravo.primary-failure.v1' or record.get('status') != 'failed' or
+            record.get('run_id') != active['id'] or record.get('started_at') != active['started_at']):
+        raise ValueError('primary_failure_binding_mismatch')
+    return record
+
+
 def _utc(value):
     if not isinstance(value, str):
         raise ValueError('invalid_timestamp')
@@ -510,6 +581,11 @@ def check_health(base_dir=ROOT, *, now=None, expected_day=None, max_age_seconds=
     base_dir = Path(base_dir)
     path = base_dir / 'reports' / 'pipeline_postflight' / 'latest.json'
     try:
+        failure = current_primary_failure(base_dir)
+        if failure is not None:
+            return dict(status='failed', failures=['primary_invocation_failed'],
+                        run_id=failure['run_id'], primary_failure=failure,
+                        qualifications=[], research_qualified=False, operating_acceptance=False)
         data = _read(path, MAX_REPORT_BYTES)
         record = json.loads(data.decode('utf-8'), object_pairs_hook=_strict_object, parse_constant=_invalid_constant)
         from scripts import strategy_pipeline

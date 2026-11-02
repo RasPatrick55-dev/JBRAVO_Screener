@@ -47,6 +47,23 @@ def _main(argv=None, *, pipeline_main=None, base_dir=ROOT):
     os.environ.setdefault('JBR_RANKER_PREDICT_TIMEOUT_SECS', '900')
     os.environ.setdefault('JBR_RANKER_EVAL_TIMEOUT_SECS', '900')
     started = datetime.now(timezone.utc)
+    invocation = None
+    phase = 'PIPELINE'
+
+    def failed(reason, *, error=None, rc=None):
+        result = dict(status='failed', reason=reason)
+        if error is not None:
+            # Do not print arbitrary exception classes or messages.
+            result['error_type'] = 'Exception'
+        if invocation is not None:
+            try:
+                result['primary_failure'] = pipeline_postflight.fail_primary(base_dir, invocation,
+                    phase=phase, reason=reason, error=error, pipeline_rc=rc)
+            except Exception:
+                result['failure_receipt_status'] = 'FAILED_TO_RECORD'
+        print(json.dumps(result, sort_keys=True, allow_nan=False), flush=True)
+        return 1
+
     try:
         invocation = pipeline_postflight.begin_primary(base_dir, started)
         if provisional is not None:
@@ -60,28 +77,33 @@ def _main(argv=None, *, pipeline_main=None, base_dir=ROOT):
         except SystemExit as completion:
             rc = completion.code
         if type(rc) is not int or rc != 0:
-            print(json.dumps({'status': 'failed', 'reason': 'pipeline_unsuccessful'}), flush=True)
-            return 1
+            return failed('pipeline_unsuccessful', rc=rc)
     except Exception as failure:
-        print(json.dumps({'status': 'failed', 'reason': 'pipeline_exception',
-                          'error_type': type(failure).__name__}), flush=True)
-        return 1
-    from scripts import strategy_pipeline
-    strategy_route = strategy_pipeline.enabled(base_dir)
-    result = pipeline_postflight.check_health(base_dir, not_before=started,
-        require_session=provisional is None, require_paper_gross=not strategy_route,
-        allow_provisional=provisional is not None)
-    if provisional is not None:
-        passed = result['status'] == 'ok' and result.get('functional_pass') is True
-        result.update(status='provisional_functional_pass' if passed else 'provisional_functional_failed',
-                      qualified_daily=False, entry_ready=False, operating_acceptance=False)
-        print(json.dumps(result, sort_keys=True, allow_nan=False), flush=True)
-        return 0 if passed else 1
-    if result['status'] == 'ok':
+        return failed('pipeline_exception', error=failure)
+    phase = 'POSTFLIGHT'
+    try:
+        from scripts import strategy_pipeline
+        strategy_route = strategy_pipeline.enabled(base_dir)
+        result = pipeline_postflight.check_health(base_dir, not_before=started,
+            require_session=provisional is None, require_paper_gross=not strategy_route,
+            allow_provisional=provisional is not None)
+        if provisional is not None:
+            passed = result['status'] == 'ok' and result.get('functional_pass') is True
+            if not passed:
+                return failed('postflight_failed')
+            result.update(status='provisional_functional_pass',
+                          qualified_daily=False, entry_ready=False, operating_acceptance=False)
+            print(json.dumps(result, sort_keys=True, allow_nan=False), flush=True)
+            return 0
+        if result['status'] != 'ok':
+            return failed('postflight_failed')
+        phase = 'COMPLETION'
         try:
             pipeline_postflight.complete_primary(base_dir, invocation, result)
         except (OSError, ValueError):
-            result = {'status': 'failed', 'failures': ['postflight_completion_record_failed']}
+            return failed('postflight_completion_record_failed')
+    except Exception as failure:
+        return failed('postflight_exception', error=failure)
     print(json.dumps(result, sort_keys=True, allow_nan=False), flush=True)
     return 0 if result['status'] == 'ok' else 1
 
