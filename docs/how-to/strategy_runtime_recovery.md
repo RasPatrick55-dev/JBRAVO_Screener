@@ -65,6 +65,19 @@ report hash before reporting success. Only then can the normal wrapper create
 PostgreSQL selection, complete strategy population, ranking and source bindings;
 a control receipt alone cannot authorize a purchase.
 
+If the primary fails before it can publish a stage report, its wrapper writes
+`reports/pipeline_postflight/failure-<invocation-id>.json` and a hash-bound
+`failed-primary.json` pointer. Pipeline, postflight and completion failures all
+return nonzero. The read-only checker reports a bound failure for the active
+invocation before inspecting an older success. Prior failure history remains
+available after a new invocation starts, but does not block that new invocation.
+The receipts retain the phase, return code when known, an exception category
+and a small allowlist of validation codes; they omit exception messages and
+credentials. Existing stage reports and their PostgreSQL bindings stay byte
+identical. If recording itself fails, the wrapper still returns nonzero and
+prints `failure_receipt_status=FAILED_TO_RECORD`; process termination can also
+leave only a start marker, which must never be read as completion.
+
 An entry exception replaces any stale strategy receipt with a fresh blocked one.
 Before broker construction it reports zero orders and `NOT_CONTACTED`. After
 broker contact it reports unknown counts and `NOT_ESTABLISHED`, requiring
