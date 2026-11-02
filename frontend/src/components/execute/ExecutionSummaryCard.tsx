@@ -27,12 +27,16 @@ const summaryTileSurface = [
   "jbravo-panel-inner-cyan outline-sky-400/35",
 ];
 
-export default function ExecutionSummaryCard({ summary, isLoading, hasError }: Props) {
-  const ready = !isLoading && summary !== null;
+export const validatedExecutionPL = (summary: ExecuteSummaryResponse | null): number | null =>
+  summary?.ok === true && summary.performance_status === "VALIDATED_PERFORMANCE" && summary.result_pl_source === "postgres_validated_performance"
+    ? parseNumber(summary.result_pl_usd) : null;
 
-  const resultValue = parseNumber(summary?.result_pl_usd) ?? 0;
+export default function ExecutionSummaryCard({ summary, isLoading, hasError }: Props) {
+  const ready = !isLoading && !hasError && summary?.ok === true;
+
+  const resultValue = ready ? validatedExecutionPL(summary) : null;
   const resultTone =
-    resultValue > 0 ? "text-emerald-300" : resultValue < 0 ? "text-rose-300" : "text-slate-200";
+    resultValue !== null && resultValue > 0 ? "text-emerald-300" : resultValue !== null && resultValue < 0 ? "text-rose-300" : "text-slate-200";
 
   const tiles = useMemo(
     () => [
@@ -81,13 +85,14 @@ export default function ExecutionSummaryCard({ summary, isLoading, hasError }: P
       {
         key: "result",
         label: "Result",
-        value: formatSignedCurrency(summary?.result_pl_usd),
-        subValue: "USD",
+        value: formatSignedCurrency(resultValue),
+        subValue: resultValue === null ? "Held / unknown; validated performance required" : "USD - validated eligible trades",
         tone: resultTone,
       },
     ],
     [
       resultTone,
+      resultValue,
       summary?.candidates,
       summary?.filled,
       summary?.in_window,
@@ -116,7 +121,7 @@ export default function ExecutionSummaryCard({ summary, isLoading, hasError }: P
           </span>
           <span
             className={`${basePillClass} ${
-              !isLoading && !hasError
+              !isLoading && !hasError && summary?.ok === true
                 ? "bg-emerald-500/20 text-emerald-300 outline-emerald-400/55"
                 : "bg-slate-500/10 text-slate-400 outline-slate-500/45"
             }`}

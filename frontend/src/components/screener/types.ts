@@ -20,6 +20,8 @@ export interface ScreenerPickRow {
 }
 
 export interface ScreenerPicksResponse {
+  run_date?: string | null;
+  completion_status?: string | null;
   ok?: boolean;
   run_ts_utc?: string | null;
   status?: string | null;
@@ -59,6 +61,7 @@ export interface MetricsRow {
   strategy_version: string;
   definition_sha256: string;
   backtest_result_id: string;
+  metrics_result_id?: string;
   trades: number | null;
   wins: number | null;
   losses: number | null;
@@ -81,6 +84,8 @@ export interface MetricsResponse {
   backtest_result_id?: string;
   metrics_result_id?: string;
   metrics_status?: string;
+  metric_basis?: string;
+  strategy_priority?: boolean;
   rows?: MetricsRow[];
 }
 

@@ -1,0 +1,244 @@
+{
+  "schema": "jbravo.department-operations-review.v1",
+  "recorded_at": "2026-10-27T20:54:07.943Z",
+  "purpose": "DATED_REVIEW_EVIDENCE_NOT_EXECUTION_INPUT_OR_AUTHORITY",
+  "strategy_id": "trend_pullback_reclaim_qualifying_close_v2",
+  "strategy_version": "2",
+  "trading_mode": "PAPER_ONLY",
+  "review": {
+    "department_reports_delivered": 6,
+    "source_reconciliations_completed": 6,
+    "persisted_jobs_completed": 6,
+    "departments": [
+      {
+        "department_id": "jbravo_research",
+        "job_id": "job_jbravo_operational_review_2026_10_27_jbravo_rese_mvr5auyi",
+        "department_run_id": "dept_run_jbravo_research_job_jbravo_operational_review_2026_10_27_jbravo_rese_mvr5auyi_mvr5av0d",
+        "job_status": "completed",
+        "initial_report_status": "needs_approval",
+        "initial_worker_count": 6,
+        "source_reconciliation_status": "completed",
+        "initial_report_sha256": "23a078cf4cb549191229038211b000b7b472b482aef50c1e0c2493f1b5095350",
+        "source_reconciliation_sha256": "96297bf64c6c7648bc92662e62a559545b0dbde0fb5486ce99da5d774c4f18ab"
+      },
+      {
+        "department_id": "jbravo_data_provenance",
+        "job_id": "job_jbravo_operational_review_2026_10_27_jbravo_data_mvr5fogw",
+        "department_run_id": "dept_run_jbravo_data_provenance_job_jbravo_operational_review_2026_10_27_jbravo_data_mvr5fogw_mvr5foiu",
+        "job_status": "completed",
+        "initial_report_status": "needs_approval",
+        "initial_worker_count": 4,
+        "source_reconciliation_status": "completed",
+        "initial_report_sha256": "3a32c79eb26bf260274bb4c67b0ef7886147a940f10193c9ba550fdc44dc7ce6",
+        "source_reconciliation_sha256": "5563fdf3549b5294c020e170eef91c7e1420dd2d2de9533c27b3622c23e55159"
+      },
+      {
+        "department_id": "jbravo_backtest",
+        "job_id": "job_jbravo_operational_review_2026_10_27_jbravo_back_mvr5hvkt",
+        "department_run_id": "dept_run_jbravo_backtest_job_jbravo_operational_review_2026_10_27_jbravo_back_mvr5hvkt_mvr5hvmg",
+        "job_status": "completed",
+        "initial_report_status": "needs_approval",
+        "initial_worker_count": 5,
+        "source_reconciliation_status": "completed",
+        "initial_report_sha256": "1ec844b28c57e1e351a1d2c2a7ffb8434e0afd5a4404c7f8389f8c2777d22bf1",
+        "source_reconciliation_sha256": "9fdfaa9dcc8dcccdf3f67e632342a2aff6dd8dbcb77523120e96c4065d6bc050"
+      },
+      {
+        "department_id": "jbravo_strategy",
+        "job_id": "job_jbravo_operational_review_2026_10_27_jbravo_stra_mvr5kj60",
+        "department_run_id": "dept_run_jbravo_strategy_job_jbravo_operational_review_2026_10_27_jbravo_stra_mvr5kj60_mvr5kj7v",
+        "job_status": "completed",
+        "initial_report_status": "needs_approval",
+        "initial_worker_count": 5,
+        "source_reconciliation_status": "completed",
+        "initial_report_sha256": "2fc6581aca4c8760f04386c2bfd4d53a760c1649a9c0858fd53ba1b95ba9bfb0",
+        "source_reconciliation_sha256": "0b985ec62ab89b519a5dae44fe3476b337ae315b73e3bf5df3826f327de160d7"
+      },
+      {
+        "department_id": "jbravo_monitoring",
+        "job_id": "job_jbravo_operational_review_2026_10_27_jbravo_moni_mvr5n2ks",
+        "department_run_id": "dept_run_jbravo_monitoring_job_jbravo_operational_review_2026_10_27_jbravo_moni_mvr5n2ks_mvr5n2mg",
+        "job_status": "completed",
+        "initial_report_status": "needs_approval",
+        "initial_worker_count": 5,
+        "source_reconciliation_status": "completed",
+        "initial_report_sha256": "ea24ac1d26004aa61ce986298ca782d4aa85db039ab87da69d710b76eec2108c",
+        "source_reconciliation_sha256": "464d3e0341252c69fb089c6216933aa2e365c1022d15bbcb3a8ffdef3db2a9d1"
+      },
+      {
+        "department_id": "jbravo_compliance_governance",
+        "job_id": "job_jbravo_operational_review_2026_10_27_jbravo_comp_mvr5pv00",
+        "department_run_id": "dept_run_jbravo_compliance_governance_job_jbravo_operational_review_2026_10_27_jbravo_comp_mvr5pv00_mvr5pv1t",
+        "job_status": "completed",
+        "initial_report_status": "needs_approval",
+        "initial_worker_count": 4,
+        "source_reconciliation_status": "completed",
+        "initial_report_sha256": "ae1bd86ee87aaf6cbb5de4aa579328ffedf4509911e892a752134fddbf6bc4aa",
+        "source_reconciliation_sha256": "f461af2ec43adef05c168c183dd84e1bf0c3813fd8927a718f30138555425bfc"
+      }
+    ],
+    "scope_correction": "Original analyst drafts conflated research qualification HOLD, already authorized experimental paper testing, existing read-only observation and browser-session provisioning. Source-reconciliation reviews correct that interpretation while preserving original drafts. No new trade, promotion or provider authority is granted."
+  },
+  "recurring_review": {
+    "id": "review-jbravo-department-operations",
+    "status": "ACTIVE",
+    "weekdays": [
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday"
+    ],
+    "local_time": "09:15",
+    "timezone": "America/Chicago",
+    "execution_host": "Local Codex host; availability required",
+    "scope": "Evidence review and existing local department job/report/audit persistence only"
+  },
+  "existing_first_candidate_followup": {
+    "id": "verify-first-pullback-reclaim-production-candidate",
+    "status": "ACTIVE",
+    "signal_session": "2026-10-27",
+    "entry_session": "2026-10-28",
+    "new_or_duplicate_observer_created": false
+  },
+  "native_readiness": {
+    "receipt_sha256": "f0099ac4ddbdccd3776d744d6371e505db9d25d98aaedcc923ac214f08c718f7",
+    "http_gets": 6,
+    "remote_mutations": 0,
+    "tasks": [
+      {
+        "id": 1322138,
+        "enabled": true,
+        "command_sha256": "fd9c3bfa3a1326ff6a4546317eb4136723fadee22cc0c75556c2a500f49db6d6",
+        "description_sha256": "11de0d3b7581d9b170053cb05bd57af64cec8a9c14ede71c6f35aaaa4205e5c2",
+        "interval": "daily",
+        "hour": 3,
+        "minute": 45
+      },
+      {
+        "id": 1326478,
+        "enabled": true,
+        "command_sha256": "2e69745c9c3fe52e943c83826c0f88da29fb10ff65c0819ef58cffb8ed7b8183",
+        "description_sha256": "19287c402ebd341eed3748e94c10c2d64a977d83c376414d88db6809fa562047",
+        "interval": "daily",
+        "hour": 7,
+        "minute": 55
+      },
+      {
+        "id": 1558334,
+        "enabled": true,
+        "command_sha256": "ea229c20300418f43dc3d60ce80c8b6b4313bc47f2eeefbd5648c811b0541cda",
+        "description_sha256": "c3455981e5881abe2068f52dbb3d67fb3427e74c89391a26b88a5220a9a99224",
+        "interval": "daily",
+        "hour": 1,
+        "minute": 20
+      }
+    ],
+    "monitor": [
+      {
+        "id": 228489,
+        "enabled": true,
+        "command_sha256": "8451bfce8c7a06baabb3ba9a94b62470418a4d1e47cf29865edaf12d6b5f1af3",
+        "description_sha256": "222490533000c82cd04d5341080ff1702b106f798273f6d0b2ea0a24b152ff21"
+      }
+    ],
+    "producer_command_matches_reviewed": true,
+    "daily_worker_matches_reviewed": true
+  },
+  "native_report_observations": {
+    "scope": "Three read-only native report GETs; observed values only, not independent broker queries or a new candidate/fill.",
+    "observations": [
+      {
+        "report": "monitor",
+        "observed": {
+          "finished_at": "2026-10-27T20:36:37.871055+00:00",
+          "status": "ok",
+          "paper_only": true,
+          "entry_ready": false,
+          "owned_symbols": [],
+          "native_covered": 0,
+          "events": [],
+          "native_stops_trigger_only_regular_hours": true,
+          "scan_config_binding": {
+            "bytes": 740,
+            "sha256": "c2ec3fe5e842dad6a9cdc4207af7e8f5494264c5465725b847a7be384acd32d9"
+          }
+        }
+      },
+      {
+        "report": "paper_entry",
+        "observed": {
+          "finished_at": "2026-10-27T07:55:15.650547+00:00",
+          "paper_only": true,
+          "candidate_count": 0,
+          "orders_submitted": 0,
+          "orders_filled": 0,
+          "exit_reason": "NO_STRATEGY_BUY_SIGNALS",
+          "broker_operations": 0,
+          "handoff_id": "33c88bb803ebe9bf8d55149ebdf390632d25a31e122b9fe3fa8884df6a5227c0"
+        }
+      },
+      {
+        "report": "primary_postflight",
+        "observed": {
+          "finished_at": "2026-10-27T03:45:14.833813+00:00",
+          "run_id": "e07f5bb710eb412890ce706470083d97",
+          "pipeline_rc": 0,
+          "entry_ready": false,
+          "session": {
+            "execution_model": "NEXT_SUPPLIED_REGULAR_SESSION_OPEN",
+            "next_open_at": "2026-10-27T13:30:00+00:00",
+            "next_session": "2026-10-27",
+            "signal_available_at": "2026-10-26T20:15:00-04:00",
+            "signal_session": "2026-10-26"
+          },
+          "stages": {
+            "backtest": "SKIPPED_NO_CANDIDATES",
+            "handoff": "COMMITTED_AND_SEPARATE_READONLY_VERIFIED",
+            "labels": "NOT_USED_BY_STRATEGY",
+            "metrics": "SKIPPED_NO_CANDIDATES",
+            "ranker_eval": "NOT_USED_BY_STRATEGY",
+            "screener": "COMPLETED"
+          },
+          "research_qualified": false
+        }
+      }
+    ],
+    "recorded_at": "2026-10-27T20:37:17.400Z"
+  },
+  "observed_paper_fill": false,
+  "research_qualification_granted": false,
+  "operating_acceptance_granted": false,
+  "browser_voice_interface": {
+    "authenticated_request_verified": false,
+    "blocker": "Trusted Owner-session issuer/public verification key is not configured on this host; Owner setup choice pending."
+  },
+  "validation": {
+    "local_runner_negative_checks_passed": 6,
+    "checks": [
+      "missing inputs",
+      "invalid session date",
+      "mutating readiness",
+      "missing host task",
+      "stale observation",
+      "exclusive session lock"
+    ],
+    "persisted_job_report_readback": "PASS",
+    "source_reconciliation_statuses": "6 completed"
+  },
+  "pending_proof": [
+    "Fresh qualifying production signal and committed candidate readback.",
+    "Observed paper order and filled quantity for that exact signal.",
+    "Observed strategy-owned protection, cancellation/exit and restart behavior.",
+    "Independent research qualification and premarket fill-model validation.",
+    "Trusted Owner-session provisioning and authenticated browser/voice path."
+  ],
+  "boundaries": {
+    "host_source_changed": false,
+    "host_schedule_changed": false,
+    "database_query_performed": false,
+    "paper_order_submitted_by_this_review": false,
+    "credentials_exposed": false,
+    "trust_metrics_seeded": false
+  }
+}

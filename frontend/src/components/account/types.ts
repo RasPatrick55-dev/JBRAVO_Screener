@@ -1,24 +1,24 @@
 export type AccountRangeKey = "d" | "w" | "m" | "y" | "all";
 
 export interface AccountSummary {
-  equity: number;
-  cash: number;
-  buyingPower: number;
-  openPositionsValue: number;
+  equity: number | null;
+  cash: number | null;
+  buyingPower: number | null;
+  openPositionsValue: number | null;
   cashToPositionsRatio: number | null;
   takenAtUtc: string;
 }
 
 export interface AccountPerformanceRow {
   period: string;
-  netChangePct: number;
-  netChangeUsd: number;
+  netChangePct: number | null;
+  netChangeUsd: number | null;
 }
 
 export interface AccountTotal {
-  equity: number;
-  netChangePct: number;
-  netChangeUsd: number;
+  equity: number | null;
+  netChangePct: number | null;
+  netChangeUsd: number | null;
   equityBasis?: "live" | "last_close";
   asOfUtc?: string;
   performanceBasis?: "live_vs_close_baselines" | "close_to_close";
@@ -33,7 +33,7 @@ export interface OpenOrderRow {
   symbol: string;
   type: string;
   side: string;
-  qty: number;
+  qty: number | null;
   priceOrStop: number | null;
   submittedAt: string;
 }

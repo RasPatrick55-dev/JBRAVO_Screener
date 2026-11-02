@@ -2,9 +2,18 @@ import type { CSSProperties } from "react";
 
 export interface MarketClockGroupProps {
   serverUtc: string;
+  market?: MarketClockRecord | null;
 }
 
-type MarketPhase = "Pre-Market" | "Market Open" | "After-Hours" | "Closed";
+export type MarketClockRecord = { status?: string; is_open?: boolean | null; observed_at?: string | null; source?: string };
+type MarketPhase = "Market Open" | "Closed" | "Unknown" | "Stale";
+export function marketPhase(market: MarketClockRecord | null | undefined, now = Date.now()): MarketPhase {
+  if (!market || market.status === "unavailable") return "Unknown";
+  const observed = Date.parse(market.observed_at ?? "");
+  if (market.status === "stale" || (Number.isFinite(observed) && now - observed > 60000)) return "Stale";
+  if (market.status !== "ready" || !Number.isFinite(observed) || observed - now > 5000 || typeof market.is_open !== "boolean") return "Unknown";
+  return market.is_open ? "Market Open" : "Closed";
+}
 
 const PLACEHOLDER_TIME = "--:--:--";
 const PLACEHOLDER_DATE = "--- --, ----";
@@ -76,47 +85,10 @@ const NY_DATE_FORMATTER_MOBILE = new Intl.DateTimeFormat("en-US", {
 });
 
 const PHASE_STYLES: Record<MarketPhase, { status: string; glow: string }> = {
-  "Pre-Market": {
-    status: "text-[#7DD3FC]",
-    glow: "rgba(125, 211, 252, 0.65)",
-  },
-  "Market Open": {
-    status: "text-[#34D399]",
-    glow: "rgba(52, 211, 153, 0.65)",
-  },
-  "After-Hours": {
-    status: "text-[#C084FC]",
-    glow: "rgba(192, 132, 252, 0.6)",
-  },
-  Closed: {
-    status: "text-[#B8C0CC]",
-    glow: "rgba(184, 192, 204, 0.45)",
-  },
-};
-
-const getNyTimeParts = (date: Date) => {
-  const parts = NY_PARTS_FORMATTER.formatToParts(date);
-  const readPart = (type: string) =>
-    Number(parts.find((part) => part.type === type)?.value ?? "0");
-  return {
-    hour: readPart("hour"),
-    minute: readPart("minute"),
-    second: readPart("second"),
-  };
-};
-
-const getMarketPhase = (hour: number, minute: number, second: number): MarketPhase => {
-  const minutes = hour * 60 + minute + second / 60;
-  if (minutes >= 4 * 60 && minutes < 9 * 60 + 30) {
-    return "Pre-Market";
-  }
-  if (minutes >= 9 * 60 + 30 && minutes < 16 * 60) {
-    return "Market Open";
-  }
-  if (minutes >= 16 * 60 && minutes < 20 * 60) {
-    return "After-Hours";
-  }
-  return "Closed";
+  "Market Open": { status: "text-[#34D399]", glow: "rgba(52,211,153,0.65)" },
+  Closed: { status: "text-[#B8C0CC]", glow: "rgba(184,192,204,0.45)" },
+  Unknown: { status: "text-amber-300", glow: "rgba(245,158,11,0.4)" },
+  Stale: { status: "text-amber-300", glow: "rgba(245,158,11,0.4)" },
 };
 
 const Divider = () => (
@@ -177,7 +149,7 @@ const ClockChip = ({ label, value, accentClass, labelClass, timeClass }: ClockCh
   </div>
 );
 
-export default function MarketClockGroup({ serverUtc }: MarketClockGroupProps) {
+export default function MarketClockGroup({ serverUtc, market }: MarketClockGroupProps) {
   const timestamp = new Date(serverUtc);
   const isValid = !Number.isNaN(timestamp.getTime());
 
@@ -190,10 +162,7 @@ export default function MarketClockGroup({ serverUtc }: MarketClockGroupProps) {
     ? TIME_FORMATTERS_MOBILE.chicago.format(timestamp)
     : PLACEHOLDER_TIME;
 
-  const nyParts = isValid ? getNyTimeParts(timestamp) : { hour: 0, minute: 0, second: 0 };
-  const phase = isValid
-    ? getMarketPhase(nyParts.hour, nyParts.minute, nyParts.second)
-    : "Closed";
+  const phase = marketPhase(market);
   const dateLabel = isValid
     ? NY_DATE_FORMATTER.format(timestamp).toUpperCase()
     : PLACEHOLDER_DATE;
@@ -213,14 +182,14 @@ export default function MarketClockGroup({ serverUtc }: MarketClockGroupProps) {
       timeClass: "text-[#CEFAFE]",
     },
     {
-      label: "EST",
+      label: "ET",
       value: nyTime,
       accentClass: "border-l-[#3B4454]",
       labelClass: "text-[#9AA4B2]",
       timeClass: "text-[#F8FAFC]",
     },
     {
-      label: "CST",
+      label: "CT",
       value: chicagoTime,
       accentClass: "border-l-[#FF7A00]",
       labelClass: "text-[#FF9B45]",
@@ -229,7 +198,7 @@ export default function MarketClockGroup({ serverUtc }: MarketClockGroupProps) {
   ];
 
   return (
-    <div className="flex items-center">
+    <div className="flex items-center" title={`Market source: ${market?.source ?? "unknown"}; observed UTC: ${market?.observed_at ?? "unknown"}`}>
       <div className="hidden items-stretch overflow-hidden rounded-[12px] border border-[#2B3447] bg-[linear-gradient(135deg,#0B1220_0%,#111827_100%)] shadow-[0_0_0_1px_rgba(36,44,58,0.6)] sm:flex">
         <div className="flex min-w-[140px] flex-col justify-center gap-[2px] px-[12px]">
           <span className="font-cousine text-[9px] font-bold uppercase tracking-[0.3em] text-[#9AA4B2] whitespace-nowrap leading-[12px]">
@@ -278,8 +247,8 @@ export default function MarketClockGroup({ serverUtc }: MarketClockGroupProps) {
         <div className="grid grid-cols-3 gap-2">
           {[
             { label: "UTC", value: utcTimeMobile, accent: "border-[#00C6E8]", tone: "text-[#00D3F2]" },
-            { label: "EST", value: nyTimeMobile, accent: "border-[#3B4454]", tone: "text-[#9AA4B2]" },
-            { label: "CST", value: chicagoTimeMobile, accent: "border-[#FF7A00]", tone: "text-[#FF9B45]" },
+            { label: "ET", value: nyTimeMobile, accent: "border-[#3B4454]", tone: "text-[#9AA4B2]" },
+            { label: "CT", value: chicagoTimeMobile, accent: "border-[#FF7A00]", tone: "text-[#FF9B45]" },
           ].map((clock) => (
             <div
               key={clock.label}

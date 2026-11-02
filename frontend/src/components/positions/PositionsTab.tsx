@@ -8,6 +8,8 @@ export interface PositionsTabProps {
   logs: MonitoringLogItem[];
   isLoading?: boolean;
   hasError?: boolean;
+  available?: boolean;
+  logsAvailable?: boolean;
 }
 
 const columnLabels = [
@@ -50,6 +52,8 @@ export default function PositionsTab({
   logs,
   isLoading = false,
   hasError = false,
+  available = true,
+  logsAvailable = true,
 }: PositionsTabProps) {
   return (
     <section className="space-y-6" aria-label="Positions tab">
@@ -62,7 +66,7 @@ export default function PositionsTab({
 
       {hasError ? (
         <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-300/40 dark:bg-amber-500/10 dark:text-amber-200">
-          Position data could not be fully loaded. Displaying available data.
+          Broker position data unavailable. Position count and exposure are unknown.
         </div>
       ) : null}
 
@@ -87,7 +91,7 @@ export default function PositionsTab({
                 <PositionRowMobile key={`${position.symbol}-${index}`} {...position} />
               ))
             ) : (
-              <div className="px-4 py-8 text-sm text-secondary">No open positions available.</div>
+              <div className="px-4 py-8 text-sm text-secondary">{available ? "No open broker positions." : "Broker positions unknown."}</div>
             )}
           </div>
 
@@ -125,14 +129,14 @@ export default function PositionsTab({
               ) : (
                 <tr>
                   <td colSpan={columnLabels.length} className="px-4 py-8 text-sm text-secondary">
-                    No open positions available.
+                    {available ? "No open broker positions." : "Broker positions unknown."}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
           <div className="sr-only" aria-live="polite">
-            {isLoading ? "Loading positions" : `${positions.length} open positions loaded`}
+            {isLoading ? "Loading positions" : available ? `${positions.length} open broker positions loaded` : "Position count unknown"}
           </div>
         </div>
       </section>
@@ -140,12 +144,12 @@ export default function PositionsTab({
       <section className="overflow-visible rounded-xl">
         <div className="overflow-x-auto">
           <div className="min-w-full">
-            <PositionSummary {...summary} />
+            {available ? <PositionSummary {...summary} /> : null}
           </div>
         </div>
       </section>
 
-      <MonitoringLogsPanel logs={logs} />
+      {logsAvailable ? <MonitoringLogsPanel logs={logs} /> : <p>Monitoring logs unavailable; broker positions are reported separately.</p>}
     </section>
   );
 }

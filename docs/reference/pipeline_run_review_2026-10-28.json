@@ -1,0 +1,225 @@
+{
+  "schema": "jbravo.department-run-review.v1",
+  "purpose": "DATED_READ_ONLY_REVIEW_NOT_EXECUTION_INPUT",
+  "department": "Swing Research Department",
+  "permanent_record": "GITHUB_REPOSITORY",
+  "status": "PARTIAL_PIPELINE_SUCCESS_EXECUTION_BLOCKED",
+  "observed_at": "2026-10-28T12:03:22.036573+00:00",
+  "primary_run_id": "e3649c11741e4859b6401e3ca744a7f3",
+  "primary_started_at": "2026-10-28T03:45:16.218128+00:00",
+  "primary_finished_at": "2026-10-28T04:10:19.148102+00:00",
+  "primary_process_rc": 0,
+  "native_head": "07137e0cce99587a6ea7c6b6ab7382a91a8a83d6",
+  "source_bindings": 64,
+  "signal_session": "2026-10-27",
+  "candidates": [
+    {
+      "symbol": "TCAF",
+      "score": 7.0,
+      "signal_id": "cb11a664b54c5c8cc5d79792f1318206b516bd75a3ce1f361a9ad32f210c40ce",
+      "strategy_id": "trend_pullback_reclaim_qualifying_close_v2",
+      "strategy_version": "2"
+    },
+    {
+      "symbol": "DDFL",
+      "score": 6.0,
+      "signal_id": "9a2dbadcc5a555d7881ba70af13e6b4fc7b68530abd46521a57b4c007750b781",
+      "strategy_id": "trend_pullback_reclaim_qualifying_close_v2",
+      "strategy_version": "2"
+    },
+    {
+      "symbol": "SPBW",
+      "score": 5.5,
+      "signal_id": "c87f52f00b1af8221a8e70dd42f8d6abe68752dcefd73527314d561924b97179",
+      "strategy_id": "trend_pullback_reclaim_qualifying_close_v2",
+      "strategy_version": "2"
+    }
+  ],
+  "coverage": {
+    "benchmark": "SPY",
+    "coverage_sha256": "84ffb6d4eac95067b6b1fd6c31546c48da80c698bdd0a6f61d23840d3b87f3d9",
+    "discovered_count": 14406,
+    "evaluated_count": 6149,
+    "excluded_count": 8256,
+    "policy": {
+      "asset_class": "us_equity",
+      "batch_size": 25,
+      "max_symbols": 30000,
+      "source": "alpaca_assets",
+      "status": "active",
+      "tradable": true
+    },
+    "source": "alpaca_assets",
+    "status": "COMPLETE",
+    "symbols_sha256": "c924a1e4ace7b13eec528f9fe8cc249a772b351adfb62fefef308b3f286c1dbb",
+    "tradable_count": 13192
+  },
+  "producer_status": "DAILY_STRATEGY_SCAN_COMPLETE",
+  "bull_flag": {
+    "archive": {
+      "result_sha256": "ed465e3883baa1bcf3319c2cff13e08ec71bbe743615a2e048717b38a4eb1366",
+      "rows": 1,
+      "run_id": "fb4932f93e712fd09e91a4f4c452fb9b490d89adf62b02faf7f16594adc4aab9",
+      "status": "COMMITTED_AND_SEPARATE_READONLY_VERIFIED"
+    },
+    "candidates": 0,
+    "parent_root": "/home/RasPatrick/jbravo-research-tools/STRATEGY_DAILY_ACTIVATION_20261025_002/runs/2026-10-27",
+    "provider_gets": 0,
+    "signal_session": "2026-10-27",
+    "status": "COMPLETED_COMPANION_SCREEN",
+    "strategy_id": "bull_flag_breakout_v1"
+  },
+  "failed_patterns": {
+    "ascending_triangle_breakout_v1": {
+      "broker_operations": 0,
+      "error_type": "RuntimeError",
+      "status": "FAILED_NO_REPLAY"
+    },
+    "double_bottom_breakout_v1": {
+      "broker_operations": 0,
+      "error_type": "RuntimeError",
+      "status": "FAILED_NO_REPLAY"
+    },
+    "cup_handle_breakout_v1": {
+      "broker_operations": 0,
+      "error_type": "RuntimeError",
+      "status": "FAILED_NO_REPLAY"
+    },
+    "inverse_head_shoulders_breakout_v1": {
+      "broker_operations": 0,
+      "error_type": "RuntimeError",
+      "status": "FAILED_NO_REPLAY"
+    }
+  },
+  "strategy_contract": {
+    "definition_sha256": "bf576123697684b933b0f6772ab0121e8546fc9aaa1daa4084dbabcc27de0207",
+    "strategy_id": "trend_pullback_reclaim_qualifying_close_v2",
+    "strategy_version": "2"
+  },
+  "backtest_status": "COMPLETED_CANDIDATE_BACKTEST",
+  "backtest_result_id": "c1f27c63fdf4e2a7b6f43027389ad4954bcbf3b03aef55d4a437532e680db0b5",
+  "metrics_status": "COMPLETED_STRATEGY_METRICS",
+  "metrics_result_id": "705c8117537110d690aa79d989b45645829f9ed4bacb4d381564657ace6963de",
+  "closed_history": [
+    {
+      "symbol": "TCAF",
+      "closed_trades": 0,
+      "sample_status": "NO_COMPLETED_SIGNALS"
+    },
+    {
+      "symbol": "DDFL",
+      "closed_trades": 0,
+      "sample_status": "NO_COMPLETED_SIGNALS"
+    },
+    {
+      "symbol": "SPBW",
+      "closed_trades": 0,
+      "sample_status": "NO_COMPLETED_SIGNALS"
+    }
+  ],
+  "unified_selection": {
+    "error_type": "ValueError",
+    "status": "UNIFIED_SETUP_SELECTION_UNAVAILABLE"
+  },
+  "executor_run_id": "9ee4a3bd3eea417b807e7c49b9e76545",
+  "executor_started_at": "2026-10-28T07:55:14.672437+00:00",
+  "executor_finished_at": "2026-10-28T07:55:15.716835+00:00",
+  "executor_rc": 1,
+  "executor_health": "failed",
+  "executor_orders_submitted": 0,
+  "executor_orders_filled": 0,
+  "strategy_entry_report_finished_at": "2026-10-27T07:55:15.650547+00:00",
+  "strategy_entry_report_is_older_than_executor": true,
+  "monitor": {
+    "status": "ok",
+    "finished_at": "2026-10-28T12:03:16.283520+00:00",
+    "entry_sources_ready": true,
+    "owned_symbols": []
+  },
+  "pattern_budget_seconds": 600,
+  "bull_flag_budget_seconds": 1800,
+  "checks": {
+    "primary_history_and_completion_binding": true,
+    "executor_history_equals_latest": true,
+    "backtest_metrics_lineage_and_content_hashes": true,
+    "producer_archive_lineage": true
+  },
+  "cause_assessment": {
+    "confirmed": "Four required pattern scans failed; unified selection unavailable; executor failed without orders",
+    "likely": "Serial full-cohort preparation exceeds per-pattern and/or shared producer runtime budgets",
+    "exact_pattern_exception_reason": "NOT_RETAINED_IN_FAILURE_RECEIPTS"
+  },
+  "verification_scope": "READ_PERSISTED_RECEIPTS_AND_REVIEW_BOUND_SOURCE_NO_NEW_DATABASE_OR_BROKER_QUERY",
+  "remote_evidence_file": "C:\\Users\\RasPa\\PythonAnywhereReviews\\2026-10-28-last-pipeline-review-001\\REMOTE_EVIDENCE_20261028T120325374083Z.json",
+  "snapshot_gets": 16,
+  "native_mutations": 0,
+  "reviewed_source_pins": {
+    "scripts/daily_strategy_scan.py": {
+      "bytes": 21680,
+      "sha256": "85bb96134ce623188eccc25d6d2bf4c97b6185e3d8f7aef06b22017f668d573c"
+    },
+    "scripts/bull_flag_companion.py": {
+      "bytes": 13232,
+      "sha256": "ec55449b27149932dde225007804151532f80d9d76b811b08227a2d35ed00c33"
+    },
+    "scripts/setup_selection.py": {
+      "bytes": 14948,
+      "sha256": "ef0551f543c433037facc26ecb2f2f599557c01b4f4b9ef3ba75a2785016effa"
+    },
+    "scripts/strategy_pipeline.py": {
+      "bytes": 32175,
+      "sha256": "ff227abae24b72559443120cc8372b3091dc93f0ce593fb59bec893faa7f3e38"
+    },
+    "scripts/strategy_execution_runtime.py": {
+      "bytes": 24758,
+      "sha256": "b922e86d752f4cbf7d11b630f29ca853eeea79d673e76bf630e3a42a397e3168"
+    },
+    "scripts/strategy_market_replay.py": {
+      "bytes": 4322,
+      "sha256": "0526005fcd0d5662c095bdd060c1ca6c136b3e4ab2f1ba2b6d34f054be81144a"
+    }
+  },
+  "findings": [
+    {
+      "priority": "P1",
+      "status": "CONFIRMED",
+      "id": "REQUIRED_STRATEGY_RESULTS_UNAVAILABLE",
+      "detail": "Four pattern scans failed with RuntimeError; unified setup selection is unavailable. Pullback candidates alone do not satisfy the current all-strategy execution contract."
+    },
+    {
+      "priority": "P1",
+      "status": "CONFIRMED",
+      "id": "PRIMARY_SUCCESS_EXCLUDES_UNIFIED_SELECTION",
+      "detail": "Primary returned zero and saved a completed report despite unavailable unified selection. The call to publish_unified_selection ignores its returned failure status.",
+      "source": "scripts/strategy_pipeline.py",
+      "related_source": "scripts/setup_selection.py"
+    },
+    {
+      "priority": "P2",
+      "status": "CONFIRMED",
+      "id": "FAILURE_DIAGNOSTICS_INCOMPLETE",
+      "detail": "Pattern failures retain RuntimeError without a reason/phase. The strategy-specific entry latest report is older than the current failed executor receipt.",
+      "source": "scripts/bull_flag_companion.py",
+      "related_source": "scripts/strategy_execution_runtime.py"
+    },
+    {
+      "priority": "P2",
+      "status": "LIKELY_NOT_PROVED",
+      "id": "PATTERN_RUNTIME_BUDGET_INSUFFICIENT",
+      "detail": "Four pattern scans each have a 600-second limit, share the producer global deadline, and repeat full-cohort preparation after Pullback and Bull Flag. Budget exhaustion is a strong hypothesis; no exception reason or timing was retained to prove it."
+    }
+  ],
+  "recommended_next_steps": [
+    "Capture structured safe failure code, stage, elapsed time and budget for each required strategy without exposing credentials.",
+    "Measure and reuse common cohort preparation; fit all required strategy scans inside reviewed finite runtime and schedule bounds.",
+    "Propagate unified selection failure to overall pipeline/entry readiness while preserving healthy existing-position monitoring.",
+    "Publish a fresh failed strategy-entry receipt when preparation raises instead of retaining a stale successful skip.",
+    "Verify a new complete-session candidate through canonical publication, unified selection, actual paper order/fill and monitoring. Preserve all consumed claims and failed folders."
+  ],
+  "review_limits": [
+    "No native command, task run/retry, configuration edit, deployment, DB query or broker query was performed.",
+    "Order/fill counts are the failed executor receipt, not an independent account-wide broker history query.",
+    "All three candidates have no completed historical trades in the shared replay; this is not performance qualification.",
+    "No automatic fallback, strategy exclusion, late entry, research promotion or trading-policy change is authorized by this review."
+  ]
+}

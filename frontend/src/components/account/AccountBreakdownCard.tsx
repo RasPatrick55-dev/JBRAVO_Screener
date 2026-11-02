@@ -10,13 +10,13 @@ export default function AccountBreakdownCard({
   summary,
   isLoading = false,
 }: AccountBreakdownCardProps) {
-  const equity = summary?.equity ?? 0;
-  const cash = summary?.cash ?? 0;
-  const openPositionsValue = summary?.openPositionsValue ?? 0;
-  const netPositionsValue = equity - cash;
-  const total = Math.max(0, cash + openPositionsValue);
-  const cashPct = total > 0 ? (cash / total) * 100 : 0;
-  const positionsPct = total > 0 ? (openPositionsValue / total) * 100 : 0;
+  const equity = summary?.equity ?? null;
+  const cash = summary?.cash ?? null;
+  const openPositionsValue = summary?.openPositionsValue ?? null;
+  const netPositionsValue = equity !== null && cash !== null ? equity - cash : null;
+  const total = cash !== null && openPositionsValue !== null ? cash + openPositionsValue : null;
+  const cashPct = total !== null && total > 0 && cash !== null ? cash / total * 100 : null;
+  const positionsPct = total !== null && total > 0 && openPositionsValue !== null ? openPositionsValue / total * 100 : null;
 
   return (
     <section className="rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-emerald" aria-label="Account breakdown">
@@ -71,13 +71,13 @@ export default function AccountBreakdownCard({
                 Cash-to-gross-exposure mix
               </span>
               <span className="font-cousine text-sm font-bold tabular-nums text-primary">
-                {Math.round(cashPct)}/{Math.round(positionsPct)}
+                {cashPct === null ? "--" : Math.round(cashPct)}/{positionsPct === null ? "--" : Math.round(positionsPct)}
               </span>
             </div>
             <div className="mt-2 h-3 overflow-hidden rounded-full bg-progress-rail">
               <div className="flex h-full w-full">
-                <div className="h-full bg-emerald-500/80" style={{ width: `${Math.max(0, Math.min(100, cashPct))}%` }} />
-                <div className="h-full bg-sky-500/80" style={{ width: `${Math.max(0, Math.min(100, positionsPct))}%` }} />
+                <div className="h-full bg-emerald-500/80" style={{ width: `${Math.max(0, Math.min(100, cashPct ?? 0))}%` }} />
+                <div className="h-full bg-sky-500/80" style={{ width: `${Math.max(0, Math.min(100, positionsPct ?? 0))}%` }} />
               </div>
             </div>
             <div className="mt-2 flex items-center justify-between font-cousine text-xs tabular-nums text-secondary">

@@ -4,20 +4,20 @@ import StockLogo from "../ui/StockLogo";
 export interface PositionRowProps {
   symbol: string;
   logoUrl: string;
-  shares: number;
-  entryPrice: number;
-  currentPrice: number;
-  openPL: number;
-  daysHeld: number;
-  trailingStop: number;
-  capturedPL: number;
+  shares: number | null;
+  entryPrice: number | null;
+  currentPrice: number | null;
+  openPL: number | null;
+  daysHeld: number | null;
+  trailingStop: number | null;
+  capturedPL: number | null;
 }
 
-const plToneClass = (value: number) => {
-  if (value > 0) {
+const plToneClass = (value: number | null) => {
+  if (value !== null && value > 0) {
     return "text-accent-green";
   }
-  if (value < 0) {
+  if (value !== null && value < 0) {
     return "text-accent-red";
   }
   return "text-financial";

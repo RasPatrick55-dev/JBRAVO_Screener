@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -318,26 +319,56 @@ def _run_type_hint() -> str:
     return "pre-market" if age_seconds <= 12 * 3600 else "nightly"
 
 
+def _connection_timestamp(payload: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """Normalize producer aliases without borrowing freshness or inventing a time."""
+    stamps = []
+    for key in ("timestamp", "ts_utc", "last_run_utc", "last_run"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        if (not isinstance(value, str) or len(value) > 128
+                or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})", value) is None):
+            return None, "timestamp_invalid"
+        # fromisoformat normalizes overflowing offset minutes (e.g. +00:60).
+        # Reject their lexical form before parsing so it cannot create freshness.
+        if value[-1] != "Z" and (int(value[-5:-3]) > 23 or int(value[-2:]) > 59):
+            return None, "timestamp_invalid"
+        try:
+            stamp = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if stamp.utcoffset() is None:
+                return None, "timestamp_invalid"
+            stamps.append(stamp.astimezone(dt.timezone.utc))
+        except (ValueError, TypeError, OverflowError):
+            return None, "timestamp_invalid"
+    if not stamps:
+        return None, None
+    if any(stamp != stamps[0] for stamp in stamps[1:]):
+        return None, "timestamp_conflict"
+    return stamps[0].isoformat(), None
+
+
 def load_connection_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
     base = Path(base_dir) if base_dir else DATA_DIR
     primary = base / "connection_health.json"
     fallback = base / "connectivity.json"
 
     payload = _read_json_safe(primary)
+    source = "connection_health.json" if payload else None
     if not payload:
         payload = _read_json_safe(fallback)
+        source = "connectivity.json" if payload else None
 
-    timestamp = payload.get("timestamp") or payload.get("last_run_utc") or payload.get("last_run")
-    if timestamp is not None:
-        timestamp = str(timestamp)
+    timestamp, timestamp_error = _connection_timestamp(payload)
 
     normalized = {
+        "source": source,
         "trading_ok": _coerce_bool(payload.get("trading_ok")),
         "trading_status": _coerce_int(payload.get("trading_status")),
         "data_ok": _coerce_bool(payload.get("data_ok")),
         "data_status": _coerce_int(payload.get("data_status")),
         "feed": _normalize_feed(payload.get("feed")),
         "timestamp": timestamp,
+        "timestamp_error": timestamp_error,
         "buying_power": _coerce_float(payload.get("buying_power")),
     }
 
@@ -430,6 +461,48 @@ def _normalize_feed(value: Any) -> Optional[str]:
     return None
 
 
+def connection_check_snapshot(connection: Dict[str, Any], *, now=None) -> Dict[str, Any]:
+    """Describe an existing stored check; never perform or refresh a broker call."""
+    source = connection.get("source")
+    result = {"source": source if source in {"connection_health.json", "connectivity.json"} else None,
+              "status": "unknown", "reason": "source_missing", "checked_at": None,
+              "trading_ok": connection.get("trading_ok") if type(connection.get("trading_ok")) is bool else None,
+              "freshness": {"age_seconds": None, "freshness_level": "gray"}}
+    if result["source"] is None:
+        return result
+    timestamp_error = connection.get("timestamp_error")
+    if timestamp_error in {"timestamp_invalid", "timestamp_conflict"}:
+        result["reason"] = timestamp_error
+        return result
+    text = connection.get("timestamp")
+    if not isinstance(text, str) or not text or len(text) > 128:
+        result["reason"] = "timestamp_missing"
+        return result
+    try:
+        normalized, error = _connection_timestamp({"timestamp": text})
+        if error is not None or normalized is None:
+            raise ValueError("invalid timestamp")
+        stamp = dt.datetime.fromisoformat(normalized)
+        if stamp.utcoffset() is None:
+            raise ValueError("naive timestamp")
+        stamp = stamp.astimezone(dt.timezone.utc)
+        age = ((now or dt.datetime.now(dt.timezone.utc)) - stamp).total_seconds()
+    except (ValueError, TypeError, OverflowError):
+        result["reason"] = "timestamp_invalid"
+        return result
+    result["checked_at"] = stamp.isoformat()
+    if age < 0:
+        result["reason"] = "timestamp_future"
+        return result
+    result["freshness"] = {"age_seconds": int(age),
+        "freshness_level": "green" if age < 7200 else "amber" if age < 43200 else "gray"}
+    if result["trading_ok"] is None:
+        result["reason"] = "result_unknown"
+    else:
+        result.update(status="fresh" if age < 7200 else "stale", reason="fresh" if age < 7200 else "stale")
+    return result
+
+
 def screener_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
     """Return a resilient snapshot for the Screener Health view."""
 
@@ -468,6 +541,7 @@ def screener_health(base_dir: Optional[Path] = None) -> Dict[str, Any]:
         "latest_source": metrics.get("latest_source"),
         "pipeline_rc": metrics.get("pipeline_rc"),
         "freshness": _freshness(last_run_utc),
+        "connection_check": connection_check_snapshot(connection),
         "run_type": _run_type_hint(),
         "buying_power": connection.get("buying_power"),
     }
@@ -542,25 +616,9 @@ def screener_table() -> Tuple[pd.DataFrame, str, str]:
             except Exception:
                 pass
 
-    db_df, run_label = _db_candidates()
-    if not db_df.empty or run_label is not None:
-        df = db_df
-        updated = run_label or ""
-        source_file = "screener_candidates (db)"
-    else:
-        logger.info("DASH_DB_READ_FALLBACK reason=csv_fallback")
-        top_path = DATA_DIR / "top_candidates.csv"
-        latest_path = DATA_DIR / "latest_candidates.csv"
-
-        df = _read_csv_safe(top_path)
-        updated = _mtime_iso(top_path)
-        source_file = "top_candidates.csv"
-
-        if df.empty:
-            df = _read_csv_safe(latest_path)
-            source_file = "latest_candidates.csv"
-            if not updated:
-                updated = _mtime_iso(latest_path)
+    df, run_label = _db_candidates()
+    updated = run_label or ""
+    source_file = "screener_candidates (postgres)" if run_label is not None else "postgres unavailable or empty; no file fallback"
 
     df = df.copy()
     for column in ("score", "win_rate", "net_pnl", "close", "adv20", "atrp"):

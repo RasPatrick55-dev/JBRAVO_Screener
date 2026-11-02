@@ -1,3 +1,5 @@
+import { useSource } from "../ui/sourceState";
+import SourceNotice from "../ui/SourceNotice";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LiveDataSyncState } from "../navbar/liveStatus";
 import AccountBreakdownCard from "./AccountBreakdownCard";
@@ -156,14 +158,14 @@ const normalizePerformanceBasis = (
 
 const normalizeSummary = (payload: unknown): AccountSummary | null => {
   const record = asRecord(payload);
-  if (!record) {
+  if (!record || record.ok !== true) {
     return null;
   }
   return {
-    equity: parseNumber(record.equity) ?? 0,
-    cash: parseNumber(record.cash) ?? 0,
-    buyingPower: parseNumber(record.buying_power) ?? 0,
-    openPositionsValue: parseNumber(record.open_positions_value) ?? 0,
+    equity: parseNumber(record.equity),
+    cash: parseNumber(record.cash),
+    buyingPower: parseNumber(record.buying_power),
+    openPositionsValue: parseNumber(record.open_positions_value),
     cashToPositionsRatio: parseNumber(record.cash_to_positions_ratio),
     takenAtUtc: String(record.taken_at_utc ?? ""),
   };
@@ -171,7 +173,7 @@ const normalizeSummary = (payload: unknown): AccountSummary | null => {
 
 const normalizePerformanceRows = (payload: unknown): { rows: AccountPerformanceRow[]; total: AccountTotal | null } => {
   const record = asRecord(payload);
-  if (!record) {
+  if (!record || record.ok !== true) {
     return { rows: [], total: null };
   }
 
@@ -188,8 +190,8 @@ const normalizePerformanceRows = (payload: unknown): { rows: AccountPerformanceR
       }
       return {
         period,
-        netChangePct: parseNumber(row.netChangePct) ?? 0,
-        netChangeUsd: parseNumber(row.netChangeUsd) ?? 0,
+        netChangePct: parseNumber(row.netChangePct),
+        netChangeUsd: parseNumber(row.netChangeUsd),
       };
     })
     .filter((row): row is AccountPerformanceRow => Boolean(row));
@@ -197,9 +199,9 @@ const normalizePerformanceRows = (payload: unknown): { rows: AccountPerformanceR
   const totalRecord = asRecord(record.accountTotal);
   const total = totalRecord
       ? {
-          equity: parseNumber(totalRecord.equity) ?? 0,
-          netChangePct: parseNumber(totalRecord.netChangePct) ?? 0,
-          netChangeUsd: parseNumber(totalRecord.netChangeUsd) ?? 0,
+          equity: parseNumber(totalRecord.equity),
+          netChangePct: parseNumber(totalRecord.netChangePct),
+          netChangeUsd: parseNumber(totalRecord.netChangeUsd),
           equityBasis: normalizeEquityBasis(totalRecord.equityBasis),
           asOfUtc: String(totalRecord.asOfUtc ?? "").trim() || undefined,
           performanceBasis: normalizePerformanceBasis(totalRecord.performanceBasis),
@@ -211,7 +213,7 @@ const normalizePerformanceRows = (payload: unknown): { rows: AccountPerformanceR
 
 const normalizePortfolioPoints = (payload: unknown): EquityCurvePoint[] => {
   const record = asRecord(payload);
-  if (!record || !Array.isArray(record.points)) {
+  if (!record || record.ok !== true || !Array.isArray(record.points)) {
     return [];
   }
   return record.points
@@ -230,9 +232,9 @@ const normalizePortfolioPoints = (payload: unknown): EquityCurvePoint[] => {
     .filter((row): row is EquityCurvePoint => Boolean(row));
 };
 
-const normalizeOpenOrders = (payload: unknown): OpenOrderRow[] => {
+export const normalizeOpenOrders = (payload: unknown): OpenOrderRow[] => {
   const record = asRecord(payload);
-  if (!record || !Array.isArray(record.rows)) {
+  if (!record || record.ok !== true || !Array.isArray(record.rows)) {
     return [];
   }
   return record.rows
@@ -251,7 +253,7 @@ const normalizeOpenOrders = (payload: unknown): OpenOrderRow[] => {
         side: String(row.side ?? "buy")
           .trim()
           .toLowerCase(),
-        qty: parseNumber(row.qty) ?? 0,
+        qty: parseNumber(row.qty),
         priceOrStop: parseNumber(row.price_or_stop),
         submittedAt: String(row.submitted_at ?? "").trim(),
       };
@@ -261,7 +263,7 @@ const normalizeOpenOrders = (payload: unknown): OpenOrderRow[] => {
 
 const normalizeOrderLogs = (payload: unknown): OrderLogRow[] => {
   const record = asRecord(payload);
-  if (!record || !Array.isArray(record.rows)) {
+  if (!record || record.ok !== true || !Array.isArray(record.rows)) {
     return [];
   }
   return record.rows
@@ -308,14 +310,15 @@ export default function AccountTab({ onSyncStateChange }: AccountTabProps) {
   const [summary, setSummary] = useState<AccountSummary | null>(null);
   const [performanceRows, setPerformanceRows] = useState<AccountPerformanceRow[]>([]);
   const [accountTotal, setAccountTotal] = useState<AccountTotal>({
-    equity: 0,
-    netChangePct: 0,
-    netChangeUsd: 0,
+    equity: null,
+    netChangePct: null,
+    netChangeUsd: null,
     equityBasis: "last_close",
     performanceBasis: "close_to_close",
   });
   const [portfolioPoints, setPortfolioPoints] = useState<EquityCurvePoint[]>([]);
-  const [openOrders, setOpenOrders] = useState<OpenOrderRow[]>([]);
+  const ordersSource = useSource("/api/account/open_orders?limit=50");
+  const openOrders = normalizeOpenOrders(ordersSource.payload);
   const [orderLogs, setOrderLogs] = useState<OrderLogRow[]>([]);
   const [loading, setLoading] = useState<LoadingState>(defaultLoadingState);
   const [hasError, setHasError] = useState(false);
@@ -324,72 +327,46 @@ export default function AccountTab({ onSyncStateChange }: AccountTabProps) {
 
   useEffect(() => {
     let isMounted = true;
+    let inFlight = false;
 
     const load = async () => {
+      if (inFlight) return;
+      inFlight = true;
       if (!hasLoadedRef.current) {
         setLoading(defaultLoadingState);
       } else {
         setLoading((previous) => ({ ...previous, performance: true }));
       }
 
-      const [summaryResult, performanceResult, historyResult, openOrdersResult, logsResult] =
+      const [summaryResult, performanceResult, historyResult, logsResult] =
         await Promise.allSettled([
           fetchJson<unknown>(withTs("/api/account/summary")),
           fetchJson<unknown>(withTs("/api/account/performance?range=all")),
           fetchJson<unknown>(withTs("/api/account/portfolio_history?period=1Y&timeframe=1D")),
-          fetchJson<unknown>(withTs("/api/account/open_orders?limit=50")),
           fetchJson<unknown>(withTs("/api/account/order_logs?limit=100")),
         ]);
 
       if (!isMounted) {
+        inFlight = false;
         return;
       }
 
       const summaryPayload = summaryResult.status === "fulfilled" ? summaryResult.value : null;
       const performancePayload = performanceResult.status === "fulfilled" ? performanceResult.value : null;
       const historyPayload = historyResult.status === "fulfilled" ? historyResult.value : null;
-      const openOrdersPayload = openOrdersResult.status === "fulfilled" ? openOrdersResult.value : null;
       const logsPayload = logsResult.status === "fulfilled" ? logsResult.value : null;
 
       const normalizedSummary = normalizeSummary(summaryPayload);
       const normalizedPerformance = normalizePerformanceRows(performancePayload);
       const normalizedPoints = normalizePortfolioPoints(historyPayload);
-      const normalizedOpenOrders = normalizeOpenOrders(openOrdersPayload);
       const normalizedLogs = normalizeOrderLogs(logsPayload);
 
-      if (summaryPayload) {
-        setSummary(normalizedSummary);
-      }
-      if (performancePayload) {
-        setPerformanceRows(normalizedPerformance.rows);
-        setAccountTotal(
-          normalizedPerformance.total ?? {
-            equity: normalizedSummary?.equity ?? 0,
-            netChangePct: 0,
-            netChangeUsd: 0,
-            equityBasis: "live",
-            asOfUtc: normalizedSummary?.takenAtUtc ?? "",
-            performanceBasis: "close_to_close",
-          }
-        );
-      } else if (summaryPayload && normalizedSummary) {
-        setAccountTotal((previous) => ({
-          ...previous,
-          equity: normalizedSummary.equity,
-          equityBasis: "live",
-          asOfUtc: normalizedSummary.takenAtUtc,
-        }));
-      }
-      if (historyPayload) {
-        setPortfolioPoints(normalizedPoints);
-      }
-      if (openOrdersPayload) {
-        setOpenOrders(normalizedOpenOrders);
-      }
-      if (logsPayload) {
-        setOrderLogs(normalizedLogs);
-      }
-      setHasError(!summaryPayload || !performancePayload || !historyPayload || !openOrdersPayload || !logsPayload);
+      setSummary(normalizedSummary);
+      setPerformanceRows(normalizedPerformance.rows);
+      setAccountTotal(normalizedPerformance.total ?? {equity: null, netChangePct: null, netChangeUsd: null});
+      setPortfolioPoints(normalizedPoints);
+      setOrderLogs(normalizedLogs);
+      setHasError([summaryPayload, performancePayload, historyPayload, logsPayload].some(payload => asRecord(payload)?.ok !== true || asRecord(payload)?.status === "partial"));
       setLoading({
         summary: false,
         performance: false,
@@ -398,6 +375,7 @@ export default function AccountTab({ onSyncStateChange }: AccountTabProps) {
         logs: false,
       });
       hasLoadedRef.current = true;
+      inFlight = false;
     };
 
     load();
@@ -414,16 +392,16 @@ export default function AccountTab({ onSyncStateChange }: AccountTabProps) {
       return;
     }
     const anyLoading = Object.values(loading).some(Boolean);
-    if (anyLoading) {
+    if (anyLoading || ordersSource.kind === "loading") {
       onSyncStateChange("loading");
       return;
     }
-    if (hasError) {
+    if (hasError || !["ready", "empty"].includes(ordersSource.kind)) {
       onSyncStateChange("error");
       return;
     }
     onSyncStateChange("ready");
-  }, [hasError, loading, onSyncStateChange]);
+  }, [hasError, loading, ordersSource.kind, onSyncStateChange]);
 
   const tableRows = useMemo(() => {
     const byPeriod = new Map<string, AccountPerformanceRow>();
@@ -436,7 +414,7 @@ export default function AccountTab({ onSyncStateChange }: AccountTabProps) {
       if (existing) {
         return existing;
       }
-      return { period, netChangePct: 0, netChangeUsd: 0 };
+      return { period, netChangePct: null, netChangeUsd: null };
     });
   }, [performanceRows]);
 
@@ -452,7 +430,7 @@ export default function AccountTab({ onSyncStateChange }: AccountTabProps) {
           role="alert"
           className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-300/35 dark:bg-amber-500/10 dark:text-amber-200"
         >
-          Some account data could not be refreshed. Showing the latest available values.
+          Some account data is unavailable or partial. Unknown amounts are shown as --. Source: configured Alpaca paper broker; historical trade accounting remains separately qualified.
         </div>
       ) : null}
 
@@ -468,7 +446,8 @@ export default function AccountTab({ onSyncStateChange }: AccountTabProps) {
 
         <div className="space-y-4 xl:col-span-7">
           <EquityCurveCard points={portfolioPoints} isLoading={loading.history} />
-          <OpenOrdersCard rows={openOrders} isLoading={loading.openOrders} />
+          <SourceNotice label="Open broker orders" {...ordersSource} />
+          <OpenOrdersCard rows={openOrders} isLoading={ordersSource.kind === "loading"} sourceKind={ordersSource.kind} />
           <DailyOrderLogsCard rows={orderLogs} isLoading={loading.logs} />
         </div>
       </div>

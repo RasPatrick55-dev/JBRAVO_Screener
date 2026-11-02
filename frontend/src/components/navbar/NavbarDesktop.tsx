@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { NavbarDesktopProps } from "../../types/ui";
 import StatusBadge from "../badges/StatusBadge";
-import MarketClockGroup from "../header/MarketClockGroup";
+import MarketClockGroup, { type MarketClockRecord } from "../header/MarketClockGroup";
 import ThemeToggle from "../ui/ThemeToggle";
 
 export default function NavbarDesktop({ tabs, rightBadges, onTabSelect }: NavbarDesktopProps) {
   const [serverUtc, setServerUtc] = useState("");
+  const [market, setMarket] = useState<MarketClockRecord | null>(null);
   const [localUtc, setLocalUtc] = useState(() => new Date().toISOString());
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -28,14 +29,16 @@ export default function NavbarDesktop({ tabs, rightBadges, onTabSelect }: Navbar
       try {
         const response = await fetch("/api/time", { cache: "no-store" });
         if (!response.ok) {
+          if (isMounted) setMarket(null);
           return;
         }
-        const payload = (await response.json()) as { utc?: string };
+        const payload = (await response.json()) as { utc?: string; market?: MarketClockRecord };
         if (isMounted && payload.utc) {
           setServerUtc(payload.utc);
+          setMarket(payload.market ?? null);
         }
       } catch {
-        // Silently ignore transient fetch failures.
+        if (isMounted) setMarket(null);
       } finally {
         inFlight = false;
       }
@@ -141,7 +144,7 @@ export default function NavbarDesktop({ tabs, rightBadges, onTabSelect }: Navbar
           </div>
           <div className="flex items-center justify-center overflow-x-auto lg:justify-end">
             <div className="w-full sm:min-w-max">
-              <MarketClockGroup serverUtc={serverUtc || localUtc} />
+              <MarketClockGroup serverUtc={serverUtc || localUtc} market={market} />
             </div>
           </div>
         </div>

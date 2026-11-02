@@ -1,4 +1,5 @@
 import type { LeaderRow, LeaderboardMode, RangeKey } from "./types";
+export type GrossBasis = "recorded_gross" | "execution_gross";
 
 const asRecord = (value: unknown): Record<string, unknown> | null => {
   if (!value || typeof value !== "object") {
@@ -33,10 +34,12 @@ const normalizeLeaderboardRow = (value: unknown, index: number): LeaderRow | nul
     return null;
   }
 
+  const pl = parseNumber(record.pl ?? record.totalPL ?? record.total_pl ?? record.pnl ?? record.net_pnl);
+  if (pl === null) return null;
   return {
     rank: Math.max(1, Math.trunc(parseNumber(record.rank) ?? index + 1)),
     symbol,
-    pl: parseNumber(record.pl ?? record.totalPL ?? record.total_pl ?? record.pnl ?? record.net_pnl) ?? 0,
+    pl,
   };
 };
 
@@ -57,12 +60,14 @@ export const normalizeLeaderboardPayload = (payload: unknown): LeaderRow[] => {
 export const buildLeaderboardRequestPath = (
   range: RangeKey,
   mode: LeaderboardMode,
-  limit: number
+  limit: number,
+  basis?: GrossBasis
 ): string => {
   const query = new URLSearchParams({
     range,
     mode,
     limit: String(limit),
   });
+  if (basis) query.set("basis", basis);
   return `/api/trades/leaderboard?${query.toString()}`;
 };

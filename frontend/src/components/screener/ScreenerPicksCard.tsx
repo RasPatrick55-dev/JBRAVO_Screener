@@ -66,8 +66,9 @@ type ScreenerPicksCardProps = {
 
 export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCardProps) {
   const [rows, setRows] = useState<ScreenerPickRow[]>([]);
+  const [scopeLabel, setScopeLabel] = useState("PostgreSQL candidate session; completion unverified");
   const [runTsUtc, setRunTsUtc] = useState<string | null>(null);
-  const [statusLabel, setStatusLabel] = useState("COMPLETE");
+  const [statusLabel, setStatusLabel] = useState("UNKNOWN");
   const [sortState, setSortState] = useState<SortState>(defaultSort);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -102,7 +103,8 @@ export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCa
           .filter((row) => row.symbol !== "--");
         setRows(normalizedRows);
         setRunTsUtc(payload.run_ts_utc ?? null);
-        setStatusLabel(String(payload.status ?? "COMPLETE").toUpperCase());
+        setScopeLabel(`PostgreSQL candidate session ${payload.run_date ?? "unknown"}; completion ${payload.completion_status ?? "unverified"}`);
+        setStatusLabel(String(payload.status ?? "UNKNOWN").toUpperCase());
         setErrorMessage(null);
       } catch (error) {
         if (!isMounted) {
@@ -110,6 +112,7 @@ export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCa
         }
         const message = error instanceof Error ? error.message : "Unable to load screener picks.";
         setErrorMessage(message);
+        setRows([]); setStatusLabel("UNAVAILABLE");
       } finally {
         if (isMounted) {
           setIsLoading(false);
@@ -204,7 +207,7 @@ export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCa
         : "bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-700/30 dark:text-slate-200 dark:ring-slate-500/40";
 
   return (
-    <section className="rounded-2xl p-3 shadow-card jbravo-panel jbravo-panel-cyan sm:p-md" aria-label="Screener picks">
+    <section className="rounded-2xl p-3 shadow-card jbravo-panel jbravo-panel-cyan sm:p-md" aria-label="Screener picks" title={scopeLabel}>
       <header className="flex flex-wrap items-start justify-between gap-3">
         <h2 className="font-arimo text-xs font-semibold uppercase tracking-[0.08em] text-primary sm:text-sm">
           Screener Picks
@@ -216,7 +219,7 @@ export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCa
           <span
             className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] ring-1 ring-inset sm:px-2.5 sm:text-[11px] ${statusChipClass}`}
           >
-            {statusLabel}
+            {statusLabel} � {scopeLabel}
           </span>
         </div>
       </header>

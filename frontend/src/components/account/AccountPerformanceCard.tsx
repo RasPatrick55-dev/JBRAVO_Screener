@@ -7,7 +7,8 @@ interface AccountPerformanceCardProps {
   isLoading?: boolean;
 }
 
-const toneClass = (value: number): string => {
+const toneClass = (value: number | null): string => {
+  if (value === null) return "text-secondary";
   if (value > 0) {
     return "jbravo-text-success";
   }

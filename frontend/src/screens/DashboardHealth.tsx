@@ -1,6 +1,7 @@
+import { canDisplay, deadlineRead, useSource } from "../components/ui/sourceState";
 import { useEffect, useMemo, useState } from "react";
 import NavbarDesktop from "../components/navbar/NavbarDesktop";
-import { buildNavbarBadges, useLiveTradingStatus } from "../components/navbar/liveStatus";
+import { buildNavbarBadges, useLiveTradingStatus, parseTradingStatus, diagnosticsFresh } from "../components/navbar/liveStatus";
 import ProcessStatusCards, {
   type ProcessStatusCardsProps,
 } from "../components/dashboard/ProcessStatusCards";
@@ -79,10 +80,12 @@ type TradeRecord = {
 type TradesOverviewResponse = {
   ok?: boolean;
   metrics?: TradesMetrics;
+  performance_status?: string;
   trades?: TradeRecord[];
   open_positions?: {
     count?: number | null;
-    realized_pnl?: number | null;
+    unrealized_pnl?: number | null;
+    status?: string;
   };
 };
 
@@ -100,6 +103,9 @@ type ExecutionSnapshot = {
 
 type MonitoringPositionsResponse = {
   ok?: boolean;
+  summary?: {totalOpenPL?: number | null};
+  status?: string;
+  observed_at?: string | null;
   positions?: Array<{
     symbol?: string | null;
     logoUrl?: string | null;
@@ -183,7 +189,7 @@ type OpenPositionsSummary = {
   pnl: number | null;
   pnlPct: number | null;
   filledCount: number | null;
-  totalCount: number;
+  totalCount: number | null;
 };
 
 const navLabels = [
@@ -470,11 +476,11 @@ const formatAge = (seconds: number | null | undefined) => {
   return `${Math.round(seconds / 86400)}d ago`;
 };
 
-const normalizeWinRate = (value: number | null) => {
+export const normalizeWinRate = (value: number | null) => {
   if (value === null || value === undefined) {
     return null;
   }
-  return value <= 1 ? value * 100 : value;
+  return Number.isFinite(value) ? value : null; // scripts.metrics and API contract both use percentage points.
 };
 
 const statusFromPipelineRc = (value: number | null | undefined) => {
@@ -795,48 +801,22 @@ const parseExecuteLogSummary = (logText: string | null | undefined) => {
   };
 };
 
-const isFilledStatus = (status: string | undefined) => {
-  if (!status) {
-    return false;
-  }
-  const normalized = status.toLowerCase();
-  return normalized.includes("fill") || normalized === "closed" || normalized === "filled";
-};
 
-const isOpenStatus = (status: string | undefined) => {
-  if (!status) {
-    return false;
-  }
-  return status.toLowerCase() === "open";
-};
+
+
 
 const fetchJson = async <T,>(path: string): Promise<T | null> => {
-  try {
-    const response = await fetch(path, {
-      headers: { Accept: "application/json" },
-    });
-    if (!response.ok) {
-      return null;
-    }
-    return (await response.json()) as T;
-  } catch {
-    return null;
-  }
+  try { return await deadlineRead(async signal => {
+    const response = await fetch(path, {signal, cache: "no-store", headers: {Accept: "application/json"}});
+    return response.ok ? await response.json() as T : null;
+  }); } catch { return null; }
 };
 
 const fetchText = async (path: string): Promise<string | null> => {
-  try {
-    const response = await fetch(path, {
-      headers: { Accept: "text/plain" },
-      cache: "no-store",
-    });
-    if (!response.ok) {
-      return null;
-    }
-    return await response.text();
-  } catch {
-    return null;
-  }
+  try {return await deadlineRead(async signal => {
+    const response = await fetch(path, {signal, cache: "no-store", headers: {Accept: "text/plain"}});
+    return response.ok ? await response.text() : null;
+  });} catch {return null;}
 };
 
 type ParsedLogEntry = LogEntry & { timestampMs: number };
@@ -926,17 +906,18 @@ const buildLogEntries = (
   return filtered.map(({ timestampMs, ...entry }) => entry);
 };
 
-const computePipelineScore = (health: ApiHealthResponse | null) => {
+export const computePipelineScore = (health: ApiHealthResponse | null) => {
   if (!health) {
     return null;
   }
+  if (!health.freshness || health.freshness.freshness_level !== "green" || typeof health.freshness.age_seconds !== "number" || health.freshness.age_seconds < 0 || health.freshness.age_seconds >= 7200) return null;
   const checks = [
     typeof health.pipeline_rc === "number" ? health.pipeline_rc === 0 : null,
     typeof health.trading_ok === "boolean" ? health.trading_ok : null,
     typeof health.data_ok === "boolean" ? health.data_ok : null,
-  ].filter((value): value is boolean => typeof value === "boolean");
+  ];
 
-  if (!checks.length) {
+  if (checks.some(value => value === null)) {
     return null;
   }
   const passed = checks.filter(Boolean).length;
@@ -944,12 +925,12 @@ const computePipelineScore = (health: ApiHealthResponse | null) => {
   return Math.round(score * 10) / 10;
 };
 
-const pipelineStatusFromScore = (score: number | null) => {
+export const pipelineStatusFromScore = (score: number | null) => {
   if (score === null) {
     return { label: "Unknown", tone: "neutral" as StatusTone };
   }
   if (score >= 90) {
-    return { label: "Healthy", tone: "success" as StatusTone };
+    return { label: "Computational/API checks passed", tone: "success" as StatusTone };
   }
   if (score >= 70) {
     return { label: "Watch", tone: "warning" as StatusTone };
@@ -965,10 +946,14 @@ type DashboardHealthProps = {
 export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHealthProps) {
   const [healthSnapshot, setHealthSnapshot] = useState<ApiHealthResponse | null>(null);
   const [overviewSnapshot, setOverviewSnapshot] = useState<HealthOverviewResponse | null>(null);
-  const [accountSnapshot, setAccountSnapshot] = useState<AccountSnapshot | null>(null);
-  const [tradesOverview, setTradesOverview] = useState<TradesOverviewResponse | null>(null);
-  const [executeSnapshot, setExecuteSnapshot] = useState<ExecutionSnapshot | null>(null);
-  const [monitoringSnapshot, setMonitoringSnapshot] = useState<MonitoringPositionsResponse | null>(null);
+  const accountPayloadSource = useSource("/api/account/overview");
+  const accountSnapshot = canDisplay(accountPayloadSource.kind) ? (accountPayloadSource.payload as AccountOverviewResponse | null)?.snapshot ?? null : null;
+  const tradesPayloadSource = useSource("/api/trades/overview");
+  const tradesOverview = canDisplay(tradesPayloadSource.kind) ? tradesPayloadSource.payload as TradesOverviewResponse | null : null;
+  const executePayloadSource = useSource("/api/execute/overview");
+  const executeSnapshot = canDisplay(executePayloadSource.kind) ? executePayloadSource.payload as ExecutionSnapshot | null : null;
+  const monitoringSource = useSource("/api/positions/monitoring");
+  const monitoringSnapshot = canDisplay(monitoringSource.kind) ? monitoringSource.payload as MonitoringPositionsResponse | null : null;
   const [pipelineTaskRun, setPipelineTaskRun] = useState<PipelineTaskRunResponse | null>(null);
   const [executeTaskRun, setExecuteTaskRun] = useState<ExecuteTaskRunResponse | null>(null);
   const [executeOrdersSummary, setExecuteOrdersSummary] =
@@ -981,15 +966,13 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   const [pythonAnywhereTasks, setPythonAnywhereTasks] = useState<PythonAnywhereTask[] | null>(null);
 
   useEffect(() => {
-    let isMounted = true;
+    let isMounted = true, inFlight = false;
     const load = async () => {
+      if (inFlight) return;
+      inFlight = true;
       const [
         overview,
         health,
-        accountPayload,
-        tradesPayload,
-        executePayload,
-        monitoringPayload,
         taskRunPayload,
         executeTaskPayload,
         executeOrdersPayload,
@@ -1002,10 +985,6 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
       ] = await Promise.all([
         fetchJson<HealthOverviewResponse>("/api/health/overview"),
         fetchJson<ApiHealthResponse>("/api/health"),
-        fetchJson<AccountOverviewResponse>("/api/account/overview"),
-        fetchJson<TradesOverviewResponse>("/api/trades/overview"),
-        fetchJson<ExecutionSnapshot>("/api/execute/overview"),
-        fetchJson<MonitoringPositionsResponse>("/api/positions/monitoring"),
         fetchJson<PipelineTaskRunResponse>("/api/pipeline/task"),
         fetchJson<ExecuteTaskRunResponse>("/api/execute/task"),
         fetchJson<ExecuteOrdersSummaryResponse>("/api/execute/orders-summary"),
@@ -1023,10 +1002,6 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
 
       setOverviewSnapshot(overview);
       setHealthSnapshot(health);
-      setAccountSnapshot(accountPayload?.snapshot ?? null);
-      setTradesOverview(tradesPayload);
-      setExecuteSnapshot(executePayload);
-      setMonitoringSnapshot(monitoringPayload);
       setPipelineTaskRun(taskRunPayload);
       setExecuteTaskRun(executeTaskPayload);
       setExecuteOrdersSummary(executeOrdersPayload);
@@ -1045,16 +1020,19 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
       ];
       const logSources = pythonAnyLogSources.length ? pythonAnyLogSources : fallbackSources;
       setLogEntries(buildLogEntries(logSources, 400, 48));
+      inFlight = false;
     };
 
-    load();
+    void load();
+    const timer = globalThis.setInterval(() => void load(), 20000);
     return () => {
+      globalThis.clearInterval(timer);
       isMounted = false;
     };
   }, []);
 
   const liveTradingStatus = useLiveTradingStatus(
-    typeof healthSnapshot?.trading_ok === "boolean" ? healthSnapshot.trading_ok : null
+    parseTradingStatus(healthSnapshot)
   );
   const rightBadges = useMemo(
     () => buildNavbarBadges(liveTradingStatus),
@@ -1076,60 +1054,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     const source = healthSnapshot?.latest_source
       ? `Source: ${healthSnapshot.latest_source}`
       : null;
-    return source ? `Last run: ${lastRun} / ${source}` : `Last run: ${lastRun}`;
+    return `Diagnostic artifacts only; accounting / entry readiness separate. Last run: ${lastRun}${source ? ` / ${source}` : ""}`;
   }, [healthSnapshot?.last_run_utc, healthSnapshot?.latest_source]);
-
-  const tradesList = useMemo(() => tradesOverview?.trades ?? [], [tradesOverview]);
-
-  const openTrades = useMemo(
-    () => tradesList.filter((trade) => isOpenStatus(trade.status)),
-    [tradesList]
-  );
-
-  const openTradeValue = useMemo(() => {
-    let total = 0;
-    let hasValue = false;
-    openTrades.forEach((trade) => {
-      const qty = parseNumber(trade.qty ?? null);
-      const entryPrice = parseNumber(trade.entry_price ?? null);
-      if (qty !== null && entryPrice !== null) {
-        total += qty * entryPrice;
-        hasValue = true;
-      }
-    });
-    return hasValue ? total : Number.NaN;
-  }, [openTrades]);
-
-  const monitoringPositions = useMemo(
-    () =>
-      openTrades.map((trade) => {
-        const symbol = normalizeSymbol(trade.symbol ?? null);
-        const qty = parseNumber(trade.qty ?? null);
-        const entryPrice = parseNumber(trade.entry_price ?? null);
-        const exitPrice = parseNumber(trade.exit_price ?? null);
-        const currentPrice = exitPrice ?? entryPrice ?? Number.NaN;
-        const dollarPl = parseNumber(trade.realized_pnl ?? null);
-        const costBasis = qty !== null && entryPrice !== null ? qty * entryPrice : null;
-        const percentPl =
-          costBasis !== null && dollarPl !== null ? (dollarPl / costBasis) * 100 : Number.NaN;
-        const sparklineData = Number.isNaN(currentPrice)
-          ? []
-          : Array.from({ length: 6 }, () => currentPrice);
-
-        return {
-          symbol,
-          logoUrl: logoUrlForSymbol(symbol),
-          qty: qty ?? Number.NaN,
-          entryPrice: entryPrice ?? Number.NaN,
-          currentPrice,
-          sparklineData,
-          percentPL: percentPl,
-          dollarPL: dollarPl ?? Number.NaN,
-          costBasis: costBasis ?? Number.NaN,
-        };
-      }),
-    [openTrades]
-  );
 
   const monitoringPositionsFromApi = useMemo(() => {
     const positions = monitoringSnapshot?.positions;
@@ -1155,7 +1081,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
       };
     });
   }, [monitoringSnapshot?.positions]);
-  const hasMonitoringApi = monitoringSnapshot?.ok === true;
+  const hasMonitoringApi = monitoringSnapshot?.ok === true && Array.isArray(monitoringSnapshot.positions);
 
   const pipelineLogRun = useMemo(
     () => parsePipelineLogRun(pipelineLogText),
@@ -1166,71 +1092,18 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     [executeLogText]
   );
 
-  const tradeStats = useMemo(() => {
-    if (!tradesList.length) {
-      return {
-        wins: 0,
-        losses: 0,
-        netPnl: null,
-        winRate: null,
-        filledCount: null,
-      };
-    }
-    let wins = 0;
-    let losses = 0;
-    let netPnl = 0;
-    let filledCount = 0;
-    tradesList.forEach((trade) => {
-      const pnl = parseNumber(trade.realized_pnl ?? null);
-      if (pnl === null) {
-        return;
-      }
-      netPnl += pnl;
-      if (pnl > 0) {
-        wins += 1;
-      } else if (pnl < 0) {
-        losses += 1;
-      }
-      if (isFilledStatus(trade.status)) {
-        filledCount += 1;
-      }
-    });
-    const total = wins + losses;
-    const winRate = total > 0 ? (wins / total) * 100 : null;
-    return { wins, losses, netPnl, winRate, filledCount };
-  }, [tradesList]);
-
-  const openPositions = useMemo<OpenPositionsSummary>(() => {
-    const openCountFromApi = tradesOverview?.open_positions?.count;
-    const openCountFallback = tradesList.length
-      ? tradesList.filter((trade) => isOpenStatus(trade.status)).length
-      : null;
-    const count = typeof openCountFromApi === "number" ? openCountFromApi : openCountFallback;
-    const pnl = parseNumber(tradesOverview?.open_positions?.realized_pnl ?? null);
-    const filledCount = tradesList.length ? tradeStats.filledCount : null;
-    return {
-      count,
-      pnl,
-      pnlPct: null,
-      filledCount,
-      totalCount: tradesList.length,
-    };
-  }, [tradesOverview, tradesList, tradeStats.filledCount]);
-
+  const openPositions = useMemo<OpenPositionsSummary>(() => ({
+    count: hasMonitoringApi ? monitoringPositionsFromApi.length : null,
+    pnl: hasMonitoringApi ? parseNumber(monitoringSnapshot?.summary?.totalOpenPL) : null,
+    pnlPct: null, filledCount: null, totalCount: null,
+  }), [hasMonitoringApi, monitoringPositionsFromApi.length, monitoringSnapshot?.summary?.totalOpenPL]);
   const tradesMetrics = useMemo(() => {
-    const kpis = tradesOverview?.metrics ?? overviewSnapshot?.kpis ?? {};
-    const totalTrades =
-      parseNumber(kpis.total_trades) ??
-      (tradesList.length ? tradesList.length : null) ??
-      parseNumber(overviewSnapshot?.trades_log_rows ?? null);
-    const winRateRaw = parseNumber(kpis.win_rate) ?? tradeStats.winRate ?? null;
-    const winRate = normalizeWinRate(winRateRaw);
-    const netPnl = parseNumber(kpis.net_pnl) ?? tradeStats.netPnl ?? null;
-    return { totalTrades, winRate, netPnl };
-  }, [overviewSnapshot, tradeStats.netPnl, tradeStats.winRate, tradesList.length, tradesOverview]);
+    const kpis = tradesOverview?.performance_status === "VALIDATED_PERFORMANCE" ? tradesOverview.metrics : null;
+    return {totalTrades: parseNumber(kpis?.total_trades), winRate: normalizeWinRate(parseNumber(kpis?.win_rate)), netPnl: parseNumber(kpis?.net_pnl)};
+  }, [tradesOverview]);
 
   const buyingPowerValue = parseNumber(
-    healthSnapshot?.buying_power ?? accountSnapshot?.buying_power ?? accountSnapshot?.equity ?? null
+    accountSnapshot?.buying_power ?? null
   );
 
   const openPositionsDetail = useMemo(() => {
@@ -1287,19 +1160,9 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         : false;
     const executeCycleComplete = executeRecent && executeTaskRun?.rc === 0;
 
-    const ordersSubmitted =
-      executeLogSummary.ordersSubmitted ?? executeSnapshot?.orders_submitted;
-    const ordersFilled =
-      executeOrdersSummary?.orders_filled ?? executeLogSummary.ordersFilled ?? executeSnapshot?.orders_filled;
-    const ordersPlaced =
-      executeOrdersSummary?.orders_filled !== null &&
-      executeOrdersSummary?.orders_filled !== undefined
-        ? executeOrdersSummary.orders_filled
-        : executeLogSummary.filledCount24h !== null
-          ? executeLogSummary.filledCount24h
-          : typeof ordersSubmitted === "number"
-            ? ordersSubmitted
-            : Number.NaN;
+    const ordersSubmitted = executeSnapshot?.orders_submitted;
+    const ordersFilled = (executeOrdersSummary?.ok === true ? executeOrdersSummary.orders_filled : null) ?? executeSnapshot?.orders_filled;
+    const ordersPlaced = typeof ordersSubmitted === "number" ? ordersSubmitted : Number.NaN;
     const successRate =
       typeof ordersSubmitted === "number" &&
       ordersSubmitted > 0 &&
@@ -1337,21 +1200,15 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
           duration: executeDuration,
         },
         ordersPlaced,
-        totalValue:
-          executeOrdersSummary?.total_value !== null &&
-          executeOrdersSummary?.total_value !== undefined
-            ? executeOrdersSummary.total_value
-            : executeLogSummary.filledValue24h !== null
-              ? executeLogSummary.filledValue24h
-              : ordersPlaced === 0
-                ? 0
-                : openTradeValue,
+        totalValue: executeOrdersSummary?.ok === true && executeOrdersSummary.source === "alpaca" && executeOrdersSummary.total_value !== null && executeOrdersSummary.total_value !== undefined
+          ? executeOrdersSummary.total_value : Number.NaN,
         successRate,
         isCycleComplete: executeCycleComplete,
         marketNote: executeMarketNote,
       },
       monitoring: {
-        positions: hasMonitoringApi ? monitoringPositionsFromApi : monitoringPositions,
+        positions: hasMonitoringApi ? monitoringPositionsFromApi : [],
+        available: hasMonitoringApi, sourceStatus: monitoringSource.kind, observedAt: monitoringSnapshot?.observed_at,
       },
     };
   }, [
@@ -1370,6 +1227,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     executeTaskRun?.finished_utc,
     executeTaskRun?.started_utc,
     executeTaskRun?.rc,
+    executeOrdersSummary?.ok,
+    executeOrdersSummary?.source,
     executeOrdersSummary?.orders_filled,
     executeOrdersSummary?.total_value,
     healthSnapshot?.last_run_utc,
@@ -1377,8 +1236,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     healthSnapshot?.trading_ok,
     monitoringPositionsFromApi,
     hasMonitoringApi,
-    monitoringPositions,
-    openTradeValue,
+    monitoringSource.kind,
+    monitoringSnapshot?.observed_at,
     overviewSnapshot?.kpis,
     pipelineTaskRun?.duration_seconds,
     pipelineTaskRun?.finished_utc,
@@ -1396,7 +1255,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   const kpiCards = useMemo(
     () => [
       {
-        title: "Pipeline Health",
+        title: "Pipeline / API diagnostics",
         value: formatPercent(pipelineScore),
         detail: pipelineStatus.label,
         detailTone: pipelineStatus.tone,
@@ -1438,7 +1297,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         value: formatNumber(openPositions?.count ?? null),
         detail: openPositionsDetail,
         detailTone: openPositionsTone,
-        footnote: `Filled orders: ${formatNumber(openPositions?.filledCount ?? null)}`,
+        footnote: `Source: Alpaca | ${monitoringSource.kind} | As of ${formatDateTime(monitoringSnapshot?.observed_at)}`,
         icon: (
           <svg viewBox="0 0 24 24" className="h-5 w-5 text-violet-600" fill="none">
             <path
@@ -1486,6 +1345,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
       openPositions,
       openPositionsDetail,
       openPositionsTone,
+      monitoringSource.kind,
+      monitoringSnapshot?.observed_at,
       pipelineFootnote,
       pipelineScore,
       pipelineStatus.label,
@@ -1497,8 +1358,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   );
 
   const systemStatus: SystemStatusItem[] = useMemo(() => {
-    const tradingOk = healthSnapshot?.trading_ok ?? null;
-    const dataOk = healthSnapshot?.data_ok ?? null;
+    const tradingOk = parseTradingStatus(healthSnapshot);
+    const dataOk = diagnosticsFresh(healthSnapshot) ? healthSnapshot?.data_ok ?? null : null;
     const pipelineRc = healthSnapshot?.pipeline_rc ?? null;
     const feed = healthSnapshot?.feed ? healthSnapshot.feed.toUpperCase() : null;
 
@@ -1509,22 +1370,22 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
 
     return [
       {
-        title: "API Connection",
-        status: tradingOk === true ? "Connected" : tradingOk === false ? "Offline" : "Unknown",
+        title: "Saved API diagnostic",
+        status: tradingOk === true ? "Stored check passed" : tradingOk === false ? "Stored check failed" : "Unknown / stale",
         tone: apiTone,
-        description: tradingOk === true ? "Broker API responding" : "Broker API status unknown",
+        description: "Saved operational check; live broker readiness is separate",
         meta: `Status: ${healthSnapshot?.trading_status ?? "n/a"}`,
       },
       {
         title: "Market Data Feed",
-        status: dataOk === true ? "Streaming" : dataOk === false ? "Delayed" : "Unknown",
+        status: dataOk === true ? "Stored check passed" : dataOk === false ? "Stored check failed" : "Unknown / stale",
         tone: dataTone,
         description: feed ? `Feed: ${feed}` : "Market data feed",
         meta: `Status: ${healthSnapshot?.data_status ?? "n/a"}`,
       },
       {
-        title: "ML Pipeline",
-        status: pipelineRc === 0 ? "Ready" : pipelineRc === null ? "Unknown" : "Degraded",
+        title: "Recorded Pipeline computation",
+        status: pipelineRc === 0 ? "Recorded rc=0" : pipelineRc === null ? "Unknown" : "Recorded failure",
         tone: pipelineTone,
         description: healthSnapshot?.run_type
           ? `Run type: ${healthSnapshot.run_type}`
@@ -1533,6 +1394,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
       },
     ];
   }, [
+    healthSnapshot?.freshness,
     healthSnapshot?.data_ok,
     healthSnapshot?.data_status,
     healthSnapshot?.feed,
@@ -1595,6 +1457,11 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         <div className="pointer-events-none absolute left-0 top-40 h-72 w-72 rounded-full bg-gradient-to-br from-emerald-100 via-white to-slate-100 opacity-60 blur-3xl dark:from-emerald-500/15 dark:via-slate-950/40 dark:to-cyan-500/15 dark:opacity-70" />
 
         <div className="relative mx-auto max-w-[1240px] px-4 sm:px-6 lg:px-8">
+          <p role="status" className="pt-4 text-xs text-secondary">
+            Alpaca account: {accountPayloadSource.kind} (as of {String(accountPayloadSource.payload?.taken_at_utc ?? "unknown")}) |
+            PostgreSQL performance: {tradesPayloadSource.kind} | Broker positions: {monitoringSource.kind} |
+            Execution snapshot: {executePayloadSource.kind}. Stale values are last known observations.
+          </p>
           <section className="pt-4">
             <div className="flex items-center justify-between">
               <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200">Process Status Cards</h2>
@@ -1606,7 +1473,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
 
           <section className="mt-6">
             <div className="grid gap-4 lg:grid-cols-3">
-              <AlpacaCard value={alpacaEquity} />
+              <AlpacaCard value={alpacaEquity} subtitle={`Broker equity: ${accountPayloadSource.kind}`} />
               <PythonAnywhereResources resources={pythonAnywhereResourceRows} />
               <MLDailyImprovements onOpenPipeline={() => onTabSelect?.("ML Pipeline")} />
             </div>

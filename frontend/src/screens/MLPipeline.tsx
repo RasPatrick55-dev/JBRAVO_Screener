@@ -267,7 +267,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
       value: data?.freshness?.label ?? "No data",
       detail: data?.freshness?.reason ?? "Waiting for freshness diagnostics",
       footnote: `Last predict ${formatDateTime(data?.timestamps?.last_predict)}`,
-      tone: (data?.freshness?.stale ? "warning" : "success") as StatusTone,
+      tone: data?.status?.tone ?? "neutral",
       statusLabel: data?.status?.label ?? "No data",
       statusTone: (data?.status?.tone ?? "neutral") as StatusTone,
     },
@@ -291,7 +291,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
       detail:
         data?.monitor?.guard_decision && data.monitor.guard_decision !== "allow"
           ? `Guard ${data.monitor.guard_decision} (${data.monitor.guard_mode ?? "n/a"})`
-          : "Health guard currently allowing enrichment",
+          : data?.monitor?.guard_decision === "allow" ? "Health guard allows enrichment; accounting/entry readiness separate" : "Guard decision unknown",
       footnote: `PSI ${formatDecimal(data?.monitor?.psi_score ?? null)} · Sharpe ${formatDecimal(
         data?.monitor?.recent_sharpe ?? null
       )}`,
@@ -436,7 +436,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                 <DetailRow
                   label="Recommended action"
                   value={formatAction(data?.monitor?.recommended_action ?? "none")}
-                  note={`Guard ${formatAction(data?.monitor?.guard_decision ?? "allow")} / ${
+                  note={`Guard ${formatAction(data?.monitor?.guard_decision ?? "unknown")} / ${
                     data?.monitor?.guard_mode ?? "n/a"
                   }`}
                   variant="amber"

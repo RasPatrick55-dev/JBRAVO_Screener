@@ -1,0 +1,155 @@
+{
+  "fixture_kind": "FICTIONAL_PUBLIC_UI_CONTRACT_TEST_NOT_A_BROKER_CAPTURE",
+  "history": {
+    "account_scope": "configured_postgres_ledger",
+    "accounting_complete": false,
+    "broker_account_match": "unverified",
+    "derived_read_context": {
+      "allocation_state": "ACTIVE",
+      "binding": {
+        "allocation_id": "00000000-0000-4000-8000-000000000001",
+        "allocation_revision": 1,
+        "correction_revision": 0,
+        "cutoff": "2026-10-25T20:54:00+00:00",
+        "evidence_file_sha256": "6856c384cd0d76d185a2b312f020f4f9e665969ad0182f2a18925b91e3f5e01b",
+        "fills_sha256": "ebacebbf25aabe7c5b0713c88471f418d67397a9d1b86acb17bf021e4ba4ea08",
+        "manifest_sha256": "ae3edd3cd3fe9b2f244ca922ed63804e2ccd2d16a9e983607531b4e6078f0bc5",
+        "policy_revision": 2,
+        "record_sha256": "c9d42008f0fe349e25c162ce3725fa6b067c7c217d87f89c461026f6219868e2",
+        "registration_revision": 1,
+        "row_fingerprint": "65054fa322be410e01fd5bf480d4e194b565c59b8f72a6890fb909a8775dd17e",
+        "row_revision": "2026-04-17T19:05:44.607608+00:00",
+        "rule_sha256": "51f51f1b83c3e1e60d6f5df3ecf6e580e35a49db5c559735c55281c2ffd56f53",
+        "trade_id": 110
+      },
+      "checked_at": "2026-10-26T13:04:57+00:00",
+      "registration_status": "ACTIVE",
+      "schema_version": 1,
+      "source": "postgres_current_derived_read",
+      "status": "CURRENT_BINDINGS_VERIFIED"
+    },
+    "disposition_status": "ready",
+    "entry_ready": false,
+    "fees_status": "UNKNOWN",
+    "freshness": "unknown",
+    "has_more": false,
+    "limit": 25,
+    "net_status": "UNKNOWN",
+    "next_before": null,
+    "observed_at": "2026-10-26T13:04:57+00:00",
+    "ok": true,
+    "performance_status": "NOT_QUALIFIED_PHYSICAL_HISTORY",
+    "recovery_complete": false,
+    "rows": [
+      {
+        "accounting_status": "UNQUALIFIED_RECORDED_VALUES",
+        "derived_accounting": {
+          "allocated_fee_cost": "0.01",
+          "as_of": "2026-10-25T20:54:00+00:00",
+          "basis": "CRC110_ALLOCATED_OBSERVED_POSTED_COST_NET_V1",
+          "binding": {
+            "allocation_id": "00000000-0000-4000-8000-000000000001",
+            "allocation_revision": 1,
+            "correction_revision": 0,
+            "cutoff": "2026-10-25T20:54:00+00:00",
+            "evidence_file_sha256": "6856c384cd0d76d185a2b312f020f4f9e665969ad0182f2a18925b91e3f5e01b",
+            "fills_sha256": "ebacebbf25aabe7c5b0713c88471f418d67397a9d1b86acb17bf021e4ba4ea08",
+            "manifest_sha256": "ae3edd3cd3fe9b2f244ca922ed63804e2ccd2d16a9e983607531b4e6078f0bc5",
+            "policy_revision": 2,
+            "record_sha256": "c9d42008f0fe349e25c162ce3725fa6b067c7c217d87f89c461026f6219868e2",
+            "registration_revision": 1,
+            "row_fingerprint": "65054fa322be410e01fd5bf480d4e194b565c59b8f72a6890fb909a8775dd17e",
+            "row_revision": "2026-04-17T19:05:44.607608+00:00",
+            "rule_sha256": "51f51f1b83c3e1e60d6f5df3ecf6e580e35a49db5c559735c55281c2ffd56f53",
+            "trade_id": 110
+          },
+          "bound_row": {
+            "entry_price": "65.0",
+            "entry_time": "2026-04-16T11:00:12.026948+00:00",
+            "exit_price": null,
+            "exit_time": "2026-04-17T19:05:44.628183+00:00",
+            "qty": "30.0",
+            "realized_pnl": null,
+            "row_fingerprint": "65054fa322be410e01fd5bf480d4e194b565c59b8f72a6890fb909a8775dd17e",
+            "status": "CLOSED",
+            "symbol": "CRC",
+            "trade_id": 110,
+            "updated_at": "2026-04-17T19:05:44.607608+00:00"
+          },
+          "execution_binding": "EXACT_COMMON_FIELDS_AND_THREE_ORDER_HASHES",
+          "legacy_validated_performance_eligible": false,
+          "net_pnl": "-63.39",
+          "record_sha256": "c9d42008f0fe349e25c162ce3725fa6b067c7c217d87f89c461026f6219868e2",
+          "rule": "posted_daily_taf_sell_share_largest_remainder_v1",
+          "source": "postgres_derived_accounting",
+          "status": "APPROVED_SCOPED_DERIVED_RECORD",
+          "trade_id": 110
+        },
+        "disposition": "NO_ACTIVE_CASE",
+        "entry_price": 65.0,
+        "entry_time": "2026-04-16T11:00:12.026948+00:00",
+        "exit_price": null,
+        "exit_reason": "POSITION_CLOSED",
+        "exit_time": "2026-04-17T19:05:44.628183+00:00",
+        "qty": 30.0,
+        "realized_pnl": null,
+        "row_fingerprint": "65054fa322be410e01fd5bf480d4e194b565c59b8f72a6890fb909a8775dd17e",
+        "status": "CLOSED",
+        "symbol": "CRC",
+        "trade_id": 110,
+        "updated_at": "2026-04-17T19:05:44.607608+00:00"
+      }
+    ],
+    "source": "postgres",
+    "source_as_of": "2026-04-17T19:05:44.607608+00:00",
+    "status": "ready",
+    "trade_view": "PHYSICAL_HISTORY_UNFILTERED"
+  },
+  "stats": {
+    "accounting_complete": false,
+    "accounting_input_status": "NOT_INSPECTED",
+    "db_ready": false,
+    "db_source_of_truth": true,
+    "excluded_count": 0,
+    "ok": false,
+    "performance_status": "HELD_UNVALIDATED_PERFORMANCE",
+    "policy_validation_status": "VALIDATED_POLICY",
+    "policy_visibility_scope": "POLICY_ONLY",
+    "range": "all",
+    "recorded_to_db": false,
+    "recovery_complete": false,
+    "rows": [],
+    "source": "postgres",
+    "source_detail": "trades-db-held-unvalidated-performance",
+    "trade_policy": {
+      "policy": {
+        "scope": "VALIDATED_PERFORMANCE",
+        "policy_revision": 2,
+        "allocation_overlay": {
+          "status": "VALIDATED",
+          "policy_revision": 2,
+          "active_count": 1,
+          "allocations": [
+            {
+              "trade_id": 110,
+              "allocation_id": "00000000-0000-4000-8000-000000000001",
+              "state": "ACTIVE",
+              "allocation_revision": 1,
+              "entry_quantity": "30",
+              "exit_quantity": "30",
+              "gross_result": "-63.38",
+              "financial_eligible": false,
+              "fees": null,
+              "net": null,
+              "fees_status": "UNKNOWN",
+              "net_status": "UNKNOWN"
+            }
+          ]
+        }
+      }
+    },
+    "unresolved_trade_ids": null
+  },
+  "received_at": "2026-10-26T13:04:57+00:00",
+  "fixture_notes": "CRC110 and three source/rule pin literals exercise the code namespace only. UUIDs and row/report hashes are fictional, no native order/activity/account IDs or broker evidence are supplied. Positive UI tags do not qualify real accounting."
+}
