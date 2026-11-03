@@ -203,7 +203,7 @@ def reconstruct(policy, records, fills, owner_records, *, versions=None):
             # The canonical reader already validates these exact immutable fill
             # identities, quantities and clocks against current native rows.
             allocation = allocations[identifier]
-            canonical = [fill for fill in G.A.FILLS if fill[1] in allocation.activity_ids]
+            canonical = list(allocation.clock_fills) if allocation.clock_fills else [fill for fill in G.A.FILLS if fill[1] in allocation.activity_ids]
             require({fill[1] for fill in canonical} == set(allocation.activity_ids), 'ALLOCATION_CLOCK_INPUT_MISSING')
             outgoing = [fill for fill in canonical if fill[2] == 'sell']
             incoming = [fill for fill in canonical if fill[2] == 'buy']

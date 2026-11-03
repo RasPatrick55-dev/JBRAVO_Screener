@@ -20,6 +20,7 @@ REPORT_PATH = 'data/paper_gross_performance.json'
 MAX_REPORT_BYTES = 4 * 1024 * 1024
 SOURCE_PATHS = ('scripts/gross_paper_accounting.py', 'scripts/db.py',
     'scripts/trade_disposition.py', 'scripts/trade_allocation.py',
+    'scripts/owned_exit_repair.py', 'scripts/owned_exit_clock.py', 'scripts/owned_exit_transaction.py',
     'scripts/metrics.py', 'scripts/trade_performance.py',
     'dashboards/data_io.py', 'dashboards/dashboard_app.py',
     'scripts/primary_pipeline.py', 'scripts/run_pipeline.py', 'scripts/pipeline_postflight.py')

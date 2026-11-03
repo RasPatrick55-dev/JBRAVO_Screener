@@ -37,7 +37,7 @@ def plan_table():
         ' FROM public.trade_allocation_order_claims ':('xmin::text',)}
     for item in CANONICAL_PLANS:
         plan=dict(item);sql=item['sql']
-        matches=[(marker,columns) for marker,columns in bindings.items() if marker in sql]
+        matches=[] if plan.get('explicit_versions') else [(marker,columns) for marker,columns in bindings.items() if marker in sql]
         need(len(matches)<=1,'EXECUTION_PLAN_BINDING_AMBIGUOUS')
         if matches:
             marker,columns=matches[0]
@@ -315,3 +315,13 @@ CANONICAL_PLANS = [{'sql': 'SET LOCAL search_path = pg_catalog', 'kind': 'contro
   'kind': 'canonical',
   'arity': 2,
   'order': 'q.c0'}]
+
+# Additional closed canonical plans; existing CRC110 plans and limits stay intact.
+from scripts import owned_exit_repair as _O, owned_exit_transaction as _X
+for _plan in CANONICAL_PLANS:
+    if _plan['sql'].startswith('SELECT c.allocation_id::text,c.state,c.allocation_revision,c.request::text,c.manifest::text,'):
+        _plan['sql']=_plan['sql'].replace('a.policy_revision FROM','a.policy_revision,pg_catalog.to_jsonb(c)->>\'group_approval_ref\' FROM')
+        _plan['arity']=10
+CANONICAL_PLANS.extend([
+ dict(sql=_X.ATTEST_SQL,kind='canonical',arity=2,order='q.c0,q.c1',explicit_versions=True),
+ dict(sql=_O.STATE_SQL,kind='canonical',arity=2,order='q.c0,q.c1',explicit_versions=True)])
