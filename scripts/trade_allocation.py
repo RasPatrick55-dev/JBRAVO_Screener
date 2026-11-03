@@ -228,6 +228,7 @@ class Allocation:
     fees: None = None
     net: None = None
     financial_eligible: bool = False
+    clock_fills: tuple = ()
 
     @property
     def allocation_revision(self):
@@ -462,14 +463,21 @@ def read_active(cursor, expected_identity, policy_revision, excluded_ids):
     if not schema_present(cursor):
         return result_read('MIGRATION_PENDING', (), expected_identity, policy_revision)
     cursor.execute('SELECT c.allocation_id::text,c.state,c.allocation_revision,c.request::text,c.manifest::text,'
-                   'a.request_digest,a.request::text,a.result::text,a.policy_revision '
+                   "a.request_digest,a.request::text,a.result::text,a.policy_revision,pg_catalog.to_jsonb(c)->>'group_approval_ref' "
                    'FROM public.trade_allocation_cases c LEFT JOIN public.trade_allocation_audit a '
                    "ON a.approval_ref=c.request->>'approval_ref' WHERE c.state IN ('ACTIVE','REVOKED') ORDER BY c.trade_id LIMIT 17")
     active = []
     reserved = {}
     reservation_cases = []
     seen = set()
-    for case_id, state, case_revision, saved_request, saved_manifest, digest, audit_request, audit_result, audit_revision in rows(cursor, 16):
+    extensions = []
+    for record in rows(cursor, 16):
+        case_id, state, case_revision, saved_request, saved_manifest, digest, audit_request, audit_result, audit_revision, group_ref = record
+        candidate = D.document(saved_manifest)
+        if candidate.get('classification') == 'OWNED_EXIT_COHORT_V1':
+            extensions.append(record)
+            continue
+        require(group_ref is None, 'LEGACY_GROUP_REFUSED')
         request, manifest = validate_request(saved_request, saved_manifest, expected_identity)
         require(request['action'] == ('APPLY' if state == 'ACTIVE' else 'REVOKE')
                 and request['allocation_id'] == case_id and state in ('ACTIVE','REVOKED')
@@ -496,6 +504,12 @@ def read_active(cursor, expected_identity, policy_revision, excluded_ids):
             active.append(Allocation(case_id, 110, state, case_revision, Decimal(30), Decimal(30), Decimal('-63.38'),
                                      request['approval_ref'], tuple(item[1] for item in FILLS),
                                      tuple(ORDERS), tuple(item[1] for item in FILLS)))
+    if extensions:
+        from scripts import owned_exit_repair as O, owned_exit_transaction as X
+        extra, claims, cases = O.read_extensions(cursor,extensions,expected_identity,policy_revision,excluded_ids,
+            allocation_type=Allocation,attest=X.attest_extension)
+        require(not set(claims).intersection(reserved) and not {x.trade_id for x in extra}.intersection(seen),'RESERVED_OWNER_CONFLICT')
+        active.extend(extra);reserved.update(claims);reservation_cases.extend(cases)
     return result_read('VALIDATED', active, expected_identity, policy_revision, reserved, reservation_cases)
 
 def change_allocation(conn, request, manifest, identity):
