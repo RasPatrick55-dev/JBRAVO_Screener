@@ -143,7 +143,8 @@ def publish(primary,*,env,base_dir=ROOT):
             run_id=selection_id(primary['run_id']),primary_run_id=primary['run_id'],
             parent_report_sha256=digest(primary),source_bindings=deepcopy(primary['source_bindings']),
             session=primary['session'],specification=specification,selection=selection,
-            finished_at=now.isoformat(),paper_only=True,research_qualified=False,order_submission_authorized=False)
+            finished_at=now.isoformat(),paper_only=True,research_qualified=False,
+            execution_authorized=False,order_submission_authorized=False)
         from scripts import pipeline_postflight as health
         require(all(health._binding(health._read(Path(base_dir)/n,health.MAX_SOURCE_BYTES))==pin
                     for n,pin in record['source_bindings'].items()),'unified_selection_sources_changed')
@@ -173,6 +174,7 @@ def read_selection(connection,parent,*,now,base_dir=ROOT):
         record['parent_report_sha256']==parent['primary_report_sha256'] and
         record['source_bindings']==parent['source_bindings'] and record['session']==parent['session'] and
         record.get('paper_only') is True and record.get('research_qualified') is False and
+        record.get('execution_authorized') is False and
         record.get('order_submission_authorized') is False and
         datetime.fromisoformat(record['finished_at'])<=now,'unified_selection_lineage_changed')
     handoffs,references,selection=inputs(connection,parent,now=now,base_dir=base_dir)

@@ -65,6 +65,13 @@ report hash before reporting success. Only then can the normal wrapper create
 PostgreSQL selection, complete strategy population, ranking and source bindings;
 a control receipt alone cannot authorize a purchase.
 
+Unified research records explicitly retain `research_qualified=false` and
+`execution_authorized=false`, as required by the existing research-table JSON
+constraint, alongside `order_submission_authorized=false`. Publication supplies
+these fields and readback requires their exact Boolean values. Missing authority
+fields cannot be treated as false. This does not change the database schema or
+the separate paper-execution approval and preflight rules.
+
 If the primary fails before it can publish a stage report, its wrapper writes
 `reports/pipeline_postflight/failure-<invocation-id>.json` and a hash-bound
 `failed-primary.json` pointer. Pipeline, postflight and completion failures all
