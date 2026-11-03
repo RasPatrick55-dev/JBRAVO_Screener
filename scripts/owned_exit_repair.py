@@ -344,5 +344,6 @@ def read_extensions(cursor,records,identity,policy_revision,excluded_ids,*,alloc
                  and claim.get('activity_type')=='FILL' and number(claim.get('quantity'))==number(f['qty']),'FILL_CLAIM')
         reservation_cases.append(dict(allocation_id=aid,trade_id=tid,state=state,allocation_revision=revision,approval_ref=request['approval_ref']))
         if state=='ACTIVE':active.append(allocation_type(aid,tid,state,revision,info['quantity'],info['quantity'],info['gross'],
-            request['approval_ref'],(manifest['group_approval_ref'],),tuple(info['orders']),tuple(info['activity_ids']),clock_fills=info['clock_fills']))
+            request['approval_ref'],(manifest['group_approval_ref'],),tuple(info['orders']),tuple(info['activity_ids']),clock_fills=info['clock_fills'],
+            row_fingerprint=D.fingerprint(manifest['row_snapshot']['row'])))
     return active,reserved,reservation_cases

@@ -229,6 +229,7 @@ class Allocation:
     net: None = None
     financial_eligible: bool = False
     clock_fills: tuple = ()
+    row_fingerprint: str | None = None
 
     @property
     def allocation_revision(self):
@@ -241,6 +242,25 @@ class Allocation:
                 'fees': None, 'net': None, 'fees_status': 'UNKNOWN', 'net_status': 'UNKNOWN',
                 'financial_eligible': False, 'audit_refs': [self.approval_ref], 'source_refs': list(self.source_refs),
                 'order_ids': list(self.order_ids), 'activity_ids': list(self.activity_ids)}
+
+
+def validate_bound_trade(allocation, snapshot):
+    """Match the full row attested by the canonical allocation reader.
+
+    CRC110 retains its original fixed evidence. New groups carry only an
+    in-memory fingerprint reconstructed from their existing audited manifest;
+    no schema, persisted metadata, economics or eligibility changes.
+    """
+    D = policy_module()
+    snapshot = bounded_document(snapshot)
+    require(type(allocation) is Allocation and allocation.state == 'ACTIVE'
+            and snapshot.get('trade_id') == allocation.trade_id, 'ROW_CHANGED')
+    if allocation.trade_id == 110:
+        return validate_trade(snapshot)
+    require(type(allocation.row_fingerprint) is str, 'ROW_BINDING_UNAVAILABLE')
+    D.digest(allocation.row_fingerprint)
+    require(D.fingerprint(snapshot) == allocation.row_fingerprint, 'ROW_CHANGED')
+    return snapshot
 
 @dataclass(frozen=True)
 class AllocationRead:
