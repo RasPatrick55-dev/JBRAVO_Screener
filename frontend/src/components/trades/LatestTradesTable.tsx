@@ -1,14 +1,22 @@
 import { formatCurrency, formatNumber, formatSignedCurrency } from "../dashboard/formatters";
 import type { LatestTradeRow } from "./types";
+import type { ReactNode } from "react";
+import { formatAllocationGrossCurrency } from "./AllocationGrossPanel";
 
 interface LatestTradesTableProps {
   rows: LatestTradeRow[];
   isLoading?: boolean;
   onSymbolSelect?: (symbol: string) => void;
   getSymbolHref?: (symbol: string) => string | null | undefined;
+  sourceNote?: string;
+  sourceDetails?: ReactNode;
+  emptyMessage?: string;
+  plLabel?: string;
+  footer?: ReactNode;
 }
 
-const formatDate = (value: string): string => {
+const formatDate = (value: string | null): string => {
+  if (value === null) return "--";
   const trimmed = value.trim();
   if (!trimmed) {
     return "--";
@@ -21,6 +29,7 @@ const formatDate = (value: string): string => {
     month: "numeric",
     day: "numeric",
     year: "numeric",
+    timeZone: "UTC",
   });
 };
 
@@ -31,7 +40,8 @@ const symbolActionFocusClass =
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 " +
   "focus-visible:outline-slate-400 dark:focus-visible:outline-slate-500";
 
-const plToneClass = (value: number): string => {
+const plToneClass = (value: number | null): string => {
+  if (value === null) return "text-primary";
   if (value > 0) {
     return "jbravo-text-success";
   }
@@ -78,10 +88,17 @@ export default function LatestTradesTable({
   isLoading = false,
   onSymbolSelect,
   getSymbolHref,
+  sourceNote,
+  sourceDetails,
+  emptyMessage = "No recent closed trades available.",
+  plLabel = "Total P/L",
+  footer,
 }: LatestTradesTableProps) {
   return (
     <section className="rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-emerald" aria-label="Latest trades">
       <h2 className="font-arimo text-sm font-semibold uppercase tracking-[0.08em] text-primary">LATEST TRADES</h2>
+      {sourceNote ? <p className="mt-1 text-xs text-secondary" role="status">{sourceNote}</p> : null}
+      {sourceDetails ? <details className="mt-1 text-xs text-secondary"><summary>Source details</summary>{sourceDetails}</details> : null}
 
       <div className="mt-3 sm:hidden">
         {isLoading ? (
@@ -99,7 +116,7 @@ export default function LatestTradesTable({
 
         {!isLoading && rows.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-secondary dark:border-slate-700">
-            No recent closed trades available.
+            {emptyMessage}
           </div>
         ) : null}
 
@@ -117,9 +134,11 @@ export default function LatestTradesTable({
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       {renderSymbol(symbol, symbolHref, onSymbolSelect, symbolMobileTextClass)}
+                      {row.symbol === "Unknown" && row.tradeId !== undefined ? <small className="block text-xs text-secondary">#{row.tradeId} | Symbol unknown</small> : null}
                     </div>
                     <span className={`font-cousine text-sm font-bold tabular-nums ${pnlTone}`}>
                       {formatSignedCurrency(row.totalPL)}
+                      {row.grossPL != null ? <small className="block text-xs text-secondary">Gross {formatAllocationGrossCurrency(row.grossPL)}{row.grossStale ? " (stale)" : ""}{row.derivedObservedNet ? "" : "; fees/net unknown"}</small> : null}
                     </span>
                   </div>
 
@@ -130,7 +149,9 @@ export default function LatestTradesTable({
                     <MobileField label="Total Shares" value={formatNumber(row.totalShares)} />
                     <MobileField label="Avg Entry Price" value={formatCurrency(row.avgEntryPrice)} />
                     <MobileField label="Price Sold" value={formatCurrency(row.priceSold)} />
+                    {row.derivedObservedNet ? <><MobileField label="Allocated fees (observed)" value={formatAllocationGrossCurrency(row.derivedObservedNet.fees)}/><MobileField label="Net after observed fees" value={formatAllocationGrossCurrency(row.derivedObservedNet.net)}/></> : null}
                   </div>
+                  {row.derivedObservedNet ? <p className="mt-1 text-xs text-secondary" title={row.derivedObservedNet.asOf}>Execution-cohort derived costs as of {row.derivedObservedNet.asOf.slice(0,10)} UTC; not whole-history validated performance.</p> : null}
                 </article>
               );
             })}
@@ -140,7 +161,7 @@ export default function LatestTradesTable({
 
       <div className="mt-3 hidden max-h-[336px] overflow-auto sm:block">
         <table className="w-full table-fixed">
-          <caption className="sr-only">Latest closed trades with buy/sell dates, shares, and total P/L.</caption>
+          <caption className="sr-only">Recorded ledger trades with UTC dates, shares and qualified source labels.</caption>
           <colgroup>
             <col className="w-[12%]" />
             <col className="w-[13%]" />
@@ -175,7 +196,7 @@ export default function LatestTradesTable({
                 Price Sold
               </th>
               <th scope="col" className="px-1.5 py-1.5 text-center">
-                Total P/L
+                {plLabel}
               </th>
             </tr>
           </thead>
@@ -193,7 +214,7 @@ export default function LatestTradesTable({
             {!isLoading && rows.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-2 py-8 text-center text-sm text-secondary">
-                  No recent closed trades available.
+                  {emptyMessage}
                 </td>
               </tr>
             ) : null}
@@ -211,6 +232,7 @@ export default function LatestTradesTable({
                     >
                       <th scope="row" className="truncate px-1.5 py-2 text-center">
                         {renderSymbol(symbol, symbolHref, onSymbolSelect, symbolDesktopTextClass)}
+                        {row.tradeId !== undefined ? <small className="block text-secondary">#{row.tradeId} {row.status}{row.disposition && row.disposition !== "NO_ACTIVE_CASE" ? ` / ${row.disposition}` : ""}</small> : null}
                       </th>
                       <td className="font-cousine truncate px-1.5 py-2 text-center text-secondary">{formatDate(row.buyDate)}</td>
                       <td className="font-cousine truncate px-1.5 py-2 text-center text-secondary">{formatDate(row.sellDate)}</td>
@@ -228,6 +250,8 @@ export default function LatestTradesTable({
                       </td>
                       <td className={`font-cousine px-1.5 py-2 text-center font-bold tabular-nums ${pnlTone}`}>
                         {formatSignedCurrency(row.totalPL)}
+                        {row.grossPL != null ? <small className="block text-secondary">Gross {formatAllocationGrossCurrency(row.grossPL)}{row.grossStale ? " (stale)" : ""}{row.derivedObservedNet ? "" : "; fees/net unknown"}</small> : null}
+                        {row.derivedObservedNet ? <small className="block text-secondary" title={row.derivedObservedNet.asOf}>Allocated fees {formatAllocationGrossCurrency(row.derivedObservedNet.fees)}; observed-cost net {formatAllocationGrossCurrency(row.derivedObservedNet.net)} (as of {row.derivedObservedNet.asOf.slice(0,10)} UTC)</small> : null}
                       </td>
                     </tr>
                   );
@@ -236,6 +260,7 @@ export default function LatestTradesTable({
           </tbody>
         </table>
       </div>
+      {footer}
     </section>
   );
 }

@@ -82,7 +82,10 @@ class Cursor:
             return self.trigger_metadata
         if 'FROM public.trade_allocation_audit a JOIN' in self.current_sql:
             return self.audit_history
-        return self.many.pop(0)
+        result=self.many.pop(0)
+        if self.current_sql.startswith('SELECT c.allocation_id::text,c.state,c.allocation_revision,c.request::text,c.manifest::text,'):
+            return [tuple(row)+(None,) if len(row)==9 else tuple(row) for row in result]
+        return result
 
 class Connection:
     autocommit=False

@@ -12,6 +12,8 @@ export interface ExecuteSummaryResponse {
   filled?: number | null;
   rejected?: number | null;
   result_pl_usd?: number | null;
+  result_pl_source?: string | null;
+  performance_status?: string | null;
   source?: string;
   source_detail?: string;
 }

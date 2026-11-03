@@ -1,0 +1,70 @@
+{
+  "populated": {
+    "ok": true,
+    "source": "postgres",
+    "run_ts_utc": "2026-10-28T00:00:00+00:00",
+    "rows": [
+      {
+        "symbol": "SYN",
+        "signal_id": "1111111111111111111111111111111111111111111111111111111111111111",
+        "strategy_id": "trend_pullback_reclaim_qualifying_close_v2",
+        "strategy_version": "2",
+        "definition_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "backtest_result_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "win_rate_pct": 100.0,
+        "net_pnl": 12.34,
+        "expectancy": 12.34,
+        "profit_factor": 1.02,
+        "max_drawdown_cash": 2.5,
+        "sample_status": "COMPLETED_SIGNALS",
+        "rank": 1,
+        "setup_score": 74,
+        "metrics_result_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "symbol": "FIX",
+        "signal_id": "2222222222222222222222222222222222222222222222222222222222222222",
+        "strategy_id": "bull_flag_companion_v1",
+        "strategy_version": "1",
+        "definition_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "backtest_result_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "win_rate_pct": 50.0,
+        "net_pnl": 6.17,
+        "expectancy": 3.085,
+        "profit_factor": 1.02,
+        "max_drawdown_cash": 2.5,
+        "sample_status": "COMPLETED_SIGNALS",
+        "rank": 2,
+        "setup_score": 73,
+        "metrics_result_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    ],
+    "rows_final": 2,
+    "strategy_id": "ALL_STRATEGIES",
+    "strategy_version": "1",
+    "definition_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "metric_basis": "STRATEGY_RESEARCH_SIMULATION",
+    "strategy_priority": false,
+    "metrics_status": "COMPLETED_UNIFIED_SETUP_METRICS"
+  },
+  "empty": {
+    "ok": true,
+    "source": "postgres",
+    "run_ts_utc": "2026-10-28T00:00:00+00:00",
+    "rows": [],
+    "rows_final": 0,
+    "strategy_id": "ALL_STRATEGIES",
+    "strategy_version": "1",
+    "definition_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "metric_basis": "STRATEGY_RESEARCH_SIMULATION",
+    "strategy_priority": false,
+    "metrics_status": "COMPLETED_UNIFIED_SETUP_METRICS"
+  },
+  "fixture_kind": "SYNTHETIC: exact retained dashboard_reports projection; not live results or strategy attestation"
+}

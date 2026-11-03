@@ -18,6 +18,9 @@ export interface Position {
 
 export interface MonitoringPositionsCardProps {
   positions: Position[];
+  available?: boolean;
+  sourceStatus?: string;
+  observedAt?: string | null;
 }
 
 const plToneClass = (value: number | null | undefined) => {
@@ -53,31 +56,17 @@ const symbolFromLogoUrl = (logoUrl: string | undefined) => {
   return null;
 };
 
-export default function MonitoringPositionsCard({ positions }: MonitoringPositionsCardProps) {
-  const hasPositions = positions && positions.length > 0;
-  const dollarValues = hasPositions
-    ? positions.map((position) => position.dollarPL).filter((value) => Number.isFinite(value))
-    : [];
-  const totalDollar =
-    dollarValues.length > 0 ? dollarValues.reduce((sum, value) => sum + value, 0) : null;
-  const percentValues = hasPositions
-    ? positions.map((position) => position.percentPL).filter((value) => Number.isFinite(value))
-    : [];
-  const avgPercent =
-    percentValues.length > 0
-      ? percentValues.reduce((sum, value) => sum + value, 0) / percentValues.length
-      : null;
-  const costValues = hasPositions
-    ? positions
-        .map((position) => position.costBasis)
-        .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
-    : [];
-  const totalCost =
-    costValues.length > 0 ? costValues.reduce((sum, value) => sum + value, 0) : null;
-  const portfolioPercent =
-    totalDollar !== null && totalCost && totalCost !== 0
-      ? (totalDollar / totalCost) * 100
-      : avgPercent;
+export default function MonitoringPositionsCard({ positions, available = true, sourceStatus, observedAt }: MonitoringPositionsCardProps) {
+  const hasPositions = available && positions.length > 0;
+  // A partial sum cannot stand in for total broker exposure. Successful empty is zero.
+  const dollarValues = positions.map(position => position.dollarPL);
+  const totalDollar = available && dollarValues.every(Number.isFinite)
+    ? dollarValues.reduce((sum, value) => sum + value, 0) : null;
+  const costValues = positions.map(position => position.costBasis);
+  const totalCost = available && costValues.every((value): value is number => typeof value === "number" && Number.isFinite(value))
+    ? (costValues as number[]).reduce((sum, value) => sum + value, 0) : null;
+  const portfolioPercent = totalDollar !== null && totalCost !== null && totalCost > 0
+    ? totalDollar / totalCost * 100 : null;
   const plSparklineFor = (position: Position) => {
     if (!position.sparklineData || position.sparklineData.length === 0) {
       return [];
@@ -87,7 +76,7 @@ export default function MonitoringPositionsCard({ positions }: MonitoringPositio
     if (Number.isFinite(entryPrice) && Number.isFinite(qty)) {
       return position.sparklineData.map((price) => (price - entryPrice) * qty);
     }
-    return position.sparklineData;
+    return [];
   };
 
   return (
@@ -114,13 +103,14 @@ export default function MonitoringPositionsCard({ positions }: MonitoringPositio
               <h3 className="text-[15px] font-bold leading-[22px] text-white">
                 Monitoring Positions
               </h3>
-              <span className="text-[11px] text-emerald-100/80">Live portfolio exposure</span>
+              <span className="text-[11px] text-emerald-100/80">Alpaca broker exposure</span>
             </div>
           </div>
-          <StatusChip label={`${positions.length} OPEN`} tone="active" />
+          <StatusChip label={available ? `${sourceStatus === "stale" ? "LAST KNOWN " : ""}${positions.length} OPEN` : "EXPOSURE UNKNOWN"} tone={available && sourceStatus !== "stale" ? "active" : "neutral"} />
         </div>
       </div>
 
+      <p className="mt-2 text-xs text-secondary">Source: Alpaca | Status: {sourceStatus ?? (available ? "available" : "unavailable")} | Observed UTC: {observedAt ?? "unknown"}</p>
       <div className="mt-3 flex flex-col gap-3">
         <div className="hidden grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] items-center gap-4 text-[11px] font-bold uppercase tracking-[0.08em] text-cyan-200/70 sm:grid">
           <span>Position</span>
@@ -194,7 +184,7 @@ export default function MonitoringPositionsCard({ positions }: MonitoringPositio
             })
           ) : (
             <div className="rounded-xl border border-emerald-400/30 bg-slate-950/60 p-4 text-[13px] leading-[18px] text-slate-300 shadow-[0_0_18px_-12px_rgba(34,211,238,0.35)]">
-              No open positions available.
+              {available ? "No open broker positions." : "Broker position count and exposure are unknown."}
             </div>
           )}
         </div>

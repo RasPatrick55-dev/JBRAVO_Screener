@@ -2,28 +2,28 @@ import { formatNumber, formatSignedCurrency } from "../dashboard/formatters";
 import { positionTableGridColumns } from "./layout";
 
 export interface PositionSummaryProps {
-  totalShares: number;
-  totalOpenPL: number;
-  avgDaysHeld: number;
-  totalCapturedPL: number;
+  totalShares: number | null;
+  totalOpenPL: number | null;
+  avgDaysHeld: number | null;
+  totalCapturedPL: number | null;
 }
 
 const daysFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 1,
 });
 
-const toneForValue = (value: number) => {
-  if (value > 0) {
+const toneForValue = (value: number | null) => {
+  if (value !== null && value > 0) {
     return "text-accent-green";
   }
-  if (value < 0) {
+  if (value !== null && value < 0) {
     return "text-accent-red";
   }
   return "text-slate-100";
 };
 
-const formatDays = (value: number) => {
-  if (!Number.isFinite(value)) {
+const formatDays = (value: number | null) => {
+  if (value === null || !Number.isFinite(value)) {
     return "--";
   }
   return daysFormatter.format(value);

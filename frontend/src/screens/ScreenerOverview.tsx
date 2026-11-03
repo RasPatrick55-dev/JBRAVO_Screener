@@ -33,7 +33,7 @@ export default function ScreenerOverview({ activeTab, onTabSelect }: ScreenerOve
   );
 
   return (
-    <div className="dark min-h-screen bg-slate-50 font-['Manrope'] text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+    <div className="dark min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
       <NavbarDesktop tabs={navTabs} rightBadges={rightBadges} onTabSelect={onTabSelect} />
       <main className="relative pb-12 pt-[calc(var(--app-nav-height,208px)+16px)]">
         <div className="pointer-events-none absolute -top-28 right-0 h-72 w-72 rounded-full bg-gradient-to-br from-cyan-300/20 via-sky-200/10 to-transparent blur-3xl dark:from-cyan-500/18 dark:via-blue-500/12 dark:to-transparent" />

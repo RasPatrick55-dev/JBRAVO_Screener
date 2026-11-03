@@ -5,6 +5,9 @@ import type { RangeKey, RangeRowMetrics } from "./types";
 interface TradesPerformanceBoardProps {
   rows: RangeRowMetrics[];
   isLoading?: boolean;
+  statusMessage?: string | null;
+  sourceNote?: string;
+  gross?: boolean;
 }
 
 const percentFormatter = new Intl.NumberFormat("en-US", {
@@ -26,7 +29,8 @@ const rangeOrder: Record<RangeKey, number> = {
 
 const metricLabelClass = "font-arimo text-[10px] font-semibold uppercase tracking-[0.08em] text-secondary";
 
-const plToneClass = (value: number): string => {
+const plToneClass = (value: number | null): string => {
+  if (value === null) return "text-primary";
   if (value > 0) {
     return "jbravo-text-success";
   }
@@ -48,6 +52,9 @@ function MobileMetric({ label, value, toneClass = "text-primary" }: { label: str
 export default function TradesPerformanceBoard({
   rows,
   isLoading = false,
+  statusMessage = null,
+  sourceNote,
+  gross = false,
 }: TradesPerformanceBoardProps) {
   const sortedRows = useMemo(
     () => [...rows].sort((left, right) => rangeOrder[left.key] - rangeOrder[right.key]),
@@ -57,6 +64,7 @@ export default function TradesPerformanceBoard({
   return (
     <section className="rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-cyan" aria-label="Performance board">
       <h2 className="sr-only">Performance board</h2>
+      {sourceNote ? <p className="mb-2 text-xs text-secondary" role="status">{sourceNote}</p> : null}
 
       <div className="sm:hidden">
         {isLoading ? (
@@ -74,7 +82,7 @@ export default function TradesPerformanceBoard({
 
         {!isLoading && sortedRows.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-secondary dark:border-slate-700">
-            No trade performance metrics yet.
+            {statusMessage ?? "No trade performance metrics yet."}
           </div>
         ) : null}
 
@@ -89,20 +97,21 @@ export default function TradesPerformanceBoard({
                   </span>
                 </div>
 
+                {gross && row.coverage ? <p className="text-xs text-secondary">{row.coverage.included} included / {row.coverage.excluded} excluded / {row.coverage.unknown} unknown</p> : null}
                 <div className="mt-2 grid grid-cols-2 gap-2">
-                  <MobileMetric label="Win Rate" value={`${percentFormatter.format(row.winRatePct)}%`} />
+                  <MobileMetric label={gross ? "Gross Win Rate (known)" : "Win Rate"} value={row.winRatePct === null ? "--" : `${percentFormatter.format(row.winRatePct)}%`} />
                   <MobileMetric
-                    label="Total P/L"
+                    label={gross ? "Known Gross P/L" : "Total P/L"}
                     value={formatSignedCurrency(row.totalPL)}
                     toneClass={plToneClass(row.totalPL)}
                   />
                   <MobileMetric
-                    label="Top Trade"
+                    label={gross ? "Best Gross Trade" : "Top Trade"}
                     value={`${row.topTrade.symbol} ${formatSignedCurrency(row.topTrade.pl)}`}
                     toneClass={plToneClass(row.topTrade.pl)}
                   />
                   <MobileMetric
-                    label="Worst Loss"
+                    label={gross ? "Worst Gross Trade" : "Worst Loss"}
                     value={`${row.worstLoss.symbol} ${formatSignedCurrency(row.worstLoss.pl)}`}
                     toneClass={plToneClass(row.worstLoss.pl)}
                   />
@@ -129,16 +138,16 @@ export default function TradesPerformanceBoard({
                 Range
               </th>
               <th scope="col" className="px-2 py-1.5 text-center">
-                Win Rate
+                {gross ? "Gross Win Rate" : "Win Rate"}
               </th>
               <th scope="col" className="px-2 py-1.5 text-center">
-                Total P/L
+                {gross ? "Known Gross P/L" : "Total P/L"}
               </th>
               <th scope="col" className="px-2 py-1.5 text-center">
-                Top Trade
+                {gross ? "Best Gross Trade" : "Top Trade"}
               </th>
               <th scope="col" className="px-2 py-1.5 text-center">
-                Worst Loss
+                {gross ? "Worst Gross Trade" : "Worst Loss"}
               </th>
               <th scope="col" className="px-2 py-1.5 text-center">
                 Trades
@@ -165,7 +174,7 @@ export default function TradesPerformanceBoard({
                   colSpan={6}
                   className="rounded-xl border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-secondary dark:border-slate-700"
                 >
-                  No trade performance metrics yet.
+                  {statusMessage ?? "No trade performance metrics yet."}
                 </td>
               </tr>
             ) : null}
@@ -184,34 +193,35 @@ export default function TradesPerformanceBoard({
                         {row.label}
                       </th>
                       <td className="px-2 py-2.5 text-center">
-                        <p className={metricLabelClass}>Win Rate</p>
-                        <p className="font-cousine mt-1 text-sm font-bold text-primary tabular-nums">
-                          {percentFormatter.format(row.winRatePct)}%
+                        {!gross ? <p className={metricLabelClass}>Win Rate</p> : null}
+                        <p className={`font-cousine ${gross ? "" : "mt-1 "}text-sm font-bold text-primary tabular-nums`}>
+                          {row.winRatePct === null ? "--" : `${percentFormatter.format(row.winRatePct)}%`}
                         </p>
                       </td>
                       <td className="px-2 py-2.5 text-center">
-                        <p className={metricLabelClass}>Total P/L</p>
-                        <p className={`font-cousine mt-1 text-sm font-bold tabular-nums ${totalTone}`}>
+                        {!gross ? <p className={metricLabelClass}>Total P/L</p> : null}
+                        <p className={`font-cousine ${gross ? "" : "mt-1 "}text-sm font-bold tabular-nums ${totalTone}`}>
                           {formatSignedCurrency(row.totalPL)}
                         </p>
                       </td>
                       <td className="px-2 py-2.5 text-center">
-                        <p className={metricLabelClass}>Top Trade</p>
-                        <p className="font-cousine mt-1 text-sm font-bold text-primary tabular-nums">
+                        {!gross ? <p className={metricLabelClass}>Top Trade</p> : null}
+                        <p className={`font-cousine ${gross ? "" : "mt-1 "}text-sm font-bold text-primary tabular-nums`}>
                           {row.topTrade.symbol}{" "}
                           <span className={topTone}>{formatSignedCurrency(row.topTrade.pl)}</span>
                         </p>
                       </td>
                       <td className="px-2 py-2.5 text-center">
-                        <p className={metricLabelClass}>Worst Loss</p>
-                        <p className="font-cousine mt-1 text-sm font-bold text-primary tabular-nums">
+                        {!gross ? <p className={metricLabelClass}>Worst Loss</p> : null}
+                        <p className={`font-cousine ${gross ? "" : "mt-1 "}text-sm font-bold text-primary tabular-nums`}>
                           {row.worstLoss.symbol}{" "}
                           <span className={worstTone}>{formatSignedCurrency(row.worstLoss.pl)}</span>
                         </p>
                       </td>
                       <td className="font-cousine px-2 py-2.5 text-center text-sm font-bold text-primary tabular-nums">
-                        <p className={metricLabelClass}>Trades</p>
-                        <p className="mt-1">{numberFormatter.format(row.tradesCount)}</p>
+                        {!gross ? <p className={metricLabelClass}>Trades</p> : null}
+                        <p className={gross ? undefined : "mt-1"}>{numberFormatter.format(row.tradesCount)}</p>
+                        {gross && row.coverage ? <small className="text-secondary">{row.coverage.excluded} excluded / {row.coverage.unknown} unknown</small> : null}
                       </td>
                     </tr>
                   );

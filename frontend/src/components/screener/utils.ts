@@ -34,7 +34,12 @@ export const fetchNoStoreJson = async <T,>(path: string, timeoutMs = 15_000): Pr
     if (!response.ok) {
       throw new Error(`Request failed (${response.status})`);
     }
-    return (await response.json()) as T;
+    const payload = await response.json();
+    if (payload?.ok !== true) {
+      const metricsPending = /^\/api\/screener\/metrics(?:\?|$)/.test(path) && payload?.status === "METRICS_PENDING";
+      throw new Error(metricsPending ? "Metrics are waiting for the strategy backtest." : "PostgreSQL data unavailable; no file fallback.");
+    }
+    return payload as T;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("Request timeout");

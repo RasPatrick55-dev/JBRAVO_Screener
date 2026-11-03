@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { buildLeaderboardRequestPath, normalizeLeaderboardPayload } from "./leaderboardData";
 
 describe("leaderboardData", () => {
+  it.each(["recorded_gross","execution_gross"] as const)("keeps the explicit typed %s basis",basis=>{
+    const url=new URL(buildLeaderboardRequestPath("all","winners",12,basis),"http://localhost");
+    expect(url.searchParams.get("basis")).toBe(basis);
+  });
   it("builds leaderboard URL with winners/losers mode and limit", () => {
     const winnersUrl = new URL(buildLeaderboardRequestPath("m", "winners", 12), "http://localhost");
     const losersUrl = new URL(buildLeaderboardRequestPath("m", "losers", 12), "http://localhost");

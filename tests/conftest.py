@@ -1,3 +1,8 @@
+"""Current-main fixtures retained; task-owned source path prepended."""
+import sys
+from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+
 import logging
 import os
 
