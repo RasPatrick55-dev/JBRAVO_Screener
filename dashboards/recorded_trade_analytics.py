@@ -53,7 +53,7 @@ def project(policy, records, *, identity, now, kind='stats', period='all', mode=
         if identifier in allocations:
             # Recheck the queried full physical row, not merely quantity/price.
             # The canonical policy reader validates the current fill/claim case.
-            G.A.validate_trade(row)
+            G.A.validate_bound_trade(allocations[identifier], row)
         reason = execution.unknown.get(identifier) if execution is not None else None
         if execution is not None and identifier not in execution.gross and reason is None:
             raise ValueError('execution_projection_incomplete')
