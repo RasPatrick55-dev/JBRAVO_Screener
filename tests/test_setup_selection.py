@@ -102,7 +102,7 @@ def verified_fixture(monkeypatch):
         run_id=selection.selection_id(base['primary_run_id']),primary_run_id=base['primary_run_id'],
         parent_report_sha256=base['primary_report_sha256'],source_bindings=base['source_bindings'],session=base['session'],
         specification=spec,selection=ranked,finished_at=(NOW-timedelta(seconds=1)).isoformat(),paper_only=True,
-        research_qualified=False,order_submission_authorized=False)
+        research_qualified=False,execution_authorized=False,order_submission_authorized=False)
     class Cursor:
         def __enter__(self):return self
         def __exit__(self,*a):pass
@@ -124,6 +124,64 @@ def test_exact_database_selection_and_queue_retain_original_strategy_handoffs(mo
     assert queue[0]['handoff']['unified_selection']['result_sha256']==digest(record)
     record['selection']['selected_setups'].reverse()
     with pytest.raises(ValueError,match='ranking_changed'):selection.read_selection(conn,base,now=NOW)
+
+
+@pytest.mark.parametrize('authority',['missing',True,None,'false',0])
+def test_selection_reader_requires_explicit_false_execution_authority(monkeypatch,authority):
+    base,record,_,conn=verified_fixture(monkeypatch)
+    if authority=='missing':record.pop('execution_authorized')
+    else:record['execution_authorized']=authority
+    # Supply a matching hash of the modified record to exercise authority,
+    # rather than merely rejecting changed bytes at the integrity check.
+    with pytest.raises(ValueError,match='lineage_changed'):
+        selection.read_selection(conn,base,now=NOW)
+
+
+@pytest.mark.parametrize('positive',[False,True])
+def test_publication_satisfies_existing_research_table_constraint(monkeypatch,positive):
+    import json,re
+    from scripts import research_store
+    base,_,handoffs,_=verified_fixture(monkeypatch)
+    primary=dict(run_id=base['primary_run_id'],session=base['session'],
+                 source_bindings={},batch=dict(proposals=base['proposals'] if positive else []))
+    proposals=[p for h in handoffs.values() for p in h['proposals']] if positive else []
+    monkeypatch.setattr(selection,'inputs',lambda *a,**kw:(handoffs,{},selection.rank_setups(proposals)))
+    # Enforce the actual SQL JSON containment predicate at the real helper's
+    # INSERT boundary, then require its separate committed readback.
+    required=json.loads(re.search(r"result @> '([^']+)'::jsonb",research_store.SCHEMA_SQL).group(1))
+    state=dict(row=None,commits=0,rollbacks=0,closed=0,connections=[])
+    class CheckViolation(Exception):pass
+    class Cursor:
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+        def execute(self,sql,params):
+            if sql.startswith('INSERT'):
+                record=json.loads(params[3])
+                if not isinstance(record,dict) or any(record.get(k) is not v for k,v in required.items()):
+                    raise CheckViolation()
+                state['row']=(params[1],params[2],record)
+            else:assert sql.startswith('SELECT')
+        def fetchone(self):return state['row']
+    class Connection:
+        def cursor(self):return Cursor()
+        def commit(self):state['commits']+=1
+        def rollback(self):state['rollbacks']+=1
+        def close(self):state['closed']+=1
+    def connect(*,write=False,env=None):
+        state['connections'].append(write)
+        return Connection()
+    monkeypatch.setattr(research_store,'connect',connect)
+    statuses=[]
+    monkeypatch.setattr(companion,'_status',lambda value,*a:statuses.append(value))
+    result=selection.publish(primary,env={})
+    assert result['status']=='COMPLETED_UNIFIED_SETUP_SELECTION'
+    assert state['connections']==[False,True,False]
+    assert state['commits']==1 and state['closed']==3
+    record=state['row'][2]
+    assert record['execution_authorized'] is False
+    assert record['order_submission_authorized'] is False
+    assert record['research_qualified'] is False
+    assert result['result_sha256']==digest(record) and statuses==[result]
 
 
 def test_submission_guard_requires_current_global_selection_before_any_order(monkeypatch):
