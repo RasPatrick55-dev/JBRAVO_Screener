@@ -342,33 +342,6 @@ def _soft_gate_with_min(
     return base
 
 
-try:
-    from scripts.features import fetch_symbols
-except ImportError:
-
-    def fetch_symbols(feed="iex", dollar_vol_min=2_000_000, reuse_cache=True):
-        """
-        Return DataFrame of tradable US equities filtered by basic criteria.
-        """
-
-        import pandas as pd
-        from alpaca_trade_api.rest import REST
-
-        api = REST()
-        assets = api.list_assets(status="active")
-        rows = []
-        for a in assets:
-            if a.tradable and a.exchange in {"NYSE", "NASDAQ", "AMEX"}:
-                rows.append({"symbol": a.symbol, "exchange": a.exchange})
-        df = pd.DataFrame(rows)
-        # Optionally filter by dollar_vol_min if bars available
-        return df
-
-
-if "fetch_symbols" in globals() and callable(fetch_symbols):
-    # Allowed elsewhere for backwards-compat, but not used by _fetch_daily_bars.
-    pass
-
 try:  # pragma: no cover - preferred module execution path
     from .utils.normalize import to_bars_df, BARS_COLUMNS
     from .utils.calendar import calc_daily_window
@@ -382,6 +355,7 @@ try:  # pragma: no cover - preferred module execution path
     from .utils.env import trading_base_url
     from .utils.frame_guards import ensure_symbol_column
     from .features import (
+        fetch_symbols,
         ALL_FEATURE_COLUMNS,
         compute_all_features,
         add_wk52_and_rs,
@@ -411,6 +385,7 @@ except Exception:  # pragma: no cover - fallback for direct script execution
     from scripts.utils.env import trading_base_url  # type: ignore
     from scripts.utils.frame_guards import ensure_symbol_column  # type: ignore
     from scripts.features import (  # type: ignore
+        fetch_symbols,
         ALL_FEATURE_COLUMNS,
         compute_all_features,
         add_wk52_and_rs,

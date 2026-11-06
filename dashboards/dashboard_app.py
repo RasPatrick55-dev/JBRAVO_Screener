@@ -36,6 +36,7 @@ from typing import Any, Callable, Mapping, Optional
 from flask import Response, abort, jsonify, send_from_directory, request
 from plotly.subplots import make_subplots
 from scripts import db
+from scripts.utils.alpaca_account import account_equity
 from dashboards import source_contracts
 from scripts.utils.env import load_env as _load_runtime_env
 
@@ -2037,21 +2038,22 @@ def _account_latest_db() -> dict[str, Any]:
 
 
 def _account_latest_alpaca() -> dict[str, Any]:
-    if trading_client is None:
+    if trading_client is None or not _account_api_is_paper_mode():
         return {}
     try:
         account = trading_client.get_account()
     except Exception as exc:
         logger.warning("[WARN] ALPACA_ACCOUNT_FETCH_FAILED err=%s", exc)
         return {}
+    equity = account_equity(account)
     return {
         "taken_at": datetime.now(timezone.utc).isoformat(),
         "account_id": getattr(account, "id", None) or getattr(account, "account_id", None),
         "status": getattr(account, "status", None),
-        "equity": _to_float(getattr(account, "equity", None)),
+        "equity": equity,
         "cash": _to_float(getattr(account, "cash", None)),
         "buying_power": _to_float(getattr(account, "buying_power", None)),
-        "portfolio_value": _to_float(getattr(account, "portfolio_value", None)),
+        "portfolio_value": equity,
         "source": "alpaca",
     }
 
@@ -2667,13 +2669,10 @@ def _account_summary_from_db() -> tuple[dict[str, Any] | None, str]:
     if not row:
         return None, "db_unavailable"
 
-    equity = _to_float(row.get("equity")) or 0.0
+    equity = account_equity(row) or 0.0
     cash = _to_float(row.get("cash")) or 0.0
     buying_power = _to_float(row.get("buying_power")) or 0.0
-    portfolio_value = _to_float(row.get("portfolio_value"))
-    open_positions_value = (
-        (portfolio_value - cash) if portfolio_value is not None else (equity - cash)
-    )
+    open_positions_value = equity - cash
     if open_positions_value < 0:
         open_positions_value = 0.0
     ratio = float(cash / open_positions_value) if open_positions_value > 0 else None
@@ -7640,9 +7639,13 @@ def _execute_summary_payload() -> dict[str, Any]:
     run_started_dt = _coerce_datetime_utc(summary_payload.get("run_started_utc"))
     alpaca_after_dt = run_started_dt or last_run_dt
     alpaca_until_dt = last_run_dt if run_started_dt is not None else None
-    alpaca_counts, alpaca_detail = _execute_summary_counts_from_alpaca(
-        alpaca_after_dt, alpaca_until_dt
-    )
+    # Metrics remain authoritative, including zero or incomplete counts.
+    alpaca_counts: dict[str, int] = {}
+    alpaca_detail = "alpaca:skipped_metrics_source"
+    if source == "none":
+        alpaca_counts, alpaca_detail = _execute_summary_counts_from_alpaca(
+            alpaca_after_dt, alpaca_until_dt
+        )
     source_detail_parts.append(alpaca_detail)
 
     submitted_value = _execute_to_int_optional(summary_payload.get("submitted"))

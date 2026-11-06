@@ -40,6 +40,7 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 
 ## Reference
 
+- [Alpaca compatibility release and deployment constraints](reference/alpaca_compatibility_2026-11-06.md)
 - `docs/reference/cli_reference.md`
 - `docs/reference/artifacts_and_schemas.md`
 - [Forward predictor observations](reference/production_score_observations.md)
