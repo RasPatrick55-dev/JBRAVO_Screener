@@ -6086,12 +6086,20 @@ def api_trades_latest():
 
 @server.route("/api/pipeline/task")
 def api_pipeline_task():
+    from scripts.strategy_pipeline import enabled
+    if enabled(BASE_DIR):
+        from dashboards.operational_status import pipeline_task
+        return _json_no_store(pipeline_task(BASE_DIR))
     payload = _parse_task_log(Path(TASK_LOG_PATH))
     return jsonify(payload)
 
 
 @server.route("/api/execute/task")
 def api_execute_task():
+    from scripts.strategy_pipeline import enabled
+    if enabled(BASE_DIR):
+        from dashboards.operational_status import execute_task
+        return _json_no_store(execute_task(BASE_DIR))
     payload = _parse_task_log(
         Path(EXECUTE_TASK_LOG_PATH), fetcher=_fetch_pythonanywhere_execute_task_log
     )
@@ -10004,6 +10012,10 @@ def log_exports(filename: str):
 
 @app.server.route("/api/health")
 def api_health():
+    from scripts.strategy_pipeline import enabled
+    if enabled(BASE_DIR):
+        from dashboards.operational_status import health_snapshot
+        return _json_no_store(health_snapshot(BASE_DIR))
     payload = dict(load_screener_health())
     payload.update(evidence_kind="operational_diagnostic_artifacts", financial_readiness="not_established_by_health_checks")
     return jsonify(payload)

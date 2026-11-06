@@ -11,6 +11,7 @@ import MLDailyImprovements from "../components/dashboard/MLDailyImprovements";
 import LatestLogsTable from "../components/dashboard/LatestLogsTable";
 import PythonAnywhereTasksTable from "../components/dashboard/PythonAnywhereTasksTable";
 import type { LogEntry, StatusTone, SystemStatusItem } from "../types/ui";
+import { isCurrentReceipt, receiptStatus, type ProcessReceipt } from "../components/dashboard/processReceipt";
 
 type HealthOverviewResponse = {
   ok?: boolean;
@@ -119,7 +120,7 @@ type MonitoringPositionsResponse = {
   }>;
 };
 
-type PipelineTaskRunResponse = {
+type PipelineTaskRunResponse = ProcessReceipt & {
   ok?: boolean;
   started_utc?: string | null;
   finished_utc?: string | null;
@@ -128,7 +129,7 @@ type PipelineTaskRunResponse = {
   source?: string | null;
 };
 
-type ExecuteTaskRunResponse = {
+type ExecuteTaskRunResponse = ProcessReceipt & {
   ok?: boolean;
   started_utc?: string | null;
   finished_utc?: string | null;
@@ -1125,18 +1126,22 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   }, [openPositions]);
 
   const processStatusCards = useMemo<ProcessStatusCardsProps>(() => {
+    const currentPipeline = isCurrentReceipt(pipelineTaskRun);
+    const currentExecutor = isCurrentReceipt(executeTaskRun);
+    const pipelineState = receiptStatus(pipelineTaskRun);
+    const executorState = receiptStatus(executeTaskRun);
     const pipelineStartRaw = overviewSnapshot?.kpis?.last_run_utc;
     const pipelineStart =
-      pipelineTaskRun?.started_utc ??
+      currentPipeline ? pipelineTaskRun?.started_utc ?? null : pipelineTaskRun?.started_utc ??
       pipelineLogRun.start ??
       (pipelineStartRaw ? String(pipelineStartRaw) : null);
     const pipelineEnd =
-      pipelineTaskRun?.finished_utc ?? pipelineLogRun.end ?? healthSnapshot?.last_run_utc ?? null;
+      currentPipeline ? pipelineTaskRun?.finished_utc ?? null : pipelineTaskRun?.finished_utc ?? pipelineLogRun.end ?? healthSnapshot?.last_run_utc ?? null;
     const pipelineDuration =
       pipelineTaskRun?.duration_seconds !== null &&
       pipelineTaskRun?.duration_seconds !== undefined
         ? formatDurationSeconds(pipelineTaskRun.duration_seconds)
-        : pipelineLogRun.durationSeconds
+        : !currentPipeline && pipelineLogRun.durationSeconds
           ? formatDurationSeconds(pipelineLogRun.durationSeconds)
           : formatDuration(pipelineStart, pipelineEnd);
     const pipelineEndDate = pipelineEnd ? new Date(pipelineEnd) : null;
@@ -1144,11 +1149,11 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
       pipelineEndDate && !Number.isNaN(pipelineEndDate.getTime())
         ? Date.now() - pipelineEndDate.getTime() <= 24 * 60 * 60 * 1000
         : false;
-    const pipelineRc = pipelineTaskRun?.rc ?? pipelineLogRun.rc;
-    const pipelineLive = pipelineRecent && pipelineRc === 0;
-    const executeStart = executeTaskRun?.started_utc ?? executeSnapshot?.last_execution ?? null;
+    const pipelineRc = currentPipeline ? pipelineTaskRun?.rc : pipelineTaskRun?.rc ?? pipelineLogRun.rc;
+    const pipelineLive = pipelineState ? pipelineState === "COMPLETED" : pipelineRecent && pipelineRc === 0;
+    const executeStart = currentExecutor ? executeTaskRun?.started_utc ?? null : executeTaskRun?.started_utc ?? executeSnapshot?.last_execution ?? null;
     const executeEnd =
-      executeTaskRun?.finished_utc ?? executeSnapshot?.ny_now ?? executeSnapshot?.last_execution ?? null;
+      currentExecutor ? executeTaskRun?.finished_utc ?? null : executeTaskRun?.finished_utc ?? executeSnapshot?.ny_now ?? executeSnapshot?.last_execution ?? null;
     const executeDuration =
       executeTaskRun?.duration_seconds !== null && executeTaskRun?.duration_seconds !== undefined
         ? formatDurationSeconds(executeTaskRun.duration_seconds)
@@ -1158,7 +1163,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
       executeEndDate && !Number.isNaN(executeEndDate.getTime())
         ? Date.now() - executeEndDate.getTime() <= 24 * 60 * 60 * 1000
         : false;
-    const executeCycleComplete = executeRecent && executeTaskRun?.rc === 0;
+    const executeCycleComplete = executorState ? executorState === "COMPLETED" : executeRecent && executeTaskRun?.rc === 0;
 
     const ordersSubmitted = executeSnapshot?.orders_submitted;
     const ordersFilled = (executeOrdersSummary?.ok === true ? executeOrdersSummary.orders_filled : null) ?? executeSnapshot?.orders_filled;
@@ -1186,11 +1191,12 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
           duration: pipelineDuration,
         },
         subprocess: {
-          screener: statusFromPipelineRc(pipelineLogRun.stepRcs.screener),
-          backTester: statusFromPipelineRc(pipelineLogRun.stepRcs.backtest),
-          metrics: statusFromPipelineRc(pipelineLogRun.stepRcs.metrics),
+          screener: statusFromPipelineRc(currentPipeline ? pipelineTaskRun?.stage_rcs?.screener ?? null : pipelineLogRun.stepRcs.screener),
+          backTester: statusFromPipelineRc(currentPipeline ? pipelineTaskRun?.stage_rcs?.backtest ?? null : pipelineLogRun.stepRcs.backtest),
+          metrics: statusFromPipelineRc(currentPipeline ? pipelineTaskRun?.stage_rcs?.metrics ?? null : pipelineLogRun.stepRcs.metrics),
         },
         isLive: pipelineLive,
+        status: pipelineState,
       },
       executeTrades: {
         lastRun: {
@@ -1204,6 +1210,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
           ? executeOrdersSummary.total_value : Number.NaN,
         successRate,
         isCycleComplete: executeCycleComplete,
+        status: executorState,
         marketNote: executeMarketNote,
       },
       monitoring: {
@@ -1212,6 +1219,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
       },
     };
   }, [
+    pipelineTaskRun,
+    executeTaskRun,
     executeSnapshot?.in_window,
     executeSnapshot?.last_execution,
     executeSnapshot?.ny_now,

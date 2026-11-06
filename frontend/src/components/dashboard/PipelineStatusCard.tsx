@@ -1,5 +1,6 @@
 import CardShell from "./CardShell";
 import StatusChip, { type StatusChipTone } from "./StatusChip";
+import { processTone, type ProcessStatus } from "./processReceipt";
 
 export interface PipelineStatusCardProps {
   lastRun: { date: string; start: string; end: string; duration: string };
@@ -9,6 +10,7 @@ export interface PipelineStatusCardProps {
     metrics: "OK" | "FAIL" | "UNKNOWN";
   };
   isLive: boolean;
+  status?: ProcessStatus;
 }
 
 const statusToneMap: Record<PipelineStatusCardProps["subprocess"]["screener"], StatusChipTone> = {
@@ -24,9 +26,9 @@ const formatValue = (value: string | null | undefined) => {
   return value;
 };
 
-export default function PipelineStatusCard({ lastRun, subprocess, isLive }: PipelineStatusCardProps) {
-  const statusLabel = isLive ? "COMPLETED" : "OVERDUE";
-  const statusTone = isLive ? "success" : "neutral";
+export default function PipelineStatusCard({ lastRun, subprocess, isLive, status }: PipelineStatusCardProps) {
+  const statusLabel = status ?? (isLive ? "COMPLETED" : "OVERDUE");
+  const statusTone = status ? processTone(status) : isLive ? "success" : "neutral";
   const cycleIcon = (
     <svg
       className="h-3.5 w-3.5"
@@ -97,7 +99,7 @@ export default function PipelineStatusCard({ lastRun, subprocess, isLive }: Pipe
 
   const statusDisplay = (status: PipelineStatusCardProps["subprocess"]["screener"]) => {
     if (status === "OK") {
-      return { label: "CYCLE", tone: statusToneMap[status], icon: statusIcons.ok };
+      return { label: "COMPLETE", tone: statusToneMap[status], icon: statusIcons.ok };
     }
     if (status === "FAIL") {
       return { label: "FAILED", tone: statusToneMap[status], icon: statusIcons.fail };
