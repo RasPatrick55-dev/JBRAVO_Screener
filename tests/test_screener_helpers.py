@@ -1,7 +1,6 @@
-import os
 import types
-import importlib.util
 from datetime import datetime, timezone
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -152,12 +151,61 @@ def test_gate_presets_parsing():
     assert defaults.relax_gates == "none"
 
 
-@pytest.mark.skipif(
-    not os.getenv("APCA_API_KEY_ID") or importlib.util.find_spec("alpaca_trade_api") is None,
-    reason="Alpaca credentials or alpaca_trade_api not available",
-)
-def test_fetch_symbols_not_empty():
-    df = screener.fetch_symbols()
-    assert isinstance(df, pd.DataFrame)
-    assert "symbol" in df.columns
-    assert not df.empty
+def test_fetch_symbols_uses_paper_sdk_and_preserves_cache(monkeypatch, tmp_path):
+    from alpaca.trading.enums import AssetClass, AssetExchange, AssetStatus
+    from alpaca.trading.models import Asset
+
+    def asset(symbol, exchange=AssetExchange.NASDAQ, tradable=True):
+        return Asset(
+            id="00000000-0000-0000-0000-000000000001",
+            symbol=symbol,
+            **{"class": AssetClass.US_EQUITY},
+            exchange=exchange,
+            status=AssetStatus.ACTIVE,
+            tradable=tradable,
+            marginable=True,
+            shortable=False,
+            fractionable=True,
+        )
+
+    client = Mock()
+    client.get_all_assets.return_value = [
+        asset("AAPL"),
+        asset("IBM", AssetExchange.NYSE),
+        asset("SPY", AssetExchange.ARCA),
+        asset("BLOCKED", tradable=False),
+    ]
+    factory = Mock(return_value=client)
+    monkeypatch.setattr("alpaca.trading.client.TradingClient", factory)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APCA_API_KEY_ID", "test-key")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("APCA_API_BASE_URL", "https://api.alpaca.markets")
+    monkeypatch.setenv("APCA_API_ENV", "live")
+
+    df = screener.fetch_symbols(feed="iex", dollar_vol_min=123, reuse_cache=False)
+    factory.assert_called_once_with("test-key", "test-secret", paper=True)
+    filters = client.get_all_assets.call_args.kwargs["filter"]
+    assert filters.status == AssetStatus.ACTIVE
+    assert filters.asset_class == AssetClass.US_EQUITY
+    assert df["symbol"].tolist() == ["AAPL", "IBM"]
+    assert df["exchange"].tolist() == ["NASDAQ", "NYSE"]
+    assert df["asset_class"].tolist() == ["us_equity", "us_equity"]
+    assert df["status"].tolist() == ["active", "active"]
+    assert df["dollar_vol_min"].tolist() == [123, 123]
+
+    cached = screener.fetch_symbols(feed="iex")
+    pd.testing.assert_frame_equal(cached, df)
+    factory.assert_called_once()
+
+
+def test_fetch_symbols_empty_universe_has_columns(monkeypatch, tmp_path):
+    client = Mock()
+    client.get_all_assets.return_value = []
+    monkeypatch.setattr("alpaca.trading.client.TradingClient", Mock(return_value=client))
+    monkeypatch.chdir(tmp_path)
+    df = screener.fetch_symbols(reuse_cache=False)
+    assert df.empty
+    assert df.columns.tolist() == [
+        "symbol", "exchange", "asset_class", "status", "feed", "dollar_vol_min"
+    ]

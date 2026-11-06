@@ -15,7 +15,11 @@ def fetch_symbols(
     dollar_vol_min: int = 2_000_000,
     reuse_cache: bool = True,
 ) -> pd.DataFrame:
-    """Return a DataFrame of tradable US equities filtered by minimum dollar volume."""
+    """Return tradable US equities from paper Alpaca, with optional universe caching.
+
+    ``dollar_vol_min`` is retained as metadata; this asset-list read does not
+    fetch bars or apply a liquidity filter.
+    """
 
     cache_dir = Path("data")
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -30,13 +34,16 @@ def fetch_symbols(
             # Fall through to re-fetch on cache read issues.
             pass
 
-    try:
-        from alpaca_trade_api.rest import REST  # type: ignore
-    except Exception as exc:  # pragma: no cover - optional dependency in tests
-        raise RuntimeError("alpaca_trade_api is required to fetch symbols") from exc
+    from alpaca.trading.client import TradingClient
+    from alpaca.trading.enums import AssetClass, AssetStatus
+    from alpaca.trading.requests import GetAssetsRequest
+    from utils.env import get_alpaca_creds
 
-    api = REST()
-    assets = api.list_assets(status="active")
+    key, secret, _, _ = get_alpaca_creds()
+    api = TradingClient(key, secret, paper=True)
+    assets = api.get_all_assets(
+        filter=GetAssetsRequest(status=AssetStatus.ACTIVE, asset_class=AssetClass.US_EQUITY)
+    )
     rows: List[Dict[str, object]] = []
     for asset in assets:
         if not getattr(asset, "tradable", False):
@@ -46,15 +53,17 @@ def fetch_symbols(
         rows.append(
             {
                 "symbol": getattr(asset, "symbol", ""),
-                "exchange": getattr(asset, "exchange", ""),
-                "asset_class": getattr(asset, "asset_class", ""),
-                "status": getattr(asset, "status", ""),
+                "exchange": getattr(asset.exchange, "value", asset.exchange),
+                "asset_class": getattr(asset.asset_class, "value", asset.asset_class),
+                "status": getattr(asset.status, "value", asset.status),
                 "feed": feed,
                 "dollar_vol_min": dollar_vol_min,
             }
         )
 
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(
+        rows, columns=["symbol", "exchange", "asset_class", "status", "feed", "dollar_vol_min"]
+    )
     df.to_csv(cache_path, index=False)
     return df
 

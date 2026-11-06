@@ -4,7 +4,7 @@ Usage:
     APCA_API_BASE_URL=... APCA_API_KEY_ID=... APCA_API_SECRET_KEY=... DATABASE_URL=... \\
         python -m scripts.fetch_account_snapshot
 
-The script is paper-mode safe (logs the target base_url) and writes structured
+The script rejects non-paper API URLs and writes structured
 messages to ``logs/account_snapshot.log``.
 """
 
@@ -20,6 +20,7 @@ from typing import Any, Mapping, MutableMapping
 import requests
 
 from scripts import db
+from scripts.utils.alpaca_account import account_equity
 from scripts.utils.env import load_env, trading_base_url
 
 LOG_PATH = Path(__file__).resolve().parents[1] / "logs" / "account_snapshot.log"
@@ -65,12 +66,16 @@ def _coerce_float(value: Any) -> float | None:
 def _fetch_snapshot(
     session: requests.Session, base_url: str, logger: logging.Logger
 ) -> Mapping[str, Any] | None:
+    base_url = base_url.rstrip("/")
+    if base_url != "https://paper-api.alpaca.markets":
+        logger.error("[ERROR] ACCT_SNAP_FAIL step=env err=paper_mode_required")
+        return None
     url = f"{base_url}/v2/account"
     logger.info(
         "[INFO] ACCT_SNAP_START base_url=%s paper_mode=%s", base_url, "paper" in base_url.lower()
     )
     try:
-        response = session.get(url, headers=_alpaca_headers(), timeout=15)
+        response = session.get(url, headers=_alpaca_headers(), timeout=15, allow_redirects=False)
     except Exception as exc:
         logger.error("[ERROR] ACCT_SNAP_FAIL step=fetch err=%s", exc)
         return None
@@ -101,6 +106,10 @@ def _fetch_snapshot(
         )
         return None
 
+    if not isinstance(payload, Mapping):
+        logger.error("[ERROR] ACCT_SNAP_FAIL step=parse err=account_object_required")
+        return None
+
     logger.info(
         "[INFO] ACCT_SNAP_FETCH_OK status=%s account_id=%s",
         response.status_code,
@@ -111,17 +120,20 @@ def _fetch_snapshot(
 
 def _build_insert_payload(snapshot: Mapping[str, Any]) -> MutableMapping[str, Any]:
     taken_at = datetime.now(timezone.utc)
+    equity = account_equity(snapshot)
     return {
         "taken_at": taken_at,
         "account_id": snapshot.get("id") or snapshot.get("account_id"),
         "status": snapshot.get("status") or snapshot.get("account_status"),
         "cash": _coerce_float(snapshot.get("cash")),
         "cash_withdrawable": _coerce_float(snapshot.get("cash_withdrawable")),
-        "portfolio_value": _coerce_float(snapshot.get("portfolio_value")),
-        "equity": _coerce_float(snapshot.get("equity")),
+        # Retain the PostgreSQL column contract after Alpaca retires the alias.
+        "portfolio_value": equity,
+        "equity": equity,
         "buying_power": _coerce_float(snapshot.get("buying_power")),
         "effective_buying_power": _coerce_float(snapshot.get("effective_buying_power")),
         "maintenance_margin": _coerce_float(snapshot.get("maintenance_margin")),
+        # Retired upstream: missing values remain SQL NULL, never another limit.
         "daytrading_buying_power": _coerce_float(snapshot.get("daytrading_buying_power")),
         "multiplier": snapshot.get("multiplier"),
         "default_currency": snapshot.get("currency") or snapshot.get("default_currency"),
