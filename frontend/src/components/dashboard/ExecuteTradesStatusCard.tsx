@@ -1,6 +1,7 @@
 import CardShell from "./CardShell";
 import StatusChip from "./StatusChip";
 import { formatCurrency, formatNumber } from "./formatters";
+import { processTone, type ProcessStatus } from "./processReceipt";
 
 export interface ExecuteTradesStatusCardProps {
   lastRun: { date: string; start: string; end: string; duration: string };
@@ -9,6 +10,7 @@ export interface ExecuteTradesStatusCardProps {
   successRate: number;
   isCycleComplete: boolean;
   marketNote?: string | null;
+  status?: ProcessStatus;
 }
 
 const formatValue = (value: string | null | undefined) => {
@@ -24,6 +26,7 @@ export default function ExecuteTradesStatusCard({
   totalValue,
   isCycleComplete,
   marketNote,
+  status,
 }: ExecuteTradesStatusCardProps) {
   const statusIcons = {
     complete: (
@@ -61,7 +64,7 @@ export default function ExecuteTradesStatusCard({
     ),
   } as const;
 
-  const statusChip = isCycleComplete
+  const statusChip = status ? { label: status, tone: processTone(status), icon: statusIcons.overdue } : isCycleComplete
     ? { label: "COMPLETED", tone: "success" as const, icon: statusIcons.complete }
     : { label: "OVERDUE", tone: "neutral" as const, icon: statusIcons.overdue };
 

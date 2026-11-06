@@ -299,6 +299,6 @@ def test_dashboard_cannot_fall_back_to_primary_candidates_when_global_selection_
     def missing(*a,**kw):
         seen.append(True)
         raise ValueError('unified_selection_not_published')
-    monkeypatch.setattr(selection,'dashboard_selection',missing)
+    monkeypatch.setattr(dashboard,'display_selection',missing)
     result=dashboard.snapshot()
     assert seen and result['ok'] is False and result['rows']==[]
