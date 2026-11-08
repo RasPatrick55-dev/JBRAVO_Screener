@@ -167,6 +167,31 @@ def scheduled_attempt(scheduled_log, *, now=None):
             failure_code='scheduled_log_missing_or_invalid')
 
 
+def latest_scheduled_log(logs, *, now=None):
+    """Select by validated invocation time, never provider list order or rc.
+
+    Callers supply only logs bound to currently enabled, recognized provider
+    tasks. Every candidate must have valid evidence; incomplete source coverage
+    cannot establish the last scheduled attempt.
+    Equal newest starts for different tasks are ambiguous and remain unknown.
+    """
+    now = now or datetime.now(timezone.utc)
+    candidates = []
+    for payload in logs:
+        parsed = scheduled_attempt(payload, now=now)
+        if not parsed.get('ok') or not parsed.get('started_utc'):
+            return None
+        started = datetime.fromisoformat(parsed['started_utc'])
+        candidates.append((started, parsed['task_id'], payload))
+    if not candidates:
+        return None
+    newest = max(row[0] for row in candidates)
+    matches = [row for row in candidates if row[0] == newest]
+    if len(matches) != 1:
+        return None
+    return matches[0][2]
+
+
 def execute_task(base_dir=ROOT, *, now=None, scheduled_log=None):
     """Preserve the last immutable execution; disclose newer scheduler attempts."""
     now = now or datetime.now(timezone.utc)

@@ -600,45 +600,48 @@ def _fetch_pythonanywhere_task_log() -> Optional[tuple[str, str]]:
 
 
 def _fetch_pythonanywhere_execute_task_log() -> Optional[tuple[str, str]]:
-    remote_url = os.environ.get("PYTHONANYWHERE_EXECUTE_TASK_LOG_URL")
-    remote_path = os.environ.get("PYTHONANYWHERE_EXECUTE_TASK_LOG_PATH")
-    if remote_url or remote_path:
-        # Explicit configured sources keep their actual provenance; the receipt
-        # parser rejects non-provider task sources rather than claiming a task ID.
-        return _fetch_pythonanywhere_file(remote_url, remote_path)
-    task_id = str(os.environ.get("PYTHONANYWHERE_EXECUTE_TASK_ID") or "")
-    if task_id:
-        if not task_id.isdigit():
-            return None
-        task = _pythonanywhere_api_get_json(f"schedule/{task_id}/")
-        if not isinstance(task, Mapping):
-            return None
-    else:
-        from dashboards.operational_status import _scheduled_launcher
+    """Read the newest valid attempt from the current enabled entry tasks.
 
-        matches = [
-            task
-            for task in _pythonanywhere_schedule_tasks()
-            if _scheduled_launcher(task) is not None
-        ]
-        if len(matches) != 1:
-            return None
-        task = matches[0]
+    Legacy environment pointers can refer to a superseded scheduled task. They
+    cannot override provider inventory or make an inactive task authoritative.
+    Logs stay bound to their provider task IDs even when filenames vary.
+    """
+    from dashboards.operational_status import _scheduled_launcher, latest_scheduled_log
+
+    candidates: dict[str, Mapping[str, Any]] = {}
+    for task in _pythonanywhere_schedule_tasks():
+        if not isinstance(task, Mapping) or _scheduled_launcher(task) is None:
+            continue
         task_id = str(task.get("id") or "")
         if not task_id.isdigit():
+            continue
+        if task_id in candidates:
+            # Conflicting descriptions of the same task are not a reliable
+            # snapshot. Exact duplicates may be emitted by a paginated feed.
+            previous = candidates[task_id]
+            fields = ("command", "logfile", "log_file")
+            if any(previous.get(key) != task.get(key) for key in fields):
+                return None
+            continue
+        candidates[task_id] = task
+    # Bound provider reads. Unexpected inventory growth is unknown, not a
+    # reason to choose the first task or silently truncate possible new runs.
+    if not candidates or len(candidates) > 8:
+        return None
+    logs: list[tuple[str, str]] = []
+    for task_id, task in candidates.items():
+        logfile = (
+            task.get("logfile")
+            or task.get("log_file")
+            or _task_logfile_from_detail("schedule", task_id)
+        )
+        if not logfile:
             return None
-    logfile = (
-        task.get("logfile")
-        or task.get("log_file")
-        or _task_logfile_from_detail("schedule", task_id)
-    )
-    if not logfile:
-        return None
-    payload = _fetch_pythonanywhere_file(None, str(logfile))
-    if not payload:
-        return None
-    # The selected provider task binds this log even when its filename varies.
-    return payload[0], f"pythonanywhere:schedule/{task_id}/"
+        payload = _fetch_pythonanywhere_file(None, str(logfile))
+        if not payload:
+            return None
+        logs.append((payload[0], f"pythonanywhere:schedule/{task_id}/"))
+    return latest_scheduled_log(logs, now=datetime.now(timezone.utc))
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -2602,7 +2605,7 @@ def _order_event_message(row: Mapping[str, Any], raw: Mapping[str, Any]) -> str:
 
 def _account_order_logs_from_db(limit: int) -> list[dict[str, Any]]:
     day_start_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    rows = _db_fetch_all(
+    rows = _db_fetch_all_strict(
         """
         SELECT event_time, event_type, symbol, qty, order_id, status, raw
         FROM order_events
@@ -2617,7 +2620,7 @@ def _account_order_logs_from_db(limit: int) -> list[dict[str, Any]]:
     for row in rows:
         ts = _coerce_datetime_utc(row.get("event_time"))
         if ts is None:
-            continue
+            raise ValueError("invalid_order_event_timestamp")
         raw_payload = _coerce_json_mapping(row.get("raw"))
         message = _order_event_message(row, raw_payload)
         level = _order_log_level(
@@ -2685,8 +2688,12 @@ def _account_order_logs_from_file(limit: int) -> list[dict[str, Any]]:
 
 
 def _account_order_logs(limit: int) -> tuple[list[dict[str, str]], str]:
-    db_rows = _account_order_logs_from_db(limit)
-    if db_rows:
+    try:
+        db_rows = _account_order_logs_from_db(limit)
+    except Exception:
+        db_rows = None
+    # An authoritative successful empty read is not a provider failure.
+    if db_rows is not None:
         return [
             {
                 "ts": str(row.get("ts") or ""),
@@ -2696,7 +2703,10 @@ def _account_order_logs(limit: int) -> tuple[list[dict[str, str]], str]:
             for row in db_rows[: max(1, int(limit))]
         ], "postgres:order_events"
 
-    file_rows = _account_order_logs_from_file(limit)
+    try:
+        file_rows = _account_order_logs_from_file(limit)
+    except Exception:
+        file_rows = []
     if file_rows:
         return [
             {
@@ -6070,7 +6080,8 @@ def api_account_order_logs():
     rows, source_detail = _account_order_logs(limit=limit)
     return _json_no_store(
         {
-            "ok": bool(rows),
+            "ok": source_detail != "none",
+            "status": ("ready" if rows else "empty") if source_detail == "postgres:order_events" else ("partial" if rows else "unavailable"),
             "rows": rows,
             "source_detail": source_detail,
         }
