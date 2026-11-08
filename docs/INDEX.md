@@ -21,6 +21,8 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 
 ## How-To
 
+- [Entry-only placement and Monitor Positions ownership candidate](how-to/entry_monitor_ownership.md)
+
 - [Complete strategy preparation, blocked reporting and unified handoff](how-to/strategy_runtime_recovery.md)
 - [Swing research scorecards and isolated entry/exit comparisons](how-to/swing_research_lab.md)
 - [Bull flag companion alongside Pullback/Reclaim](how-to/bull_flag_companion.md)
