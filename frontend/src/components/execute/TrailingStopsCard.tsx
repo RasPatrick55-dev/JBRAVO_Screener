@@ -1,3 +1,4 @@
+import OrderProvenance from "../ui/OrderProvenance";
 import { useMemo } from "react";
 import type { ExecuteTrailingStopRow } from "./types";
 import {
@@ -60,6 +61,7 @@ export default function TrailingStopsCard({ rows, isLoading, hasError }: Props) 
           Trailing Stops
         </h2>
       </header>
+      <p className="mt-2 text-[11px] text-secondary">Broker order observations. Pending replacement does not confirm current protection.</p>
 
       <div className="mt-3 overflow-x-auto">
         <div className="min-w-[980px] max-h-[270px] overflow-auto rounded-xl jbravo-panel-inner jbravo-panel-inner-emerald">
@@ -119,7 +121,7 @@ export default function TrailingStopsCard({ rows, isLoading, hasError }: Props) 
 
               {!isLoading
                 ? visibleRows.map((row, index) => {
-                    const status = normalizeTrailingStatus(row.status);
+                    const status = normalizeTrailingStatus(row.raw_status || row.status);
                     const ts = formatDateTimeUtc(row.ts_utc ?? null);
                     const referenceRaw = String(row.parent_leg ?? "").trim();
                     const referenceLabel = trailingReferenceLabel(referenceRaw);
@@ -160,6 +162,7 @@ export default function TrailingStopsCard({ rows, isLoading, hasError }: Props) 
                           title={referenceRaw && referenceRaw !== "--" ? referenceRaw : undefined}
                         >
                           {referenceLabel}
+                          <OrderProvenance order={row} />
                         </td>
                       </tr>
                     );
@@ -171,7 +174,7 @@ export default function TrailingStopsCard({ rows, isLoading, hasError }: Props) 
       </div>
 
       {hasError ? (
-        <p className="mt-3 text-xs text-rose-300">Trailing stops endpoint unavailable. Showing fallback state.</p>
+        <p className="mt-3 text-xs text-rose-300">Trailing stops endpoint unavailable. Any displayed rows are last known observations; current protection is unverified.</p>
       ) : null}
     </section>
   );

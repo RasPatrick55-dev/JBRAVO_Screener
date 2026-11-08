@@ -1,3 +1,4 @@
+import { predictionFreshness, mlStagePresentation, successfulPredictionExecution } from "../components/ml/freshness";
 import { useMemo, type ReactNode } from "react";
 import { buildNavbarBadges, type LiveDataSyncState, useLiveTradingStatus } from "../components/navbar/liveStatus";
 import NavbarDesktop from "../components/navbar/NavbarDesktop";
@@ -220,7 +221,8 @@ function DetailRow({
   );
 }
 
-function StageTile({ stage }: { stage: MlStage }) {
+export function StageTile({ stage: input }: { stage: MlStage }) {
+  const stage = mlStagePresentation(input);
   return (
     <article className="rounded-xl px-3 py-3 jbravo-panel-inner jbravo-panel-inner-violet outline outline-1 outline-indigo-400/30">
       <div className="flex items-start justify-between gap-2">
@@ -233,6 +235,7 @@ function StageTile({ stage }: { stage: MlStage }) {
         <StatusBadge label={stage.status} tone={stage.tone} size="sm" />
       </div>
       <p className="mt-3 font-cousine text-[11px] text-primary">{formatDateTime(stage.timestamp)}</p>
+      <p className="mt-1 text-[10px] text-secondary">Artifact: {stage.artifact_present === true ? "present" : stage.artifact_present === false ? "missing" : "unknown"} | Execution: {stage.execution_status ?? "unverified"} | Freshness: {stage.freshness_status ?? "unknown"}</p>
     </article>
   );
 }
@@ -264,7 +267,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
   const summaryCards = [
     {
       title: "Predictions freshness",
-      value: data?.freshness?.label ?? "No data",
+      value: predictionFreshness(data?.freshness),
       detail: data?.freshness?.reason ?? "Waiting for freshness diagnostics",
       footnote: `Last predict ${formatDateTime(data?.timestamps?.last_predict)}`,
       tone: data?.status?.tone ?? "neutral",
@@ -316,7 +319,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
       tone: data?.champion?.present ? ("success" as StatusTone) : ("neutral" as StatusTone),
     },
     {
-      title: "Recent ML activity",
+      title: "Recent ML evidence",
       value: formatShortDate(data?.timestamps?.last_ml_run),
       detail: `Predict ${formatShortDate(data?.timestamps?.last_predict)} · Eval ${formatShortDate(
         data?.timestamps?.last_eval
@@ -364,7 +367,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                 showDot
               />
               <span className="rounded-full border border-slate-400/30 bg-slate-900/40 px-3 py-1 text-xs text-slate-300">
-                Last ML run {formatDateTime(data?.status?.last_ml_run ?? data?.updated_at)}
+                Last ML evidence {formatDateTime(data?.status?.last_ml_run ?? data?.updated_at)}
               </span>
             </div>
           </header>
@@ -469,6 +472,21 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
               surface="jbravo-panel-cyan"
             >
               <div className="space-y-3">
+                <DetailRow
+                  label="Artifact freshness"
+                  value={predictionFreshness(data?.freshness)}
+                  note={`Captured ${formatDateTime(data?.freshness?.artifact_timestamp)} | Source ${data?.freshness?.timestamp_source ?? "unknown"} | Age ${data?.freshness?.age_seconds ?? "unknown"} seconds | Maximum age ${data?.freshness?.max_age_seconds ?? "unknown"} seconds`}
+                />
+                <DetailRow
+                  label="Last verified prediction execution"
+                  value={formatDateTime(successfulPredictionExecution(data))}
+                  note="Prediction stage only; artifact and log updates are not evidence of a successful full ML pipeline run."
+                />
+                <DetailRow
+                  label="Market session"
+                  value={data?.freshness?.session_status ?? "unknown"}
+                  note={`Expected session ${data?.freshness?.expected_session ?? "unknown"}; checked ${formatDateTime(data?.freshness?.observed_at)}`}
+                />
                 <DetailRow
                   label="Latest model"
                   value={truncateMiddle(data?.freshness?.model_path)}

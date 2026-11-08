@@ -1,7 +1,9 @@
 import CardShell from "./CardShell";
 import StatusChip from "./StatusChip";
 import { formatCurrency, formatNumber } from "./formatters";
-import { processTone, type ProcessStatus } from "./processReceipt";
+import { processTone, taskEvidenceFreshness, type ProcessStatus, type TaskEvidenceSource } from "./processReceipt";
+import ScheduledAttemptNotice from "./ScheduledAttemptNotice";
+import type { ScheduledAttempt } from "./processReceipt";
 
 export interface ExecuteTradesStatusCardProps {
   lastRun: { date: string; start: string; end: string; duration: string };
@@ -11,6 +13,8 @@ export interface ExecuteTradesStatusCardProps {
   isCycleComplete: boolean;
   marketNote?: string | null;
   status?: ProcessStatus;
+  lastScheduledAttempt?: ScheduledAttempt | null;
+  taskSource?: TaskEvidenceSource;
 }
 
 const formatValue = (value: string | null | undefined) => {
@@ -27,7 +31,11 @@ export default function ExecuteTradesStatusCard({
   isCycleComplete,
   marketNote,
   status,
+  lastScheduledAttempt,
+  taskSource,
 }: ExecuteTradesStatusCardProps) {
+  const taskFreshness = taskEvidenceFreshness(taskSource);
+  const evidenceStatus = taskSource && taskFreshness !== "current" ? taskFreshness === "stale" ? "STALE" : "UNAVAILABLE" : status;
   const statusIcons = {
     complete: (
       <svg
@@ -64,7 +72,7 @@ export default function ExecuteTradesStatusCard({
     ),
   } as const;
 
-  const statusChip = status ? { label: status, tone: processTone(status), icon: statusIcons.overdue } : isCycleComplete
+  const statusChip = evidenceStatus ? { label: evidenceStatus, tone: processTone(evidenceStatus), icon: statusIcons.overdue } : isCycleComplete
     ? { label: "COMPLETED", tone: "success" as const, icon: statusIcons.complete }
     : { label: "OVERDUE", tone: "neutral" as const, icon: statusIcons.overdue };
 
@@ -133,7 +141,7 @@ export default function ExecuteTradesStatusCard({
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-sm" />
           <span className="text-[11px] font-bold uppercase tracking-[0.08em] text-emerald-200/70">
-            Last Task Run
+            {taskSource && taskFreshness !== "current" ? "Last Known Execution Receipt" : "Last Execution Receipt"}
           </span>
         </div>
         <div className="rounded-xl border border-emerald-400/30 bg-slate-950/60 p-2.5 shadow-[0_0_18px_-12px_rgba(34,197,94,0.45)] sm:p-3">
@@ -150,9 +158,11 @@ export default function ExecuteTradesStatusCard({
         </div>
       </div>
 
+      <ScheduledAttemptNotice attempt={lastScheduledAttempt} taskSource={taskSource} />
+
       <div className="mt-4 rounded-xl border border-amber-400/40 bg-gradient-to-br from-emerald-500/20 via-lime-400/20 to-amber-400/30 p-2.5 shadow-[0_0_18px_-12px_rgba(251,191,36,0.5)] sm:p-3">
         <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-amber-200">
-          Orders Filled (24h)
+          Buy fills (24h)
         </div>
         <div className="mt-2 grid grid-cols-2 gap-3">
           <div className="rounded-lg border border-amber-300/50 bg-slate-950/60 p-2 sm:p-2.5">
@@ -163,7 +173,7 @@ export default function ExecuteTradesStatusCard({
           </div>
           <div className="rounded-lg border border-amber-300/50 bg-slate-950/60 p-2 sm:p-2.5">
             <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-amber-200/80">
-              Total Value
+              Buy notional (USD)
             </div>
             <div className="mt-1 text-[16px] font-semibold text-amber-100">
               {ordersTotal}

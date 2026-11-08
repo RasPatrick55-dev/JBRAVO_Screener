@@ -6,6 +6,8 @@ import TrailingStopsCard from "./TrailingStopsCard";
 import type { ExecuteStateResponse } from "./types";
 import { fetchJsonNoStore, parseSseJson } from "./utils";
 import type { LiveDataSyncState } from "../navbar/liveStatus";
+import { useSource } from "../ui/sourceState";
+import type { ProcessReceipt } from "../dashboard/processReceipt";
 
 const REFRESH_INTERVAL_MS = 20_000;
 const FIRST_LOAD_GRACE_MS = 2_500;
@@ -23,6 +25,7 @@ type ExecuteTabProps = {
 };
 
 export default function ExecuteTab({ onSyncStateChange }: ExecuteTabProps) {
+  const executionTask = useSource("/api/execute/task");
   const [payload, setPayload] = useState<ExecuteStateResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
@@ -137,7 +140,10 @@ export default function ExecuteTab({ onSyncStateChange }: ExecuteTabProps) {
 
   return (
     <div className="space-y-4">
-      <ExecutionSummaryCard summary={summary} isLoading={isLoading} hasError={hasError} />
+      <ExecutionSummaryCard summary={summary} isLoading={isLoading} hasError={hasError}
+        lastScheduledAttempt={(executionTask.payload as ProcessReceipt | null)?.last_scheduled_attempt}
+        lastExecutionReceipt={(executionTask.payload as ProcessReceipt | null)?.last_execution_receipt}
+        taskSource={executionTask} />
       <OrdersTableCard rows={ordersRows} isLoading={isLoading} hasError={hasError} />
       <TrailingStopsCard rows={trailingRows} isLoading={isLoading} hasError={hasError} />
       <ExecutionLogsCard logs={logsByStage} isLoading={isLoading} hasError={hasError} />

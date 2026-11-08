@@ -3,10 +3,30 @@ export type ExecuteLsxFilter = "all" | "l" | "s" | "e" | "x";
 export type ExecuteLogStage = "execute" | "monitor" | "pipeline";
 export type ExecuteLogLevelFilter = "all" | "errors" | "warnings";
 
+export interface ExecutionSchedule {
+  status?: "verified" | "unknown";
+  source?: string;
+  observed_at?: string | null;
+  timezone?: string | null;
+  entry_start_local?: string | null;
+  entry_end_local?: string | null;
+  lifecycle_owner?: string | null;
+  cancellation_policy?: string | null;
+  cancellation_deadline?: string | null;
+  cancellation_deadline_status?: string | null;
+  legacy_cancel_after_min?: number | null;
+  legacy_cancel_after_min_is_deadline?: boolean;
+  in_window?: boolean | null;
+  session_date?: string | null;
+  session_status?: string | null;
+  reason?: string | null;
+}
+
 export interface ExecuteSummaryResponse {
+  execution_schedule?: ExecutionSchedule | null;
   ok?: boolean;
   last_run_utc?: string | null;
-  in_window?: boolean;
+  in_window?: boolean | null;
   candidates?: number | null;
   submitted?: number | null;
   filled?: number | null;
@@ -19,6 +39,9 @@ export interface ExecuteSummaryResponse {
 }
 
 export interface ExecuteOrderRow {
+  raw_status?: string | null;
+  replaces?: string | null;
+  replaced_by?: string | null;
   ts_utc?: string | null;
   symbol?: string | null;
   side?: string | null;
@@ -39,6 +62,10 @@ export interface ExecuteOrdersResponse {
 }
 
 export interface ExecuteTrailingStopRow {
+  raw_status?: string | null;
+  order_id?: string | null;
+  replaces?: string | null;
+  replaced_by?: string | null;
   ts_utc?: string | null;
   symbol?: string | null;
   qty?: number | string | null;

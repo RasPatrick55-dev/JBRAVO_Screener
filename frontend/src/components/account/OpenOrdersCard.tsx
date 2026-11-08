@@ -1,3 +1,4 @@
+import OrderProvenance from "../ui/OrderProvenance";
 import {canDisplay, type SourceKind} from "../ui/sourceState";
 import { formatCurrency, formatNumber } from "../dashboard/formatters";
 import type { OpenOrderRow } from "./types";
@@ -92,6 +93,7 @@ export default function OpenOrdersCard({ rows: inputRows, isLoading = false, sou
                     <p className="font-cousine mt-0.5 text-xs font-bold tabular-nums text-primary">{formatSubmitted(row.submittedAt)}</p>
                   </div>
                 </div>
+                <OrderProvenance order={row} />
               </article>
             ))
           : null}
@@ -148,6 +150,7 @@ export default function OpenOrdersCard({ rows: inputRows, isLoading = false, sou
                     </th>
                     <td className="font-cousine px-2 py-2 text-left text-primary tabular-nums uppercase whitespace-nowrap">
                       {row.type || "--"}
+                      <OrderProvenance order={row} />
                     </td>
                     <td className="px-2 py-2 text-center">
                       <span

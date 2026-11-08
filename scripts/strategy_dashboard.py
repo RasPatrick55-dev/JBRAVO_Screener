@@ -121,12 +121,31 @@ def clean(value):
     return value
 
 
-def snapshot():
+def computation_completion(verified):
+    """Display proof of completed computation, never research or entry approval.
+
+    Only call after display_selection has checked immutable primary receipts,
+    the completed invocation, and the bound PostgreSQL unified selection.
+    """
+    return dict(completion_status='verified', computation_complete=True,
+        completion_scope='STRATEGY_COMPUTATION_ONLY',
+        completion_evidence=dict(source='immutable_primary_and_postgres_unified_selection',
+            primary_run_id=verified['primary']['run_id'],
+            selection_run_id=verified['record']['run_id'],
+            finished_at=verified['primary']['finished_at']),
+        research_qualified=False, operating_acceptance=False,
+        order_submission_authorized=False)
+
+
+def snapshot(*, base_dir=ROOT, now=None):
     from scripts import db
     from scripts.strategy_pipeline import latest_batch
     from scripts.strategy_pipeline_store import candidate_frame
     result=dict(ok=False,status='ERROR',run_date=None,run_ts_utc=None,rows=[],
-        rows_final=0,source='postgres',source_detail='strategy_primary:unavailable',entry_ready=False)
+        rows_final=0,source='postgres',source_detail='strategy_primary:unavailable',entry_ready=False,
+        completion_status='unverified',computation_complete=False,
+        completion_scope='STRATEGY_COMPUTATION_ONLY',completion_evidence=None,
+        research_qualified=False,operating_acceptance=False,order_submission_authorized=False)
     conn=None
     try:
         conn=db.get_db_conn()
@@ -157,8 +176,8 @@ def snapshot():
             from scripts.strategy_metrics import validate_metrics
             validate_metrics(metrics,backtest,selected_batch(batch[3]),primary[0])
         from scripts.setup_selection import dashboard_rows
-        unified=display_selection(conn,batch,primary[0])
-        readiness=handoff_readiness(unified,frame.to_dict('records'))
+        unified=display_selection(conn,batch,primary[0],base_dir=base_dir,now=now)
+        readiness=handoff_readiness(unified,frame.to_dict('records'),base_dir=base_dir,now=now)
         rows=dashboard_rows(unified)
         return dict(result,ok=True,status='COMPLETE' if rows else 'EMPTY',
             setup_selection=unified['record']['selection'],
@@ -169,7 +188,7 @@ def snapshot():
             coverage=clean(batch[3].get('coverage')),
             scan_run_id=unified['record']['run_id'],strategy_contract=dict(strategy_id='ALL_STRATEGIES',
                 strategy_version='1',definition_sha256=unified['record']['selection']['model_sha256']),
-            _strategy_backtest=backtest,_strategy_metrics=metrics,**readiness)
+            _strategy_backtest=backtest,_strategy_metrics=metrics,**dict(readiness, **computation_completion(unified)))
     except Exception as error:
         return dict(result, failure_code=failure_code(error))
     finally:
@@ -178,9 +197,9 @@ def snapshot():
             finally:conn.close()
 
 
-def api_payload(kind, args):
+def api_payload(kind, args, *, base_dir=ROOT, now=None):
     """Use a single repeatable snapshot for each endpoint, including empty days."""
-    result=dict(snapshot())
+    result=dict(snapshot(base_dir=base_dir, now=now))
     backtest=result.pop('_strategy_backtest',None)
     metrics=result.pop('_strategy_metrics',None)
     unified=result.pop('_unified_selection',None)
@@ -191,7 +210,8 @@ def api_payload(kind, args):
             same=datetime.fromisoformat(str(requested).replace('Z','+00:00')) == datetime.fromisoformat(result['run_ts_utc'])
         except (ValueError,TypeError):same=False
         if not same:
-            return dict(result,ok=False,status='ERROR',rows=[],rows_final=0,source_detail='strategy_primary:batch_changed')
+            return dict(result,ok=False,status='ERROR',rows=[],rows_final=0,source_detail='strategy_primary:batch_changed',
+                completion_status='unverified',computation_complete=False,completion_evidence=None)
     if unified is not None and kind in {'metrics','backtest'}:
         from scripts.setup_selection import dashboard_reports
         return dashboard_reports(kind,result,unified,unified_reports,args)
@@ -200,7 +220,8 @@ def api_payload(kind, args):
             return dict(result,rows=[],rows_final=0)
         if metrics is None:
             return dict(result,ok=False,status='METRICS_PENDING',rows=[],rows_final=0,
-                source_detail='strategy_primary:no_bound_strategy_metrics')
+                source_detail='strategy_primary:no_bound_strategy_metrics',
+                completion_status='unverified',computation_complete=False,completion_evidence=None)
         contract=metrics['strategy_contract'];rows=list(metrics['rows'])
         query=str(args.get('q') or '').strip().upper()
         if query:rows=[r for r in rows if query in (r['symbol']+' '+r['strategy_id']+' '+r['sample_status']).upper()]
@@ -219,7 +240,8 @@ def api_payload(kind, args):
     if kind=='backtest':
         if backtest is None:
             return dict(result,ok=False,status='BACKTEST_PENDING',rows=[],rows_final=0,
-                metric_basis='STRATEGY_RESEARCH_SIMULATION',source_detail='strategy_primary:no_bound_strategy_backtest')
+                metric_basis='STRATEGY_RESEARCH_SIMULATION',source_detail='strategy_primary:no_bound_strategy_backtest',
+                completion_status='unverified',computation_complete=False,completion_evidence=None)
         contract=backtest['strategy_contract'];rows=[]
         for r in backtest['results']:
             rows.append(dict(r,signal_id=r['current_signal_id'],trades=r['closed_signals'],

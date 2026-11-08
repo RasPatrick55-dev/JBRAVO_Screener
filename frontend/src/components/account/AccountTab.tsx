@@ -238,7 +238,7 @@ export const normalizeOpenOrders = (payload: unknown): OpenOrderRow[] => {
     return [];
   }
   return record.rows
-    .map((item) => {
+    .map((item): OpenOrderRow | null => {
       const row = asRecord(item);
       if (!row) {
         return null;
@@ -256,6 +256,11 @@ export const normalizeOpenOrders = (payload: unknown): OpenOrderRow[] => {
         qty: parseNumber(row.qty),
         priceOrStop: parseNumber(row.price_or_stop),
         submittedAt: String(row.submitted_at ?? "").trim(),
+        status: String(row.status ?? "").trim(),
+        raw_status: String(row.raw_status ?? "").trim(),
+        order_id: String(row.order_id ?? "").trim(),
+        replaces: String(row.replaces ?? "").trim(),
+        replaced_by: String(row.replaced_by ?? "").trim(),
       };
     })
     .filter((row): row is OpenOrderRow => Boolean(row));

@@ -146,9 +146,10 @@ def test_actual_routes_use_current_readers_instead_of_legacy_logs(monkeypatch, t
     from test_strategy_dashboard import extract
     monkeypatch.setattr(pipeline, 'enabled', lambda *a: True)
     expected = dict(source='current_reader', status='UNAVAILABLE')
-    monkeypatch.setattr(status, reader, lambda base: expected if base == str(tmp_path) else None)
+    monkeypatch.setattr(status, reader, lambda base, **kwargs: expected if base == str(tmp_path) else None)
     route = extract('dashboards/dashboard_app.py', name)
     route.__globals__['BASE_DIR'] = str(tmp_path)
+    route.__globals__['_fetch_pythonanywhere_execute_task_log'] = lambda: None
     route.__globals__['_parse_task_log'] = lambda *a, **kw: pytest.fail('legacy log consulted')
     route.__globals__['load_screener_health'] = lambda: pytest.fail('legacy health consulted')
     assert route() == expected

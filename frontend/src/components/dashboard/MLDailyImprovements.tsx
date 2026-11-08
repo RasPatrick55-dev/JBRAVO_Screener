@@ -1,6 +1,7 @@
 import CardShell from "./CardShell";
 import StatusBadge from "../badges/StatusBadge";
 import { useMlOverview } from "../ml/useMlOverview";
+import { predictionFreshness, mlStagePresentation } from "../ml/freshness";
 import type { StatusTone } from "../../types/ui";
 
 interface MLDailyImprovementsProps {
@@ -77,12 +78,12 @@ export default function MLDailyImprovements({ onOpenPipeline }: MLDailyImproveme
   const monitor = data?.monitor;
   const stages = (data?.pipeline_stages ?? []).filter((stage) =>
     ["Features", "Predict", "Eval", "Monitor", "Auto-remediate"].includes(stage.label)
-  );
+  ).map(mlStagePresentation);
 
   const metricTiles = [
     {
       label: "Freshness",
-      value: data?.freshness?.label ?? "No data",
+      value: predictionFreshness(data?.freshness),
       detail: data?.freshness?.reason ?? "Waiting for predictions data",
     },
     {
@@ -192,7 +193,7 @@ export default function MLDailyImprovements({ onOpenPipeline }: MLDailyImproveme
               Pipeline Stages
             </div>
             <div className="text-[11px] text-indigo-100/60">
-              Last ML run {formatShortDate(data?.status?.last_ml_run ?? data?.updated_at)}
+              Last ML evidence {formatShortDate(data?.status?.last_ml_run ?? data?.updated_at)}
             </div>
           </div>
           <div className="mt-3 grid grid-cols-5 gap-2">

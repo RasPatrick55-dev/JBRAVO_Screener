@@ -6,6 +6,20 @@ export interface MonitoringLogItem {
   timestamp: string;
   type: MonitoringLogType;
   message: string;
+  source?: string;
+  source_kind?: string;
+  run_id?: string | null;
+  ts_utc?: string | null;
+  timestamp_kind?: string | null;
+  report_observed_at?: string | null;
+  freshness?: string | null;
+  stale?: boolean | null;
+  protection_confirmed?: boolean | null;
+  old_order_id?: string | null;
+  replacement_order_id?: string | null;
+  occurrences?: number | null;
+  native_stops_trigger_only_regular_hours?: boolean | null;
+  extended_hours_native_protection?: boolean | null;
 }
 
 export interface MonitoringLogsPanelProps {
@@ -18,6 +32,18 @@ const badgeToneClass: Record<MonitoringLogType, string> = {
   warning: "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-200",
 };
 
+export function MonitoringProvenance({ log }: { log: MonitoringLogItem }) {
+  const kind = log.source_kind === "broker_observation" ? "Broker observation" : log.source_kind === "monitor_log" ? "Historical monitor event" : log.source_kind === "monitor_receipt" ? "Monitor report observation" : "Unverified provenance";
+  return <div className="mt-1 break-words text-[10px] text-secondary">
+    <p>{kind} | Source: {log.source || "unknown"} | Run: {log.run_id || "unknown"} | {log.timestamp_kind === "monitor_report_observation" ? "Observed/report UTC" : "Event UTC"}: {log.ts_utc || "unknown"} | {log.stale === true ? "STALE" : log.freshness || "Freshness unknown"}</p>
+    {log.protection_confirmed !== null && log.protection_confirmed !== undefined ? <p>Protection in this observation: {log.protection_confirmed ? "confirmed" : "unconfirmed"}; not a current protection guarantee.</p> : null}
+    {log.old_order_id || log.replacement_order_id ? <p>Replacement chain: {log.old_order_id || "unknown"} to {log.replacement_order_id || "unknown"}.</p> : null}
+    {log.native_stops_trigger_only_regular_hours ? <p>Native stops trigger only during regular hours.</p> : null}
+    {log.extended_hours_native_protection === false ? <p>Extended-hours native protection: not provided.</p> : null}
+    {log.occurrences && log.occurrences > 1 ? <p>Repeated observations: {log.occurrences}</p> : null}
+  </div>;
+}
+
 export default function MonitoringLogsPanel({ logs }: MonitoringLogsPanelProps) {
   return (
     <section
@@ -27,9 +53,9 @@ export default function MonitoringLogsPanel({ logs }: MonitoringLogsPanelProps) 
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/70 px-4 py-4 dark:border-slate-700/70">
         <div>
           <h2 className="text-lg font-semibold text-financial">Monitoring Positions Logs</h2>
-          <p className="text-sm text-secondary">Trailing stop and open alerts</p>
+          <p className="text-sm text-secondary">Historical monitor events and broker observations; logs do not confirm current positions</p>
         </div>
-        <StatusChip label="Always On Track" tone="success" />
+        <StatusChip label="Source-labeled events" tone="neutral" />
       </header>
       <div className="max-h-[32rem] overflow-auto">
         <div className="divide-y divide-slate-200/70 sm:hidden dark:divide-slate-700/70">
@@ -45,6 +71,7 @@ export default function MonitoringLogsPanel({ logs }: MonitoringLogsPanelProps) 
                 <p className="mt-2 text-sm text-financial" title={log.message}>
                   {log.message}
                 </p>
+                <MonitoringProvenance log={log} />
               </article>
             ))
           ) : (
@@ -85,6 +112,7 @@ export default function MonitoringLogsPanel({ logs }: MonitoringLogsPanelProps) 
                     <p className="truncate text-financial" title={log.message}>
                       {log.message}
                     </p>
+                    <MonitoringProvenance log={log} />
                   </td>
                 </tr>
               ))
