@@ -31,14 +31,21 @@ def install_entry(runtime, NativeEngine, monitor, entry, lifecycle, preflight):
                 monitor_health_dependency=False, native_source_files_changed=False)
 
 
-def install_monitor(monitor, NativeEngine, lifecycle):
+def install_monitor(monitor, NativeEngine, lifecycle, *, pending_replacement=None):
     require(not getattr(monitor, '_entry_monitor_ownership_installed', False),
             'monitor_ownership_duplicate_install')
     Derived = lifecycle.monitor_engine(NativeEngine)
     original = monitor.quote_safe_engine
+    # Optional composition is validated eagerly during verify-only installation,
+    # before any Engine, store or broker is constructed. Legacy wiring remains
+    # lazy and unchanged when no pending adapter was explicitly selected.
+    wrapped = (pending_replacement.monitor_engine(original(Derived), NativeEngine=NativeEngine)
+               if pending_replacement is not None else None)
     def quote_safe(Engine):
         require(Engine is NativeEngine, 'monitor_ownership_engine_identity_changed')
-        return original(Derived)
+        # quote_safe_engine reads native manage globals. The pending adapter
+        # must be outside that factory, never substituted for its Engine input.
+        return wrapped if wrapped is not None else original(Derived)
     monitor.quote_safe_engine = quote_safe
     monitor._entry_monitor_ownership_installed = True
     return dict(lifecycle_owner='MONITOR_POSITIONS',
