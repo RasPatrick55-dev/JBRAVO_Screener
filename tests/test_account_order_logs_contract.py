@@ -64,3 +64,14 @@ def test_malformed_rows_do_not_become_verified_empty():
     ns = helpers("_account_order_logs_from_db", _db_fetch_all_strict=Mock(return_value=[{"event_time": "invalid"}]), _coerce_datetime_utc=lambda _: None)
     with pytest.raises(ValueError, match="invalid_order_event_timestamp"):
         ns["_account_order_logs_from_db"](100)
+
+
+def test_malformed_row_after_valid_row_does_not_publish_complete_subset():
+    valid = datetime(2030, 1, 2, 10, tzinfo=timezone.utc)
+    ns = helpers("_account_order_logs_from_db",
+        _db_fetch_all_strict=Mock(return_value=[{"event_time": valid}, {"event_time": "invalid"}]),
+        _coerce_datetime_utc=lambda value: value if isinstance(value, datetime) else None,
+        _coerce_json_mapping=lambda _: {}, _order_event_message=lambda *args: "BUY_FILL ABC",
+        _order_log_level=lambda *args: "success")
+    with pytest.raises(ValueError, match="invalid_order_event_timestamp"):
+        ns["_account_order_logs_from_db"](100)
