@@ -117,7 +117,9 @@ def test_connection_badge_color(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert module.connection_badge_color({"trading_ok": False, "data_ok": True}) == "danger"
 
 
-def test_api_health_matches_loader(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_api_health_preserves_loader_and_qualifies_diagnostic_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _prepare_dashboard_data(tmp_path)
     module = _reload_dashboard_app(monkeypatch, tmp_path)
 
@@ -127,6 +129,10 @@ def test_api_health_matches_loader(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
     assert response.status_code == 200
     payload = json.loads(response.data.decode("utf-8"))
+    # HTTP health artifacts establish diagnostic state, not financial readiness.
+    assert payload.pop("evidence_kind") == "operational_diagnostic_artifacts"
+    assert payload.pop("financial_readiness") == "not_established_by_health_checks"
+    # Preserve every loader field and reject any other unasserted additions.
     assert payload == expected
 
 
