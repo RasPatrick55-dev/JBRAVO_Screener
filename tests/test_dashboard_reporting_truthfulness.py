@@ -691,7 +691,7 @@ def test_execute_log_selector_binds_guarded_wrapper_to_provider_attempt():
     [
         [],
         [dict(id=1, enabled=True, command="echo executor_boot.py")],
-        [scheduled_executor_fixture(), scheduled_executor_fixture()],
+        [scheduled_executor_fixture(), dict(scheduled_executor_fixture(), logfile="/conflicting.log")],
     ],
 )
 def test_execute_log_selector_rejects_missing_unverified_or_ambiguous_task(tasks):
@@ -713,10 +713,162 @@ def test_execute_log_selector_fetches_detail_when_provider_list_omits_logfile():
         "_fetch_pythonanywhere_execute_task_log",
         _pythonanywhere_schedule_tasks=lambda: [task],
         _task_logfile_from_detail=detail,
-        _fetch_pythonanywhere_file=lambda *a: ("provider content", "provider source"),
+        _fetch_pythonanywhere_file=lambda *a: (
+            "2030-01-02 07:55:01 Started task\n2030-01-02 07:55:02 Completed task, return code was 0",
+            "provider source",
+        ),
     )
     assert ns["_fetch_pythonanywhere_execute_task_log"]() == (
-        "provider content",
+        "2030-01-02 07:55:01 Started task\n2030-01-02 07:55:02 Completed task, return code was 0",
         "pythonanywhere:schedule/1234/",
     )
     detail.assert_called_once_with("schedule", "1234")
+
+
+def _attempt_log(day, *, rc=1, running=False, refusal=True):
+    text = f"2030-01-{day:02d} 07:55:09 Started task\n"
+    if refusal:
+        text += '{"status":"SPLIT_EXECUTOR_LAUNCHER_REFUSED","reason":"executor_scheduled_start_outside_bound","orders_submitted":0}\n'
+    if not running:
+        text += f"2030-01-{day:02d} 07:55:14 Completed task, return code was {rc}\n"
+    return text
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_attempt_selection_uses_newest_current_invocation_not_feed_or_stale_env(reverse):
+    from dashboards.operational_status import scheduled_attempt
+
+    older = dict(scheduled_executor_fixture(), id=1233, logfile="/older.log")
+    current = dict(scheduled_executor_fixture(), id=1234, logfile="/current.log")
+    tasks = [older, current]
+    if reverse:
+        tasks.reverse()
+    logs = {"/older.log": _attempt_log(1), "/current.log": _attempt_log(2)}
+    ns = helpers(
+        "_fetch_pythonanywhere_execute_task_log",
+        os=SimpleNamespace(environ={
+            "PYTHONANYWHERE_EXECUTE_TASK_ID": "1233",
+            "PYTHONANYWHERE_EXECUTE_TASK_LOG_PATH": "/older.log",
+            "PYTHONANYWHERE_EXECUTE_TASK_LOG_URL": "https://example.invalid/older.log",
+        }),
+        _pythonanywhere_schedule_tasks=lambda: tasks,
+        _pythonanywhere_api_get_json=lambda *a: pytest.fail("Stale environment task detail queried"),
+        _fetch_pythonanywhere_file=lambda url, path: (logs[path], "provider log"),
+    )
+    result = ns["_fetch_pythonanywhere_execute_task_log"]()
+    attempt = scheduled_attempt(result, now=NOW)
+    assert attempt["task_id"] == 1234
+    assert attempt["started_utc"] == "2030-01-02T07:55:09+00:00"
+    assert attempt["status"] == "GUARDED_NO_ENTRY" and attempt["orders_submitted"] == 0
+    assert attempt["release_attribution"] == "unverified_historical_attempt"
+
+
+def test_superseded_env_task_is_not_read_even_when_its_log_would_be_newer():
+    current = dict(scheduled_executor_fixture(), id=1234, logfile="/current.log")
+    fetch = Mock(return_value=(_attempt_log(1), "provider log"))
+    ns = helpers(
+        "_fetch_pythonanywhere_execute_task_log",
+        os=SimpleNamespace(environ={"PYTHONANYWHERE_EXECUTE_TASK_ID": "9999"}),
+        _pythonanywhere_schedule_tasks=lambda: [current],
+        _pythonanywhere_api_get_json=lambda *a: pytest.fail("Superseded task queried"),
+        _fetch_pythonanywhere_file=fetch,
+    )
+    assert ns["_fetch_pythonanywhere_execute_task_log"]()[1] == "pythonanywhere:schedule/1234/"
+    fetch.assert_called_once_with(None, "/current.log")
+
+
+@pytest.mark.parametrize("bad_log", ["", "no invocation", _attempt_log(3),
+    "2030-01-02 07:55:09 Started task\n2030-01-02 07:55:14 Completed task, return code was unknown"])
+def test_incomplete_attempt_coverage_rejects_missing_malformed_or_future_evidence(bad_log):
+    from dashboards.operational_status import latest_scheduled_log
+
+    valid = (_attempt_log(1), "pythonanywhere:schedule/1233/")
+    invalid = (bad_log, "pythonanywhere:schedule/1234/")
+    assert latest_scheduled_log([invalid, valid], now=NOW) is None
+    assert latest_scheduled_log([valid, invalid], now=NOW) is None
+    assert latest_scheduled_log([invalid], now=NOW) is None
+
+
+def test_latest_attempt_ties_unknown_but_running_invocation_supersedes_old_completion():
+    from dashboards.operational_status import latest_scheduled_log, scheduled_attempt
+
+    old = (_attempt_log(1), "pythonanywhere:schedule/1233/")
+    running = (_attempt_log(2, running=True, refusal=False), "pythonanywhere:schedule/1234/")
+    assert latest_scheduled_log([running, old], now=NOW) == running
+    assert scheduled_attempt(running, now=NOW)["status"] == "RUNNING"
+    duplicate_time = (_attempt_log(2), "pythonanywhere:schedule/1235/")
+    assert latest_scheduled_log([running, duplicate_time], now=NOW) is None
+    assert latest_scheduled_log([(_attempt_log(2), "unbound.log")], now=NOW) is None
+
+
+def test_duplicate_identical_provider_tasks_are_read_once():
+    task = scheduled_executor_fixture()
+    fetch = Mock(return_value=(_attempt_log(2), "provider log"))
+    ns = helpers("_fetch_pythonanywhere_execute_task_log",
+        _pythonanywhere_schedule_tasks=lambda: [task, dict(task)],
+        _fetch_pythonanywhere_file=fetch)
+    assert ns["_fetch_pythonanywhere_execute_task_log"]()[1] == "pythonanywhere:schedule/1234/"
+    fetch.assert_called_once()
+
+
+def test_no_current_task_does_not_revive_an_old_explicit_source():
+    fetch = Mock(side_effect=AssertionError("Unverified historical source read"))
+    ns = helpers("_fetch_pythonanywhere_execute_task_log",
+        os=SimpleNamespace(environ={"PYTHONANYWHERE_EXECUTE_TASK_ID": "1233",
+            "PYTHONANYWHERE_EXECUTE_TASK_LOG_PATH": "/older.log"}),
+        _pythonanywhere_schedule_tasks=lambda: [], _fetch_pythonanywhere_file=fetch)
+    assert ns["_fetch_pythonanywhere_execute_task_log"]() is None
+    fetch.assert_not_called()
+
+
+def test_excessive_current_task_inventory_is_unknown_without_partial_fetches():
+    template = scheduled_executor_fixture()
+    tasks = [dict(template, id=2000 + i, logfile=f"/task-{i}.log") for i in range(9)]
+    fetch = Mock(side_effect=AssertionError("No truncated task search"))
+    ns = helpers("_fetch_pythonanywhere_execute_task_log",
+        _pythonanywhere_schedule_tasks=lambda: tasks, _fetch_pythonanywhere_file=fetch)
+    assert ns["_fetch_pythonanywhere_execute_task_log"]() is None
+    fetch.assert_not_called()
+
+
+def test_unavailable_candidate_log_is_not_fabricated_as_an_attempt():
+    task = scheduled_executor_fixture()
+    ns = helpers("_fetch_pythonanywhere_execute_task_log",
+        _pythonanywhere_schedule_tasks=lambda: [task],
+        _fetch_pythonanywhere_file=lambda *a: None)
+    assert ns["_fetch_pythonanywhere_execute_task_log"]() is None
+
+
+def test_missing_detail_logfile_prevents_a_latest_attempt_assertion():
+    missing = dict(scheduled_executor_fixture(), id=1233)
+    missing.pop("logfile")
+    current = dict(scheduled_executor_fixture(), id=1234, logfile="/current.log")
+    detail = Mock(return_value=None)
+    fetch = Mock(return_value=(_attempt_log(2), "provider log"))
+    ns = helpers("_fetch_pythonanywhere_execute_task_log",
+        _pythonanywhere_schedule_tasks=lambda: [missing, current],
+        _task_logfile_from_detail=detail, _fetch_pythonanywhere_file=fetch)
+    assert ns["_fetch_pythonanywhere_execute_task_log"]() is None
+    detail.assert_called_once_with("schedule", "1233")
+    fetch.assert_not_called()
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("failure", ["missing_logfile", "unreadable", "malformed"])
+def test_partial_enabled_task_coverage_stays_unknown_in_both_feed_orders(reverse, failure):
+    valid = dict(scheduled_executor_fixture(), id=1233, logfile="/valid.log")
+    missing = dict(scheduled_executor_fixture(), id=1234, logfile="/missing.log")
+    if failure == "missing_logfile":
+        missing.pop("logfile")
+    tasks = [valid, missing]
+    if reverse:
+        tasks.reverse()
+    def read(url, path):
+        if path == "/valid.log":
+            return _attempt_log(1), "provider log"
+        return None if failure == "unreadable" else ("invalid attempt evidence", "provider log")
+    ns = helpers("_fetch_pythonanywhere_execute_task_log",
+        _pythonanywhere_schedule_tasks=lambda: tasks,
+        _task_logfile_from_detail=lambda *a: None,
+        _fetch_pythonanywhere_file=read)
+    assert ns["_fetch_pythonanywhere_execute_task_log"]() is None
