@@ -30,6 +30,11 @@ export interface EquityCurvePoint {
 }
 
 export interface OpenOrderRow {
+  raw_status?: string | null;
+  status?: string | null;
+  order_id?: string | null;
+  replaces?: string | null;
+  replaced_by?: string | null;
   symbol: string;
   type: string;
   side: string;

@@ -16,7 +16,7 @@ def extract(path,name):
     fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name==name)
     fn.decorator_list=[];fn.returns=None
     for a in (*fn.args.args,*fn.args.kwonlyargs):a.annotation=None
-    namespace=dict(pd=pd,request=SimpleNamespace(args={}),_json_no_store=lambda value:value)
+    namespace=dict(pd=pd,BASE_DIR=str(ROOT),request=SimpleNamespace(args={}),_json_no_store=lambda value:value)
     exec(compile(ast.fix_missing_locations(ast.Module(body=[fn],type_ignores=[])),str(path),'exec'),namespace)
     return namespace[name]
 
@@ -37,7 +37,7 @@ def positive():
 def test_actual_api_buy_then_zero_never_uses_raw_tables_or_csv(monkeypatch,name):
     monkeypatch.setattr(pipeline,'enabled',lambda:True)
     current=[view([positive()])]
-    monkeypatch.setattr(dashboard,'snapshot',lambda:current[0])
+    monkeypatch.setattr(dashboard,'snapshot',lambda **kw:current[0])
     api=extract('dashboards/dashboard_app.py',name)
     assert api()['rows'][0]['signal_id']=='a'*64
     current[0]=view([])
@@ -49,7 +49,7 @@ def test_actual_api_buy_then_zero_never_uses_raw_tables_or_csv(monkeypatch,name)
 def test_actual_table_scope_count_and_backtest_keep_authoritative_empty(monkeypatch):
     monkeypatch.setattr(pipeline,'enabled',lambda:True)
     current=[view([positive()])]
-    monkeypatch.setattr(dashboard,'snapshot',lambda:current[0])
+    monkeypatch.setattr(dashboard,'snapshot',lambda **kw:current[0])
     table=extract('dashboards/data_io.py','screener_table')
     scope=extract('dashboards/dashboard_app.py','_screener_latest_run_scope')
     count=extract('dashboards/dashboard_app.py','_execute_latest_candidates_count')
@@ -64,14 +64,14 @@ def test_actual_table_scope_count_and_backtest_keep_authoritative_empty(monkeypa
 
 def test_unavailable_strategy_snapshot_never_falls_back_to_legacy(monkeypatch):
     monkeypatch.setattr(pipeline,'enabled',lambda:True)
-    monkeypatch.setattr(dashboard,'snapshot',lambda:dict(view([]),ok=False,status='ERROR',run_date=None,run_ts_utc=None))
+    monkeypatch.setattr(dashboard,'snapshot',lambda **kw:dict(view([]),ok=False,status='ERROR',run_date=None,run_ts_utc=None))
     result=extract('dashboards/dashboard_app.py','api_screener_candidates')()
     assert result['ok'] is False and result['status']=='ERROR' and not result['rows']
     assert extract('dashboards/data_io.py','screener_table')()[0].empty
 
 
 def test_equal_utc_timestamp_forms_accept_same_batch(monkeypatch):
-    monkeypatch.setattr(dashboard,'snapshot',lambda:view([positive()]))
+    monkeypatch.setattr(dashboard,'snapshot',lambda **kw:view([positive()]))
     assert dashboard.api_payload('candidates',dict(run_ts_utc='2026-10-27T03:45:00Z'))['rows_final']==1
     assert dashboard.api_payload('candidates',dict(run_ts_utc='2026-10-26T03:45:00Z'))['ok'] is False
 
@@ -80,7 +80,7 @@ def test_backtest_endpoint_names_the_screener_strategy_and_bound_result(monkeypa
     from test_strategy_pipeline import report
     record=report()
     current=dict(view([]),_strategy_backtest=record['backtest'])
-    monkeypatch.setattr(dashboard,'snapshot',lambda:current)
+    monkeypatch.setattr(dashboard,'snapshot',lambda **kw:current)
     result=dashboard.api_payload('backtest',{})
     assert result['strategy_id']==pipeline.STRATEGY and result['strategy_version']=='2'
     assert result['backtest_status']=='SKIPPED_NO_CANDIDATES' and result['rows']==[]
@@ -92,6 +92,6 @@ def test_backtest_endpoint_names_the_screener_strategy_and_bound_result(monkeypa
 def test_backtest_endpoint_does_not_borrow_another_preparation(monkeypatch):
     from test_strategy_pipeline import report
     current=dict(view([]),_strategy_backtest=report()['backtest'])
-    monkeypatch.setattr(dashboard,'snapshot',lambda:current)
+    monkeypatch.setattr(dashboard,'snapshot',lambda **kw:current)
     result=dashboard.api_payload('backtest',dict(run_ts_utc='2026-10-26T03:45:00Z'))
     assert result['ok'] is False and result['status']=='ERROR' and result['rows']==[]

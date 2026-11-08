@@ -112,12 +112,19 @@ def test_native_timestamp_boundary_still_strict():
 def test_current_main_strategy_enabled_route_is_preserved(name,monkeypatch):
     called=[];snapshot=defaultdict(lambda:'FICTIONAL',rows_final=2)
     monkeypatch.setitem(sys.modules,'scripts.strategy_pipeline',SimpleNamespace(enabled=lambda:True))
-    monkeypatch.setitem(sys.modules,'scripts.strategy_dashboard',SimpleNamespace(snapshot=lambda:snapshot,
-        api_payload=lambda kind,args:called.append(kind) or dict(ok=True,kind=kind)))
+    def read_snapshot(*, base_dir):
+        assert base_dir == 'fictional-dashboard-root'
+        return snapshot
+    def read_api_payload(kind, args, *, base_dir):
+        assert base_dir == 'fictional-dashboard-root'
+        called.append(kind)
+        return dict(ok=True, kind=kind)
+    monkeypatch.setitem(sys.modules,'scripts.strategy_dashboard',SimpleNamespace(snapshot=read_snapshot,
+        api_payload=read_api_payload))
     path=Path(__file__).parents[1]/'dashboards/dashboard_app.py'
     node=next(item for item in ast.parse(path.read_bytes()).body if isinstance(item,ast.FunctionDef) and item.name==name)
     node.decorator_list=[] # Exercise the handler body without starting Flask or importing app configuration.
-    namespace=dict(Any=Any,_json_no_store=lambda value:value,request=SimpleNamespace(args={}))
+    namespace=dict(Any=Any,BASE_DIR='fictional-dashboard-root',_json_no_store=lambda value:value,request=SimpleNamespace(args={}))
     exec(compile(ast.Module(body=[node],type_ignores=[]),'reviewed-strategy-route','exec'),namespace)
     result=namespace[name]()
     if name.startswith('api_screener_'):assert result==dict(ok=True,kind=name.removeprefix('api_screener_')) and len(called)==1

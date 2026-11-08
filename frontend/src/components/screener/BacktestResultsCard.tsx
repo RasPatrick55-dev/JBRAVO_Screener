@@ -2,6 +2,7 @@ import {canDisplay, useSource, type SourceKind, type SourcePayload} from "../ui/
 import { useEffect, useMemo, useState } from "react";
 import type { LiveDataSyncState } from "../navbar/liveStatus";
 import type { BacktestRow, BacktestWindow } from "./types";
+import { ComputationScope, computationComplete, type ComputationContract } from "./completion";
 import {
   formatNumber,
   formatPercent,
@@ -49,10 +50,10 @@ type BacktestResultsCardProps = {
 
 export function BacktestCompletionBadge({payload, kind}: {payload: SourcePayload | null; kind: SourceKind}) {
   const status = String(payload?.status ?? "").toUpperCase();
-  const complete = payload?.ok === true && payload.completion_status === "verified" && status === "COMPLETE";
+  const complete = computationComplete(payload as ComputationContract | null);
   const label = kind === "loading" ? "LOADING" : kind === "stale" ? "STALE" : kind === "held" ? "HELD"
-    : kind === "unavailable" ? "UNAVAILABLE" : status === "ERROR" ? "ERROR" : complete ? "COMPLETE" : "UNVERIFIED";
-  const tone = label === "COMPLETE" ? "jbravo-status-success" : ["ERROR", "UNAVAILABLE"].includes(label) ? "jbravo-status-error" : "text-secondary";
+    : kind === "unavailable" ? "UNAVAILABLE" : status === "ERROR" ? "ERROR" : complete ? "COMPUTE COMPLETE" : "UNVERIFIED";
+  const tone = label === "COMPUTE COMPLETE" ? "jbravo-status-success" : ["ERROR", "UNAVAILABLE"].includes(label) ? "jbravo-status-error" : "text-secondary";
   return <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase ring-1 ring-inset ${tone}`}>{label}</span>;
 }
 
@@ -95,6 +96,7 @@ export default function BacktestResultsCard({ onSyncStateChange }: BacktestResul
           <BacktestCompletionBadge payload={result.payload} kind={result.kind}/>
         </div>
       </header>
+      <ComputationScope payload={result.payload as ComputationContract | null} />
 
       {errorMessage ? (
         <div

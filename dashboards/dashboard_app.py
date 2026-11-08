@@ -28,9 +28,10 @@ import time
 import inspect
 import pytz
 import re
+import shlex
 import urllib.error
 import urllib.request
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 from flask import Response, abort, jsonify, send_from_directory, request
@@ -150,9 +151,76 @@ def _pythonanywhere_usage_snapshot() -> Optional[dict[str, Any]]:
 
 
 def _percent_used(used: Optional[float], limit: Optional[float]) -> Optional[float]:
-    if used is None or limit is None or limit <= 0:
+    if (
+        used is None
+        or limit is None
+        or not math.isfinite(used)
+        or not math.isfinite(limit)
+        or used < 0
+        or limit <= 0
+    ):
         return None
-    return max(0.0, min(100.0, (used / limit) * 100))
+    return (used / limit) * 100
+
+
+def _usage_metric(
+    label: str,
+    *,
+    used: Any = None,
+    quota: Any = None,
+    percent: Any = None,
+    source: str | None = None,
+    captured_at: Any = None,
+    unit: str = "bytes",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Describe the observation, not a claim about current resource availability."""
+    used_value, quota_value = _to_float(used), _to_float(quota)
+    used_value = (
+        used_value
+        if used_value is not None and math.isfinite(used_value) and used_value >= 0
+        else None
+    )
+    quota_value = (
+        quota_value
+        if quota_value is not None and math.isfinite(quota_value) and quota_value > 0
+        else None
+    )
+    # Saved percentages may be clamped by an older collector. Prefer actual bytes.
+    value = _percent_used(used_value, quota_value)
+    if value is None and used is None and quota is None:
+        value = _to_float(percent)
+    elif value is None and used_value is not None and quota is None:
+        value = _to_float(percent)
+    if value is not None and (not math.isfinite(value) or value < 0):
+        value = None
+    stamp = _coerce_datetime_utc(captured_at)
+    observed = now or datetime.now(timezone.utc)
+    age = (observed - stamp).total_seconds() if stamp else None
+    max_age = 24 * 60 * 60
+    known_age = age is not None and age >= 0
+    stale = age > max_age if known_age else None
+    status = "unknown" if value is None or not known_age else "stale" if stale else "fresh"
+    return {
+        "label": label,
+        "value": round(value, 2) if value is not None else None,
+        "used": used_value,
+        "limit": quota_value,
+        "quota": quota_value,
+        "unit": unit,
+        "source": source,
+        "captured_at": stamp.isoformat() if stamp else None,
+        "age_seconds": round(age, 3) if known_age else None,
+        "max_age_seconds": max_age,
+        "status": status,
+        "stale": stale,
+        "over_quota": value > 100 if value is not None else None,
+    }
+
+
+def _usage_first(mapping: Mapping[str, Any], *keys: str) -> Any:
+    # Zero is an observed value, not a reason to select a fallback.
+    return next((mapping[key] for key in keys if mapping.get(key) not in (None, "")), None)
 
 
 def _pythonanywhere_cpu_usage() -> Optional[dict[str, Any]]:
@@ -172,36 +240,36 @@ def _pythonanywhere_cpu_usage() -> Optional[dict[str, Any]]:
     percent = _percent_used(cpu_seconds, cpu_limit)
     if percent is not None:
         return {
-            "label": "CPU Usage",
-            "value": math.floor(percent),
-            "used": cpu_seconds,
-            "limit": cpu_limit,
-            "unit": "sec",
+            **_usage_metric(
+                "CPU Usage",
+                used=cpu_seconds,
+                quota=cpu_limit,
+                source="pythonanywhere",
+                unit="sec",
+                captured_at=datetime.now(timezone.utc),
+            ),
             "next_reset_time": next_reset,
-            "source": "pythonanywhere",
         }
 
     snapshot = _pythonanywhere_usage_snapshot()
     if snapshot:
         cpu = snapshot.get("cpu") or snapshot.get("cpu_usage")
         if isinstance(cpu, dict):
-            cpu_seconds = _to_float(cpu.get("used_seconds") or cpu.get("used"))
-            cpu_limit = _to_float(cpu.get("limit_seconds") or cpu.get("limit"))
-            percent = _to_float(cpu.get("percent"))
-            if percent is None:
-                percent = _percent_used(cpu_seconds, cpu_limit)
-            if percent is not None:
-                return {
-                    "label": "CPU Usage",
-                    "value": math.floor(percent),
-                    "used": cpu_seconds,
-                    "limit": cpu_limit,
-                    "unit": "sec",
-                    "next_reset_time": cpu.get("next_reset_time"),
-                    "source": "snapshot",
-                }
+            return {
+                **_usage_metric(
+                    "CPU Usage",
+                    used=_usage_first(cpu, "used_seconds", "used"),
+                    quota=_usage_first(cpu, "limit_seconds", "limit"),
+                    percent=cpu.get("percent"),
+                    source=snapshot.get("_source") or "snapshot",
+                    unit="sec",
+                    captured_at=_usage_first(cpu, "captured_at", "generated_at")
+                    or snapshot.get("generated_at"),
+                ),
+                "next_reset_time": cpu.get("next_reset_time"),
+            }
 
-    return None
+    return _usage_metric("CPU Usage", unit="sec")
 
 
 def _pythonanywhere_file_storage_usage() -> Optional[dict[str, Any]]:
@@ -209,29 +277,20 @@ def _pythonanywhere_file_storage_usage() -> Optional[dict[str, Any]]:
     if snapshot:
         storage = snapshot.get("file_storage") or snapshot.get("storage")
         if isinstance(storage, dict):
-            percent = _to_float(storage.get("percent"))
-            used_bytes = _to_float(storage.get("used_bytes") or storage.get("used"))
-            limit_bytes = _to_float(storage.get("limit_bytes") or storage.get("limit"))
-            if percent is None:
-                percent = _percent_used(used_bytes, limit_bytes)
-            if percent is not None:
-                return {
-                    "label": "File Storage",
-                    "value": math.floor(percent),
-                    "used": used_bytes,
-                    "limit": limit_bytes,
-                    "unit": "bytes",
-                    "source": snapshot.get("_source"),
-                }
+            return _usage_metric(
+                "File Storage",
+                used=_usage_first(storage, "used_bytes", "file_used_bytes", "used"),
+                quota=_usage_first(storage, "limit_bytes", "file_quota_bytes", "limit"),
+                percent=_usage_first(storage, "percent", "file_storage_percent"),
+                source=snapshot.get("_source") or "snapshot",
+                captured_at=_usage_first(storage, "captured_at", "generated_at")
+                or snapshot.get("generated_at"),
+            )
 
     direct_pct = _to_float(os.environ.get("PYTHONANYWHERE_FILE_STORAGE_PCT"))
     if direct_pct is not None:
-        return {
-            "label": "File Storage",
-            "value": round(max(0.0, min(100.0, direct_pct))),
-            "source": "env",
-        }
-    return None
+        return _usage_metric("File Storage", percent=direct_pct, source="env")
+    return _usage_metric("File Storage")
 
 
 def _pythonanywhere_postgres_usage() -> Optional[dict[str, Any]]:
@@ -239,31 +298,20 @@ def _pythonanywhere_postgres_usage() -> Optional[dict[str, Any]]:
     if snapshot:
         storage = snapshot.get("postgres_storage") or snapshot.get("postgres")
         if isinstance(storage, dict):
-            percent = _to_float(storage.get("pg_storage_percent"))
-            if percent is None:
-                percent = _to_float(storage.get("percent"))
-            used_bytes = _to_float(storage.get("used_bytes") or storage.get("used"))
-            limit_bytes = _to_float(storage.get("limit_bytes") or storage.get("limit"))
-            if percent is None:
-                percent = _percent_used(used_bytes, limit_bytes)
-            if percent is not None:
-                return {
-                    "label": "Postgres Storage",
-                    "value": math.floor(percent),
-                    "used": used_bytes,
-                    "limit": limit_bytes,
-                    "unit": "bytes",
-                    "source": snapshot.get("_source"),
-                }
+            return _usage_metric(
+                "Postgres Storage",
+                used=_usage_first(storage, "used_bytes", "pg_used_bytes", "used"),
+                quota=_usage_first(storage, "limit_bytes", "pg_quota_bytes", "limit"),
+                percent=_usage_first(storage, "pg_storage_percent", "percent"),
+                source=snapshot.get("_source") or "snapshot",
+                captured_at=_usage_first(storage, "captured_at", "generated_at")
+                or snapshot.get("generated_at"),
+            )
 
     direct_pct = _to_float(os.environ.get("PYTHONANYWHERE_POSTGRES_PCT"))
     if direct_pct is not None:
-        return {
-            "label": "Postgres Storage",
-            "value": round(max(0.0, min(100.0, direct_pct))),
-            "source": "env",
-        }
-    return None
+        return _usage_metric("Postgres Storage", percent=direct_pct, source="env")
+    return _usage_metric("Postgres Storage")
 
 
 def _pythonanywhere_schedule_tasks() -> list[dict[str, Any]]:
@@ -281,64 +329,105 @@ def _pythonanywhere_always_on_tasks() -> list[dict[str, Any]]:
 
 
 def _task_name_from_command(command: str) -> Optional[str]:
-    normalized = command.lower()
-    if "run_pipeline" in normalized:
-        return "Run Pipeline"
-    if "backtest" in normalized:
-        return "Screener Backtest"
-    if "metrics" in normalized:
-        return "Metrics Update"
-    if "execute_trades" in normalized:
-        return "Execute Trades"
-    return None
+    """Classify invoked entrypoints, not words in descriptions or shell output."""
+    labels = {
+        "market_daily_boot.py": "Market Daily Producer",
+        "executor_boot.py": "Execute Trades",
+        "strategy_monitor_boot.py": "Monitor Positions",
+        "run_pipeline.py": "Run Pipeline",
+        "scripts.run_pipeline": "Run Pipeline",
+        "backtest.py": "Screener Backtest",
+        "scripts.backtest": "Screener Backtest",
+        "metrics.py": "Metrics Update",
+        "scripts.metrics": "Metrics Update",
+        "execute_trades.py": "Execute Trades",
+        "scripts.execute_trades": "Execute Trades",
+        "monitor_positions.py": "Monitor Positions",
+        "scripts.monitor_positions": "Monitor Positions",
+    }
+    try:
+        lexer = shlex.shlex(str(command or ""), posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        segments: list[list[str]] = [[]]
+        for token in lexer:
+            if token in {";", "&&", "||", "|", "&"}:
+                segments.append([])
+            else:
+                segments[-1].append(token)
+        names: set[str] = set()
+        for tokens in segments:
+            if not tokens:
+                continue
+            if Path(tokens[0]).name == "timeout":
+                tokens = tokens[1:]
+                while tokens and tokens[0].startswith("--") and "=" in tokens[0]:
+                    tokens = tokens[1:]
+                if not tokens or not re.fullmatch(r"[0-9]+(?:[smhd])?", tokens[0]):
+                    continue
+                tokens = tokens[1:]
+            if not tokens or not re.fullmatch(
+                r"python(?:[23](?:\.[0-9]+)?)?(?:\.exe)?", Path(tokens[0]).name
+            ):
+                continue
+            args = tokens[1:]
+            while args and args[0].startswith("-") and args[0] not in {"-c", "-m", "--"}:
+                args = args[1:]
+            if not args or args[0] == "-c":
+                continue
+            if args[0] == "-m":
+                target = args[1] if len(args) > 1 else ""
+            else:
+                if args[0] == "--":
+                    args = args[1:]
+                target = Path(args[0]).name if args else ""
+            if target in labels:
+                names.add(labels[target])
+        return next(iter(names)) if len(names) == 1 else None
+    except (ValueError, IndexError):
+        return None
 
 
 def _format_task_time(task: Mapping[str, Any]) -> str:
-    printable = str(task.get("printable_time") or "").strip()
     interval = str(task.get("interval") or "").lower()
-    minute = task.get("minute")
-    hour = task.get("hour")
-    tz_label = os.environ.get("PYTHONANYWHERE_TASK_TZ") or "UTC"
-
-    if printable:
-        return f"{printable} {tz_label}".strip()
-
-    if interval == "hourly":
-        try:
-            minute_int = int(minute)
-            return f"**:{minute_int:02d} {tz_label}"
-        except Exception:
-            return f"**:00 {tz_label}"
-
-    if interval in {"daily", "weekly", "monthly"}:
-        try:
-            hour_int = int(hour)
-            minute_int = int(minute)
-            return f"{hour_int:02d}:{minute_int:02d} {tz_label}"
-        except Exception:
-            return f"--:-- {tz_label}"
-
-    return "--:--"
+    # The provider's scheduled-task API specifies these fields in UTC.
+    try:
+        minute_text = str(task.get("minute"))
+        if not minute_text.isdigit() or not 0 <= int(minute_text) < 60:
+            return "Unknown"
+        minute = int(minute_text)
+        if interval == "hourly":
+            return f"**:{minute:02d} UTC"
+        hour_text = str(task.get("hour"))
+        if (
+            interval in {"daily", "weekly", "monthly"}
+            and hour_text.isdigit()
+            and 0 <= int(hour_text) < 24
+        ):
+            return f"{int(hour_text):02d}:{minute:02d} UTC"
+    except (TypeError, ValueError):
+        pass
+    return "Unknown"
 
 
-def _normalize_schedule_task(task: Mapping[str, Any]) -> dict[str, Any]:
-    description = str(task.get("description") or "").strip()
-    command = str(task.get("command") or "").strip()
-    name = description or _task_name_from_command(command) or "Scheduled Task"
+def _normalize_schedule_task(task: Mapping[str, Any], *, kind: str = "schedule") -> dict[str, Any]:
+    name = _task_name_from_command(str(task.get("command") or task.get("script") or ""))
     interval = str(task.get("interval") or "").lower()
-    frequency = interval.capitalize() if interval else "Schedule"
-    if interval == "daily":
-        frequency = "Daily"
-    elif interval == "hourly":
-        frequency = "Hourly"
-    elif interval == "weekly":
-        frequency = "Weekly"
-    elif interval == "monthly":
-        frequency = "Monthly"
+    frequency = (
+        interval.capitalize() if interval in {"daily", "hourly", "weekly", "monthly"} else "Unknown"
+    )
+    task_id = str(task.get("id") or "")
     return {
-        "name": name,
-        "frequency": frequency,
-        "time": _format_task_time(task),
+        "name": name
+        or (
+            "Unclassified always-on task" if kind == "always_on" else "Unclassified scheduled task"
+        ),
+        "name_status": "recognized" if name else "unknown",
+        "task_id": int(task_id) if task_id.isdigit() else None,
+        "task_kind": kind,
+        "enabled": task.get("enabled") if type(task.get("enabled")) is bool else None,
+        "frequency": "Always-on" if kind == "always_on" else frequency,
+        "time": "Not scheduled" if kind == "always_on" else _format_task_time(task),
+        "source": "pythonanywhere",
     }
 
 
@@ -511,19 +600,45 @@ def _fetch_pythonanywhere_task_log() -> Optional[tuple[str, str]]:
 
 
 def _fetch_pythonanywhere_execute_task_log() -> Optional[tuple[str, str]]:
-    return _fetch_pythonanywhere_task_log_for(
-        task_id=os.environ.get("PYTHONANYWHERE_EXECUTE_TASK_ID"),
-        remote_path=os.environ.get("PYTHONANYWHERE_EXECUTE_TASK_LOG_PATH"),
-        remote_url=os.environ.get("PYTHONANYWHERE_EXECUTE_TASK_LOG_URL"),
-        match_keywords=[
-            "pre-market executor",
-            "pre-market",
-            "premarket",
-            "execute trades",
-            "execute_trades",
-            "execute_trades.py",
-        ],
+    remote_url = os.environ.get("PYTHONANYWHERE_EXECUTE_TASK_LOG_URL")
+    remote_path = os.environ.get("PYTHONANYWHERE_EXECUTE_TASK_LOG_PATH")
+    if remote_url or remote_path:
+        # Explicit configured sources keep their actual provenance; the receipt
+        # parser rejects non-provider task sources rather than claiming a task ID.
+        return _fetch_pythonanywhere_file(remote_url, remote_path)
+    task_id = str(os.environ.get("PYTHONANYWHERE_EXECUTE_TASK_ID") or "")
+    if task_id:
+        if not task_id.isdigit():
+            return None
+        task = _pythonanywhere_api_get_json(f"schedule/{task_id}/")
+        if not isinstance(task, Mapping):
+            return None
+    else:
+        from dashboards.operational_status import _scheduled_launcher
+
+        matches = [
+            task
+            for task in _pythonanywhere_schedule_tasks()
+            if _scheduled_launcher(task) is not None
+        ]
+        if len(matches) != 1:
+            return None
+        task = matches[0]
+        task_id = str(task.get("id") or "")
+        if not task_id.isdigit():
+            return None
+    logfile = (
+        task.get("logfile")
+        or task.get("log_file")
+        or _task_logfile_from_detail("schedule", task_id)
     )
+    if not logfile:
+        return None
+    payload = _fetch_pythonanywhere_file(None, str(logfile))
+    if not payload:
+        return None
+    # The selected provider task binds this log even when its filename varies.
+    return payload[0], f"pythonanywhere:schedule/{task_id}/"
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -574,10 +689,10 @@ DEFAULT_TRAIL_PERCENT = 3.0
 
 _MONITOR_LOG_LINE_PATTERNS = (
     re.compile(
-        r"^\[(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:,\d+)?\]\s*(?:\[(\w+)\])?\s*:?\s*(.*)$"
+        r"^\[(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2}(?:[,.]\d+)?)\]\s*(?:\[(\w+)\])?\s*:?\s*(.*)$"
     ),
     re.compile(
-        r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:,\d+)?(?:\s+-\s+(\w+)\s+-\s+)?\s*(?:\[(\w+)\])?\s*(.*)$"
+        r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2}(?:[,.]\d+)?)(?:\s+-\s+(\w+)\s+-\s+)?\s*(?:\[(\w+)\])?\s*(.*)$"
     ),
 )
 
@@ -816,9 +931,7 @@ def _parse_monitor_log_line(line: str) -> Optional[dict[str, str]]:
 
 def _format_monitor_timestamp(date_text: str, time_text: str) -> str:
     try:
-        parsed = datetime.strptime(f"{date_text} {time_text}", "%Y-%m-%d %H:%M:%S").replace(
-            tzinfo=timezone.utc
-        )
+        parsed = datetime.fromisoformat(f"{date_text}T{time_text.replace(',', '.')}").replace(tzinfo=timezone.utc)
         hour = parsed.strftime("%I").lstrip("0") or "0"
         return f"{parsed.month}/{parsed.day}/{parsed.year}, {hour}:{parsed.strftime('%M')} {parsed.strftime('%p')} UTC"
     except Exception:
@@ -906,74 +1019,130 @@ def _is_position_log_message(message: str) -> bool:
     )
 
 
-def _monitor_log_entries_from_text(text: str | None, limit: int = 80) -> list[dict[str, str]]:
+def _monitor_log_entries_from_text(
+    text: str | None,
+    limit: int = 80,
+    *,
+    source: str = "monitor.log",
+) -> list[dict[str, Any]]:
     if not text:
         return []
-    entries: list[dict[str, str]] = []
+    entries: list[dict[str, Any]] = []
     for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        parsed = _parse_monitor_log_line(line)
+        parsed = _parse_monitor_log_line(raw_line.strip())
         if not parsed:
             continue
         message = parsed["message"]
         if not message or not _is_position_log_message(message):
             continue
-        sort_dt = _coerce_datetime_utc(f"{parsed['date']}T{parsed['time']}Z")
+        sort_dt = _coerce_datetime_utc(f"{parsed['date']}T{parsed['time'].replace(',', '.')}Z")
+        run_match = re.search(r"\brun_id[=:]([A-Za-z0-9_-]+)", message)
         entries.append(
             {
                 "timestamp": _format_monitor_timestamp(parsed["date"], parsed["time"]),
                 "type": _monitor_log_type(parsed.get("level", ""), message),
                 "message": message,
                 "_ts": sort_dt.isoformat() if sort_dt else "",
+                "ts_utc": sort_dt.isoformat() if sort_dt else None,
+                "source": source,
+                "source_kind": "monitor_log",
+                "run_id": run_match.group(1) if run_match else None,
+                **_monitor_observation_metadata(
+                    sort_dt, timestamp_kind="log_event", max_age_seconds=86400
+                ),
             }
         )
-    if not entries:
-        return []
     return list(reversed(entries[-max(1, int(limit)) :]))
 
 
-def _fetch_pythonanywhere_monitor_log_text() -> Optional[str]:
-    remote_payload = _fetch_pythonanywhere_file(
-        os.environ.get("PYTHONANYWHERE_MONITOR_LOG_URL"),
-        os.environ.get("PYTHONANYWHERE_MONITOR_LOG_PATH"),
-    )
-    if remote_payload:
-        remote_text, _ = remote_payload
-        return remote_text
-
-    sources = _pythonanywhere_log_sources()
-    if not sources:
+def _fetch_pythonanywhere_monitor_log_source() -> Optional[tuple[str, str]]:
+    # A scheduler log can include backtests and other jobs. Content keywords or
+    # descriptive task names cannot establish that an event came from a monitor.
+    remote_url = os.environ.get("PYTHONANYWHERE_MONITOR_LOG_URL")
+    remote_path = os.environ.get("PYTHONANYWHERE_MONITOR_LOG_PATH")
+    configured_path = urlsplit(remote_url).path if remote_url else remote_path
+    if not configured_path or Path(configured_path).name != "monitor.log":
         return None
+    return _fetch_pythonanywhere_file(remote_url, remote_path)
 
-    preferred_chunks: list[str] = []
-    fallback_chunks: list[str] = []
-    for source in sources:
-        source_label = str(source.get("source") or "")
-        text = str(source.get("text") or "")
-        if not text.strip():
+
+def _strategy_monitor_log_entries(limit: int = 80) -> list[dict[str, Any]]:
+    """Read the dedicated lifecycle monitor receipt, never a pipeline simulation."""
+    path = Path(BASE_DIR) / "reports" / "strategy_execution" / "monitor" / "latest.json"
+    try:
+        if path.stat().st_size > 1024 * 1024:
+            return []
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(receipt, Mapping) or receipt.get("paper_only") is not True:
+        return []
+    finished = _coerce_datetime_utc(receipt.get("finished_at"))
+    events = receipt.get("events")
+    if finished is None or not isinstance(events, list):
+        return []
+    output: list[dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, Mapping):
             continue
-        source_lower = source_label.lower()
-        text_lower = text.lower()
-        if (
-            "monitor" in source_lower
-            or "trailing" in source_lower
-            or "monitor" in text_lower
-            or "trailing stop" in text_lower
-            or "trail_" in text_lower
-        ):
-            preferred_chunks.append(text)
-        else:
-            fallback_chunks.append(text)
+        code = str(event.get("code") or "").strip()
+        if not code:
+            continue
+        event_stamp = _coerce_datetime_utc(event.get("ts_utc") or event.get("timestamp"))
+        event_dt = event_stamp or finished
+        message = "Monitor observation: " + code.replace("_", " ").lower()
+        if event.get("protection_confirmed") is False:
+            message += "; protection unconfirmed"
+        output.append(
+            {
+                "timestamp": _format_utc_datetime_for_monitor(event_dt),
+                "ts_utc": event_dt.isoformat(),
+                "_ts": event_dt.isoformat(),
+                "type": "warning" if event.get("protection_confirmed") is False else "info",
+                "message": message,
+                "source": "reports/strategy_execution/monitor/latest.json",
+                "source_kind": "monitor_receipt",
+                "run_id": receipt.get("run_id"),
+                "event_code": code,
+                "signal_id": event.get("signal_id"),
+                "old_order_id": event.get("old_order_id"),
+                "replacement_order_id": event.get("replacement_order_id"),
+                "protection_confirmed": event.get("protection_confirmed"),
+                "occurrences": event.get("occurrences"),
+                "report_observed_at": finished.isoformat(),
+                "extended_hours_native_protection": receipt.get("extended_hours_native_protection"),
+                "native_stops_trigger_only_regular_hours": receipt.get(
+                    "native_stops_trigger_only_regular_hours"
+                ),
+                **_monitor_observation_metadata(
+                    finished,
+                    timestamp_kind="monitor_event" if event_stamp else "monitor_report_observation",
+                    max_age_seconds=300,
+                ),
+            }
+        )
+    return output[-max(1, int(limit)) :]
 
-    selected = preferred_chunks if preferred_chunks else fallback_chunks[:1]
-    if not selected:
-        return None
-    return "\n".join(selected)
+
+def _monitor_observation_metadata(
+    stamp: datetime | None,
+    *,
+    timestamp_kind: str,
+    max_age_seconds: int,
+) -> dict[str, Any]:
+    age = (datetime.now(timezone.utc) - stamp).total_seconds() if stamp else None
+    known = age is not None and age >= 0
+    stale = age > max_age_seconds if known else None
+    return {
+        "timestamp_kind": timestamp_kind,
+        "age_seconds": age if known else None,
+        "stale": stale,
+        "freshness": "unknown" if not known else "stale" if stale else "fresh",
+        "max_age_seconds": max_age_seconds,
+    }
 
 
-def _alpaca_trailing_logs(limit: int = 80, lookback_hours: int = 96) -> list[dict[str, str]]:
+def _alpaca_trailing_logs(limit: int = 80, lookback_hours: int = 96) -> list[dict[str, Any]]:
     if trading_client is None:
         return []
 
@@ -992,7 +1161,7 @@ def _alpaca_trailing_logs(limit: int = 80, lookback_hours: int = 96) -> list[dic
         logger.warning("Failed to fetch Alpaca trailing orders for monitoring logs: %s", exc)
         return []
 
-    entries: list[dict[str, str]] = []
+    entries: list[dict[str, Any]] = []
     for order in orders:
         order_type = getattr(order, "type", None)
         order_type_text = (
@@ -1062,6 +1231,12 @@ def _alpaca_trailing_logs(limit: int = 80, lookback_hours: int = 96) -> list[dic
                 "type": tone,
                 "message": message,
                 "_ts": event_dt.isoformat(),
+                "ts_utc": event_dt.isoformat(),
+                "source": "alpaca:/v2/orders", "source_kind": "broker_observation",
+                "run_id": None,
+                "timestamp_kind": "broker_order_event",
+                **_order_identity({key: getattr(order, key, None)
+                    for key in ("id", "status", "replaces", "replaced_by")}),
             }
         )
 
@@ -1072,81 +1247,52 @@ def _alpaca_trailing_logs(limit: int = 80, lookback_hours: int = 96) -> list[dic
     return entries[: max(1, int(limit))]
 
 
-def _positions_logs_live(limit: int = 80) -> tuple[list[dict[str, str]], str]:
-    text = _fetch_pythonanywhere_monitor_log_text()
-    logs = _monitor_log_entries_from_text(text, limit=limit)
-    alpaca_logs = _alpaca_trailing_logs(limit=limit)
-
-    merged = logs + alpaca_logs
-    if merged:
-        deduped: list[dict[str, str]] = []
-        seen: set[tuple[str, str]] = set()
-        for row in sorted(merged, key=lambda item: str(item.get("_ts") or ""), reverse=True):
-            key = (str(row.get("_ts") or ""), str(row.get("message") or ""))
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(
-                {
-                    "timestamp": str(row.get("timestamp") or "--"),
-                    "type": str(row.get("type") or "info"),
-                    "message": str(row.get("message") or ""),
-                }
-            )
-            if len(deduped) >= max(1, int(limit)):
-                break
-        source = (
-            "pythonanywhere+alpaca"
-            if logs and alpaca_logs
-            else ("pythonanywhere" if logs else "alpaca")
-        )
-        return deduped, source
-
-    local_path = Path(BASE_DIR) / "logs" / "monitor.log"
-    if local_path.exists():
+def _positions_logs_live(limit: int = 80) -> tuple[list[dict[str, Any]], str]:
+    receipt_logs = _strategy_monitor_log_entries(limit=limit)
+    remote = _fetch_pythonanywhere_monitor_log_source()
+    logs = (
+        _monitor_log_entries_from_text(remote[0], limit=limit, source=remote[1]) if remote else []
+    )
+    log_source = "pythonanywhere" if logs else "none"
+    if not logs:
+        local_path = Path(BASE_DIR) / "logs" / "monitor.log"
         try:
-            local_text = local_path.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
+            local_text = local_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
             local_text = ""
-        local_logs = _monitor_log_entries_from_text(local_text, limit=limit)
-        merged_local = local_logs + alpaca_logs
-        if merged_local:
-            deduped: list[dict[str, str]] = []
-            seen: set[tuple[str, str]] = set()
-            for row in sorted(
-                merged_local, key=lambda item: str(item.get("_ts") or ""), reverse=True
-            ):
-                key = (str(row.get("_ts") or ""), str(row.get("message") or ""))
-                if key in seen:
-                    continue
-                seen.add(key)
-                deduped.append(
-                    {
-                        "timestamp": str(row.get("timestamp") or "--"),
-                        "type": str(row.get("type") or "info"),
-                        "message": str(row.get("message") or ""),
-                    }
-                )
-                if len(deduped) >= max(1, int(limit)):
-                    break
-            source = (
-                "local-fallback+alpaca"
-                if local_logs and alpaca_logs
-                else ("local-fallback" if local_logs else "alpaca")
+        logs = _monitor_log_entries_from_text(local_text, limit=limit, source="logs/monitor.log")
+        if logs:
+            log_source = "local-fallback"
+    alpaca_logs = _alpaca_trailing_logs(limit=limit)
+    merged = receipt_logs + logs + alpaca_logs
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for row in sorted(merged, key=lambda item: str(item.get("_ts") or ""), reverse=True):
+        # Equal text/time in different sources or runs is not the same evidence.
+        key = tuple(
+            row.get(field)
+            for field in (
+                "source",
+                "source_kind",
+                "run_id",
+                "_ts",
+                "message",
+                "order_id",
+                "signal_id",
             )
-            return deduped, source
-
-    if alpaca_logs:
-        return [
-            {
-                "timestamp": str(row.get("timestamp") or "--"),
-                "type": str(row.get("type") or "info"),
-                "message": str(row.get("message") or ""),
-            }
-            for row in alpaca_logs[: max(1, int(limit))]
-        ], "alpaca"
-
-    return [], "none"
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append({key: value for key, value in row.items() if key != "_ts"})
+        if len(deduped) >= max(1, int(limit)):
+            break
+    sources = (
+        (["monitor-receipt"] if receipt_logs else [])
+        + ([log_source] if logs else [])
+        + (["alpaca"] if alpaca_logs else [])
+    )
+    return deduped, "+".join(sources) or "none"
 
 
 def _alpaca_feed() -> Optional[DataFeed]:
@@ -2072,6 +2218,7 @@ _ACCOUNT_OPEN_ORDER_STATUSES = {
     "calculated",
     "held",
     "new",
+    "done_for_day",
     "partially_filled",
     "pending_cancel",
     "pending_new",
@@ -5661,14 +5808,26 @@ def api_pythonanywhere_resources():
     postgres_usage = _pythonanywhere_postgres_usage()
     if postgres_usage:
         resources.append(postgres_usage)
-    return jsonify({"ok": bool(resources), "resources": resources})
+    return _json_no_store({"ok": any(row.get("value") is not None for row in resources), "resources": resources})
 
 
 @server.route("/api/pythonanywhere/tasks")
 def api_pythonanywhere_tasks():
     tasks = _pythonanywhere_schedule_tasks()
     normalized = [_normalize_schedule_task(task) for task in tasks]
-    return jsonify({"ok": bool(normalized), "tasks": normalized})
+    normalized.extend(
+        _normalize_schedule_task(task, kind="always_on")
+        for task in _pythonanywhere_always_on_tasks()
+    )
+    return _json_no_store(
+        {
+            "ok": bool(normalized),
+            "status": "ready" if normalized else "unknown",
+            "tasks": normalized,
+            "source": "pythonanywhere",
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
 
 
 @server.route("/api/pythonanywhere/logs")
@@ -5891,6 +6050,8 @@ def api_account_open_orders():
                         "qty": source_contracts.number(qty),
                         "price_or_stop": _order_price_or_stop(raw),
                         "submitted_at": submitted_at,
+                        "status": status or None,
+                        **_order_identity(raw),
                     }
                 )
 
@@ -6099,7 +6260,7 @@ def api_execute_task():
     from scripts.strategy_pipeline import enabled
     if enabled(BASE_DIR):
         from dashboards.operational_status import execute_task
-        return _json_no_store(execute_task(BASE_DIR))
+        return _json_no_store(execute_task(BASE_DIR, scheduled_log=_fetch_pythonanywhere_execute_task_log()))
     payload = _parse_task_log(
         Path(EXECUTE_TASK_LOG_PATH), fetcher=_fetch_pythonanywhere_execute_task_log
     )
@@ -6118,9 +6279,11 @@ def api_positions_monitoring():
 @server.route("/api/execute/overview")
 def api_execute_overview():
     summary = _execute_summary_payload()
+    schedule = summary.get("execution_schedule") or {}
     broker = _dashboard_broker_positions()
     account = api_account_summary().get_json()
-    return _json_no_store(dict(ok=summary["ok"], in_window=summary["in_window"],
+    return _json_no_store(dict(ok=summary["ok"], in_window=schedule.get("in_window"),
+        execution_schedule=schedule,
         buying_power=account.get("buying_power") if account.get("ok") else None,
         open_positions=len(broker["positions"]) if broker["positions"] is not None else None,
         open_positions_source="alpaca", open_positions_status=broker["status"],
@@ -6266,7 +6429,7 @@ def _execute_latest_candidates_count() -> int | None:
     from scripts.strategy_pipeline import enabled as strategy_enabled
     if strategy_enabled():
         from scripts.strategy_dashboard import snapshot
-        return snapshot()['rows_final']
+        return snapshot(base_dir=BASE_DIR)['rows_final']
     row = _db_fetch_one("SELECT COUNT(*) AS count FROM latest_screener_candidates")
     return _execute_to_int_optional(row.get("count")) if row else None
 
@@ -6296,39 +6459,66 @@ def _execute_last_run_from_logs() -> str | None:
 
 
 def _execute_order_status_bucket(status: str, event_type: str = "") -> str:
-    text = f"{status} {event_type}".strip().lower()
-    if any(
-        token in text for token in ("reject", "cancel", "cancelled", "expired", "fail", "error")
-    ):
-        return "REJECTED"
-    if "partial" in text:
-        return "PARTIAL"
-    if any(token in text for token in ("fill", "closed", "done_for_day")):
-        return "FILLED"
-    if any(
-        token in text
-        for token in (
-            "new",
-            "accepted",
-            "pending",
-            "submit",
-            "open",
-            "held",
-            "replace",
-            "calculated",
-            "stopped",
-        )
-    ):
-        return "PENDING"
-    normalized = str(status or "").strip().upper()
-    return normalized or "PENDING"
+    # A broker status is more authoritative than an earlier event label. In
+    # particular, pending_cancel is not canceled and done_for_day is not filled.
+    normalized = str(getattr(status, "value", status) or "").strip().lower()
+    if normalized.startswith("orderstatus."):
+        normalized = normalized.split(".", 1)[1]
+    aliases = {
+        "partially_filled": "PARTIAL",
+        "partial": "PARTIAL",
+        "cancelled": "CANCELED",
+        "new": "PENDING",
+        "accepted": "PENDING",
+        "accepted_for_bidding": "PENDING",
+        "pending_new": "PENDING",
+        "submitted": "PENDING",
+        "open": "PENDING",
+    }
+    if normalized:
+        return aliases.get(normalized, normalized.upper())
+    event = str(event_type or "").strip().upper()
+    event_states = {
+        "BUY_FILL": "FILLED",
+        "SELL_FILL": "FILLED",
+        "SELL_FILL_OBSERVED": "FILLED",
+        "BUY_REJECTED": "REJECTED",
+        "SELL_REJECTED": "REJECTED",
+        "BUY_CANCELLED": "CANCELED",
+        "SELL_CANCELLED": "CANCELED",
+        "BUY_CANCELED": "CANCELED",
+        "SELL_CANCELED": "CANCELED",
+        "TRAIL_CANCEL": "CANCELED",
+        "BUY_EXPIRED": "EXPIRED",
+        "SELL_EXPIRED": "EXPIRED",
+        "BUY_SUBMIT": "PENDING",
+        "SELL_SUBMIT": "PENDING",
+        "TRAIL_SUBMIT": "PENDING",
+        "TRAIL_TRIGGER": "TRIGGERED",
+    }
+    return event_states.get(event, "UNKNOWN")
 
 
 def _execute_trailing_status_bucket(status: str, event_type: str = "") -> str:
-    text = f"{status} {event_type}".strip().lower()
-    if any(token in text for token in ("trigger", "fill", "closed", "cancel", "reject", "expired")):
-        return "TRIGGERED"
-    return "ACTIVE"
+    bucket = _execute_order_status_bucket(status, event_type)
+    return "ACTIVE" if bucket == "PENDING" else bucket
+
+
+def _order_identity(
+    raw: Mapping[str, Any], *, order_id: Any = None, status: Any = None
+) -> dict[str, Any]:
+    def identifier(value: Any) -> str | None:
+        if value is None:
+            return None
+        return str(value).strip() or None
+
+    broker_status = raw.get("status") if raw.get("status") not in (None, "") else status
+    return {
+        "order_id": identifier(order_id or raw.get("id") or raw.get("order_id")),
+        "raw_status": identifier(getattr(broker_status, "value", broker_status)),
+        "replaces": identifier(raw.get("replaces")),
+        "replaced_by": identifier(raw.get("replaced_by")),
+    }
 
 
 def _execute_status_scope_matches(status_bucket: str, status_scope: str) -> bool:
@@ -6337,8 +6527,19 @@ def _execute_status_scope_matches(status_bucket: str, status_scope: str) -> bool
     if scope == "all":
         return True
     if scope == "open":
-        return normalized in {"PENDING", "PARTIAL", "ACTIVE"}
-    return normalized in {"FILLED", "REJECTED", "TRIGGERED"}
+        return normalized in {
+            "PENDING",
+            "PARTIAL",
+            "ACTIVE",
+            "PENDING_REPLACE",
+            "PENDING_CANCEL",
+            "DONE_FOR_DAY",
+            "HELD",
+            "STOPPED",
+            "SUSPENDED",
+            "CALCULATED",
+        }
+    return normalized in {"FILLED", "REJECTED", "CANCELED", "EXPIRED", "REPLACED", "TRIGGERED"}
 
 
 def _execute_lsx_matches(
@@ -6728,11 +6929,17 @@ def _execute_default_order_note(
         return "Order filled"
     if status_upper == "REJECTED":
         if side_upper == "BUY":
-            return "Buy order rejected or canceled"
+            return "Buy order rejected"
         if side_upper == "SELL":
-            return "Sell order rejected or canceled"
-        return "Order rejected or canceled"
-    return ""
+            return "Sell order rejected"
+        return "Order rejected"
+    status_notes = {
+        "CANCELED": "Order canceled", "EXPIRED": "Order expired", "REPLACED": "Order replaced",
+        "PENDING_REPLACE": "Replacement pending; broker confirmation unresolved",
+        "PENDING_CANCEL": "Cancellation pending; broker confirmation unresolved",
+        "DONE_FOR_DAY": "Order done for the session; not a fill",
+    }
+    return status_notes.get(status_upper, "")
 
 
 def _execute_note_from_event_type(event_type: Any) -> str:
@@ -6905,7 +7112,7 @@ def _execute_orders_from_alpaca(
             "limit_stop_trail": _execute_limit_stop_trail(raw),
             "status": status_bucket,
             "filled_avg": _to_float(raw.get("filled_avg_price")),
-            "order_id": str(raw.get("id") or raw.get("order_id") or "").strip(),
+            **_order_identity(raw),
             "notes": notes,
             "_ts": ts_dt,
             "_event_type": str(raw.get("type") or ""),
@@ -6989,7 +7196,7 @@ def _execute_orders_from_db(fetch_limit: int) -> tuple[list[dict[str, Any]], str
                     or raw_payload.get("avg_fill_price")
                     or raw_payload.get("filled_avg")
                 ),
-                "order_id": str(row.get("order_id") or "").strip(),
+                **_order_identity(raw_payload, order_id=row.get("order_id"), status=row.get("status")),
                 "notes": notes,
                 "_ts": ts_dt,
                 "_event_type": event_type,
@@ -7030,6 +7237,9 @@ def _execute_merge_order_rows(
             "qty",
             "limit_stop_trail",
             "status",
+            "raw_status",
+            "replaces",
+            "replaced_by",
             "filled_avg",
             "_ts",
             "_event_type",
@@ -7037,6 +7247,11 @@ def _execute_merge_order_rows(
             value = row.get(field)
             if value not in (None, "", "--"):
                 combined[field] = value
+        # A current broker response with no replacement link must not inherit a
+        # stale link from a historical event row.
+        for field in ("raw_status", "replaces", "replaced_by"):
+            if field in row:
+                combined[field] = row[field]
         candidate_note = str(row.get("notes") or "").strip()
         current_note = str(combined.get("notes") or "").strip()
         if candidate_note and (
@@ -7149,6 +7364,9 @@ def _execute_filter_order_rows(
                 row.get("qty"),
                 row.get("limit_stop_trail"),
                 row.get("status"),
+                row.get("raw_status"),
+                row.get("replaces"),
+                row.get("replaced_by"),
                 row.get("filled_avg"),
                 row.get("order_id"),
                 row.get("notes"),
@@ -7173,6 +7391,9 @@ def _execute_filter_order_rows(
                 "qty": row.get("qty"),
                 "limit_stop_trail": row.get("limit_stop_trail") or "--",
                 "status": row.get("status"),
+                "raw_status": row.get("raw_status"),
+                "replaces": row.get("replaces"),
+                "replaced_by": row.get("replaced_by"),
                 "filled_avg": row.get("filled_avg"),
                 "order_id": row.get("order_id"),
                 "notes": row.get("notes") or "",
@@ -7238,6 +7459,7 @@ def _execute_trailing_from_db(fetch_limit: int) -> tuple[list[dict[str, Any]], s
                 "trail": _execute_trail_text(raw_payload),
                 "stop_price": _execute_stop_price_from_raw(raw_payload),
                 "status": status_bucket,
+                **_order_identity(raw_payload, order_id=row.get("order_id"), status=row.get("status")),
                 "parent_leg": _execute_parent_leg(
                     raw_payload, str(row.get("order_id") or "").strip()
                 ),
@@ -7311,6 +7533,7 @@ def _execute_trailing_from_alpaca(
                 "trail": _execute_trail_text(raw),
                 "stop_price": _execute_stop_price_from_raw(raw),
                 "status": status_bucket,
+                **_order_identity(raw),
                 "parent_leg": _execute_parent_leg(raw, str(raw.get("id") or "").strip()),
                 "_ts": ts_dt,
                 "_side": _execute_side_label(raw.get("side"), event_type),
@@ -7346,6 +7569,10 @@ def _execute_filter_trailing_rows(
                 row.get("trail"),
                 row.get("stop_price"),
                 row.get("status"),
+                row.get("raw_status"),
+                row.get("order_id"),
+                row.get("replaces"),
+                row.get("replaced_by"),
                 row.get("parent_leg"),
             ],
         ):
@@ -7367,7 +7594,11 @@ def _execute_filter_trailing_rows(
                 "trail": row.get("trail") or "--",
                 "stop_price": row.get("stop_price"),
                 "status": row.get("status"),
+                "raw_status": row.get("raw_status"),
+                "replaces": row.get("replaces"),
+                "replaced_by": row.get("replaced_by"),
                 "parent_leg": row.get("parent_leg") or "--",
+                "order_id": row.get("order_id"),
             }
         )
         if len(output) >= max(1, int(limit)):
@@ -7619,6 +7850,8 @@ def _execute_filter_log_rows(
 
 
 def _execute_summary_payload() -> dict[str, Any]:
+    from dashboards.operational_status import execution_schedule
+    schedule = execution_schedule(BASE_DIR, scheduled_tasks=_pythonanywhere_schedule_tasks())
     source = "none"
     source_detail_parts: list[str] = []
 
@@ -7680,8 +7913,6 @@ def _execute_summary_payload() -> dict[str, Any]:
     # Operational run aggregates carry no eligible-trade validation evidence.
     result_pl = source_contracts.number(_execute_result_pl_from_db(last_run_dt))
 
-    in_window_value = _execute_parse_bool(summary_payload.get("in_window"))
-    in_window = _execute_now_in_window() if in_window_value is None else bool(in_window_value)
     last_run_utc = (
         _execute_iso_utc(summary_payload.get("last_run_utc")) or _execute_last_run_from_logs()
     )
@@ -7692,7 +7923,8 @@ def _execute_summary_payload() -> dict[str, Any]:
     return {
         "ok": bool(last_run_utc or submitted or filled or rejected or candidates),
         "last_run_utc": last_run_utc,
-        "in_window": bool(in_window),
+        "in_window": schedule.get("in_window"),
+        "execution_schedule": schedule,
         "candidates": int(candidates) if candidates is not None else None,
         "submitted": int(submitted),
         "filled": int(filled),
@@ -8533,7 +8765,7 @@ def _screener_latest_run_scope() -> dict[str, Any]:
     from scripts.strategy_pipeline import enabled as strategy_enabled
     if strategy_enabled():
         from scripts.strategy_dashboard import snapshot
-        current = snapshot()
+        current = snapshot(base_dir=BASE_DIR)
         return {k: current[k] for k in ('run_date','run_ts_utc','status','source_detail')}
 
     scope = dict(run_date=None, run_ts_utc=None, status="UNKNOWN", source="postgres",
@@ -9740,7 +9972,7 @@ def api_screener_picks():
     from scripts.strategy_pipeline import enabled as strategy_enabled
     if strategy_enabled():
         from scripts.strategy_dashboard import api_payload
-        return _json_no_store(api_payload('picks', request.args))
+        return _json_no_store(api_payload('picks', request.args, base_dir=BASE_DIR))
     limit = _parse_positive_int(request.args.get("limit"), default=50, minimum=1, maximum=200)
     query = str(request.args.get("q") or "").strip()
     filter_key = str(request.args.get("filter") or "all").strip().lower()
@@ -9784,7 +10016,7 @@ def api_screener_backtest():
     from scripts.strategy_pipeline import enabled as strategy_enabled
     if strategy_enabled():
         from scripts.strategy_dashboard import api_payload
-        return _json_no_store(api_payload('backtest', request.args))
+        return _json_no_store(api_payload('backtest', request.args, base_dir=BASE_DIR))
     limit = _parse_positive_int(request.args.get("limit"), default=50, minimum=1, maximum=200)
     query = str(request.args.get("q") or "").strip()
     window = str(request.args.get("window") or "6M").strip().upper()
@@ -9831,7 +10063,7 @@ def api_screener_metrics():
     from scripts.strategy_pipeline import enabled as strategy_enabled
     if strategy_enabled():
         from scripts.strategy_dashboard import api_payload
-        return _json_no_store(api_payload('metrics', request.args))
+        return _json_no_store(api_payload('metrics', request.args, base_dir=BASE_DIR))
     limit = _parse_positive_int(request.args.get("limit"), default=50, minimum=1, maximum=200)
     query = str(request.args.get("q") or "").strip()
     filter_key = str(request.args.get("filter") or "all").strip().lower()
@@ -9922,7 +10154,7 @@ def api_screener_candidates():
     from scripts.strategy_pipeline import enabled as strategy_enabled
     if strategy_enabled():
         from scripts.strategy_dashboard import api_payload
-        return _json_no_store(api_payload('candidates', request.args))
+        return _json_no_store(api_payload('candidates', request.args, base_dir=BASE_DIR))
     if not db.db_enabled():
         return jsonify({"ok": False, "rows": [], "rows_final": 0, "run_date": None})
 

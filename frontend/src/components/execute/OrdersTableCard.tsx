@@ -1,3 +1,4 @@
+import OrderProvenance from "../ui/OrderProvenance";
 import { useMemo } from "react";
 import type { ExecuteOrderRow } from "./types";
 import {
@@ -115,7 +116,7 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
               {!isLoading
                 ? visibleRows.map((row, index) => {
                     const side = normalizeSide(row.side);
-                    const status = normalizeOrderStatus(row.status);
+                    const status = normalizeOrderStatus(row.raw_status || row.status);
                     const ts = formatDateTimeUtc(row.ts_utc ?? null);
                     return (
                       <tr
@@ -163,6 +164,7 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
                         </td>
                         <td className="px-2 py-1 text-left text-slate-300 break-words leading-tight">
                           {row.notes || ""}
+                          <OrderProvenance order={row} />
                         </td>
                       </tr>
                     );
@@ -174,7 +176,7 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
       </div>
 
       {hasError ? (
-        <p className="mt-3 text-xs text-rose-300">Orders endpoint unavailable. Showing fallback state.</p>
+        <p className="mt-3 text-xs text-rose-300">Orders endpoint unavailable. Any displayed rows are last known observations; current status is unverified.</p>
       ) : null}
     </section>
   );

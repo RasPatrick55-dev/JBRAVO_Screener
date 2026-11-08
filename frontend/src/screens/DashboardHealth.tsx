@@ -6,10 +6,11 @@ import ProcessStatusCards, {
   type ProcessStatusCardsProps,
 } from "../components/dashboard/ProcessStatusCards";
 import AlpacaCard from "../components/dashboard/AlpacaCard";
-import PythonAnywhereResources from "../components/dashboard/PythonAnywhereResources";
+import { buyFillSummary, type ExecuteOrdersSummaryResponse } from "../components/dashboard/buyFillSummary";
+import PythonAnywhereResources, { resourceRows, type PythonAnywhereResource } from "../components/dashboard/PythonAnywhereResources";
 import MLDailyImprovements from "../components/dashboard/MLDailyImprovements";
 import LatestLogsTable from "../components/dashboard/LatestLogsTable";
-import PythonAnywhereTasksTable from "../components/dashboard/PythonAnywhereTasksTable";
+import PythonAnywhereTasksTable, { scheduledTaskRows } from "../components/dashboard/PythonAnywhereTasksTable";
 import type { LogEntry, StatusTone, SystemStatusItem } from "../types/ui";
 import { isCurrentReceipt, receiptStatus, type ProcessReceipt } from "../components/dashboard/processReceipt";
 
@@ -138,24 +139,6 @@ type ExecuteTaskRunResponse = ProcessReceipt & {
   source?: string | null;
 };
 
-type ExecuteOrdersSummaryResponse = {
-  ok?: boolean;
-  orders_filled?: number | null;
-  total_value?: number | null;
-  since_utc?: string | null;
-  until_utc?: string | null;
-  source?: string | null;
-};
-
-type PythonAnywhereResource = {
-  label: string;
-  value: number;
-  used?: number | null;
-  limit?: number | null;
-  unit?: string | null;
-  source?: string | null;
-};
-
 type PythonAnywhereResourcesResponse = {
   ok?: boolean;
   resources?: PythonAnywhereResource[];
@@ -170,6 +153,7 @@ type PythonAnywhereTask = {
 
 type PythonAnywhereTasksResponse = {
   ok?: boolean;
+  observed_at?: string | null;
   tasks?: PythonAnywhereTask[];
   source?: string | null;
 };
@@ -201,18 +185,6 @@ const navLabels = [
   "Execute",
   "Screener",
   "ML Pipeline",
-];
-
-const pythonAnywhereResourceDefaults = [
-  { label: "CPU Usage", value: 10 },
-  { label: "File Storage", value: 35 },
-  { label: "Postgres Storage", value: 10 },
-];
-
-const pythonAnywhereTasksDefaults = [
-  { name: "Run Pipeline", frequency: "Daily", time: "03:45 UTC" },
-  { name: "Screener Backtest", frequency: "Daily", time: "04:00 UTC" },
-  { name: "Metrics Update", frequency: "Hourly", time: "**:15 UTC" },
 ];
 
 const statusDotTone: Record<StatusTone, string> = {
@@ -965,6 +937,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   const [pythonAnywhereResources, setPythonAnywhereResources] =
     useState<PythonAnywhereResource[] | null>(null);
   const [pythonAnywhereTasks, setPythonAnywhereTasks] = useState<PythonAnywhereTask[] | null>(null);
+  const [pythonAnywhereTasksObservedAt, setPythonAnywhereTasksObservedAt] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true, inFlight = false;
@@ -1006,8 +979,9 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
       setPipelineTaskRun(taskRunPayload);
       setExecuteTaskRun(executeTaskPayload);
       setExecuteOrdersSummary(executeOrdersPayload);
-      setPythonAnywhereResources(pythonAnywhereResourcesPayload?.resources ?? null);
-      setPythonAnywhereTasks(pythonAnywhereTasksPayload?.tasks ?? null);
+      setPythonAnywhereResources(pythonAnywhereResourcesPayload?.ok === true ? pythonAnywhereResourcesPayload.resources ?? null : null);
+      setPythonAnywhereTasks(scheduledTaskRows(pythonAnywhereTasksPayload));
+      setPythonAnywhereTasksObservedAt(pythonAnywhereTasksPayload?.ok === true ? pythonAnywhereTasksPayload.observed_at ?? null : null);
       setPipelineLogText(pipelineLog);
       setExecuteLogText(executeLog);
       const pythonAnyLogSources =
@@ -1166,8 +1140,9 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     const executeCycleComplete = executorState ? executorState === "COMPLETED" : executeRecent && executeTaskRun?.rc === 0;
 
     const ordersSubmitted = executeSnapshot?.orders_submitted;
-    const ordersFilled = (executeOrdersSummary?.ok === true ? executeOrdersSummary.orders_filled : null) ?? executeSnapshot?.orders_filled;
-    const ordersPlaced = typeof ordersSubmitted === "number" ? ordersSubmitted : Number.NaN;
+    const ordersFilled = executeSnapshot?.orders_filled;
+    const fills24h = buyFillSummary(executeOrdersSummary);
+    const ordersPlaced = fills24h.count;
     const successRate =
       typeof ordersSubmitted === "number" &&
       ordersSubmitted > 0 &&
@@ -1175,12 +1150,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         ? (ordersFilled / ordersSubmitted) * 100
         : Number.NaN;
 
-    const executeMarketNote =
-      (ordersPlaced === 0 || Number.isNaN(ordersPlaced)) &&
-      (executeLogSummary.marketInWindow === false ||
-        (executeLogSummary.skipCounts.TIME_WINDOW ?? 0) > 0)
-        ? "Market closed"
-        : null;
+    const executeMarketNote = null; // A historical log cannot describe the current market window.
 
     return {
       pipeline: {
@@ -1206,12 +1176,12 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
           duration: executeDuration,
         },
         ordersPlaced,
-        totalValue: executeOrdersSummary?.ok === true && executeOrdersSummary.source === "alpaca" && executeOrdersSummary.total_value !== null && executeOrdersSummary.total_value !== undefined
-          ? executeOrdersSummary.total_value : Number.NaN,
+        totalValue: fills24h.value,
         successRate,
         isCycleComplete: executeCycleComplete,
         status: executorState,
         marketNote: executeMarketNote,
+        lastScheduledAttempt: executeTaskRun?.last_scheduled_attempt,
       },
       monitoring: {
         positions: hasMonitoringApi ? monitoringPositionsFromApi : [],
@@ -1236,7 +1206,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     executeTaskRun?.finished_utc,
     executeTaskRun?.started_utc,
     executeTaskRun?.rc,
-    executeOrdersSummary?.ok,
+    executeTaskRun?.last_scheduled_attempt,
+    executeOrdersSummary,
     executeOrdersSummary?.source,
     executeOrdersSummary?.orders_filled,
     executeOrdersSummary?.total_value,
@@ -1435,21 +1406,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     text: entry.message,
     level: entry.level,
   }));
-  const pythonAnywhereResourceRows = useMemo(() => {
-    if (!pythonAnywhereResources?.length) {
-      return pythonAnywhereResourceDefaults;
-    }
-    return pythonAnywhereResourceDefaults.map((fallback) => {
-      const match = pythonAnywhereResources.find(
-        (resource) => resource.label.toLowerCase() === fallback.label.toLowerCase()
-      );
-      return match ? { label: fallback.label, value: match.value } : fallback;
-    });
-  }, [pythonAnywhereResources]);
-  const pythonAnywhereTaskRows = useMemo(() => {
-    const source = pythonAnywhereTasks?.length ? pythonAnywhereTasks : pythonAnywhereTasksDefaults;
-    return source;
-  }, [pythonAnywhereTasks]);
+  const pythonAnywhereResourceRows = useMemo(() => resourceRows(pythonAnywhereResources), [pythonAnywhereResources]);
+  const pythonAnywhereTaskRows = pythonAnywhereTasks ?? [];
 
   const currentTab = activeTab ?? "Dashboard";
   const navTabs = useMemo(
@@ -1488,7 +1446,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
             </div>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
               <LatestLogsTable rows={latestLogsRows} />
-              <PythonAnywhereTasksTable rows={pythonAnywhereTaskRows} />
+              <PythonAnywhereTasksTable rows={pythonAnywhereTaskRows} observedAt={pythonAnywhereTasksObservedAt} />
             </div>
           </section>
         </div>

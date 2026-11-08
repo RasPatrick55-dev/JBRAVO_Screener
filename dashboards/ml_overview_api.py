@@ -3,7 +3,8 @@ from __future__ import annotations
 import ast
 import json
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -340,13 +341,114 @@ def _normalize_action(value: Any) -> str | None:
     return aliases.get(text, text)
 
 
+# Display freshness only. This policy cannot grant execution or research approval.
+# The 72-hour cap covers an ordinary weekend; longer closures remain conservative.
+ML_ARTIFACT_MAX_AGE_SECONDS = 72 * 3600
+
+
+def _aware_timestamp(value):
+    try:
+        stamp = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            return None
+        return stamp.astimezone(timezone.utc)
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _expected_prediction_session(base, now):
+    """Use a validated calendar-bound primary receipt, never weekday guessing."""
+    try:
+        from scripts.strategy_dashboard import primary_receipt
+        primary, _ = primary_receipt(base, now=now)
+        session = primary['session']
+        # The receipt's next session bounds how long its signal date is useful.
+        available = _aware_timestamp(session['signal_available_at'])
+        next_available = datetime.combine(date.fromisoformat(session['next_session']),
+                                         time(20, 15), ZoneInfo('America/New_York'))
+        if available is not None and available <= now < next_available:
+            return session['signal_session']
+    except Exception:
+        pass
+    return None
+
+
+def artifact_freshness(record, *, now, expected_session=None, historical_stale=None):
+    """Generation age and signal session are independent from compatibility.
+
+    Embedded generation time takes precedence over storage time, including when
+    invalid. A log that merely checks stale artifacts cannot refresh their age.
+    Missing market-session proof is explicitly unknown, never calendar-guessed.
+    """
+    payload = record.get('payload') or {}
+    key = next((k for k in ('generated_at_utc', 'run_utc') if k in payload), None)
+    stamp = _aware_timestamp(payload.get(key) if key else record.get('created_at', record.get('timestamp')))
+    source = 'payload.' + key if key else str(record.get('source') or 'artifact') + '.created_at'
+    now = _aware_timestamp(now)
+    age = (now - stamp).total_seconds() if now is not None and stamp is not None else None
+    result = dict(status='unknown', stale=None, reason='artifact_timestamp_unverified',
+        observed_at=now.isoformat() if now else None,
+        artifact_timestamp=stamp.isoformat() if stamp else None, timestamp_source=source,
+        age_seconds=age, max_age_seconds=ML_ARTIFACT_MAX_AGE_SECONDS,
+        policy='GENERATION_AGE_AND_BOUND_SIGNAL_SESSION', expected_session=expected_session,
+        session_status='unknown', historical_stale=historical_stale)
+    if not record.get('present'):
+        return dict(result, status='missing', reason='artifact_missing')
+    if age is None or age < 0:
+        return dict(result, reason='artifact_timestamp_future' if age is not None else 'artifact_timestamp_unverified')
+    session = payload.get('snapshot_date') or record.get('run_date')
+    if expected_session is not None:
+        result['session_status'] = 'current' if session == expected_session else 'mismatch' if session else 'unknown'
+    if age > ML_ARTIFACT_MAX_AGE_SECONDS:
+        return dict(result, status='stale', stale=True, reason='artifact_generation_age_exceeded')
+    if result['session_status'] == 'mismatch':
+        return dict(result, status='stale', stale=True, reason='artifact_signal_session_mismatch')
+    if historical_stale is True:
+        return dict(result, status='stale', stale=True, reason='producer_reported_stale')
+    if result['session_status'] != 'current':
+        return dict(result, reason='signal_session_unverified')
+    return dict(result, status='fresh', stale=False, reason='age_and_signal_session_current')
+
+
+def _matching_prediction_success(entry, freshness):
+    if not entry or _coerce_int(entry.get('data', {}).get('rc')) != 0:
+        return False
+    stamp = _aware_timestamp(entry.get('timestamp'))
+    artifact = _aware_timestamp(freshness.get('artifact_timestamp'))
+    observed = _aware_timestamp(freshness.get('observed_at'))
+    return bool(stamp and artifact and observed and artifact <= stamp <= observed and
+                (stamp - artifact).total_seconds() <= 300)
+
+
+def _guard_refresh_due(payload: Mapping[str, Any]) -> bool:
+    """Preserve the published refresh_due flag; accept the monitor alias.
+
+    Only actual JSON booleans are evidence. An explicit False takes precedence;
+    an absent or malformed legacy field falls back to the monitor field.
+    """
+    for key in ('refresh_due', 'monitor_refresh_due'):
+        value = payload.get(key)
+        if isinstance(value, bool):
+            return value
+    return False
+
+
 def _status_label(
     *,
     freshness_stale: bool | None,
     recommended_action: str | None,
     coverage_pct: float | None,
     has_any_ml_data: bool,
+    guard_decision: str | None = None,
+    refresh_due: bool = False,
 ) -> tuple[str, str]:
+    guard_decision = (_clean_text(guard_decision) or "").lower()
+    if guard_decision in {"block", "blocked", "hold"}:
+        return "Guard held", "error"
+    if guard_decision in {"warn", "warning"} or refresh_due:
+        return "Guard warning / refresh due", "warning"
+    if recommended_action in {"investigate", "block", "action_investigate"}:
+        return "Investigate", "warning"
     if freshness_stale is True:
         return "Stale", "warning"
     if recommended_action == "retrain":
@@ -355,8 +457,10 @@ def _status_label(
         return "Recalibrate", "warning"
     if coverage_pct is not None and coverage_pct <= 0 and has_any_ml_data:
         return "Stale", "warning"
+    if has_any_ml_data and freshness_stale is False and coverage_pct is not None:
+        return "Predictions fresh", "success"
     if has_any_ml_data:
-        return "Healthy", "success"
+        return "Unknown", "neutral"
     return "No data", "neutral"
 
 
@@ -405,7 +509,8 @@ def _build_recent_events(entries: list[dict[str, Any]], limit: int = 10) -> list
     return events
 
 
-def build_ml_overview(base_dir: Path) -> dict[str, Any]:
+def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[str, Any]:
+    now = now or datetime.now(timezone.utc)
     base = Path(base_dir)
     status_payload = _latest_status_payload(base)
     log_lines = safe_tail_lines(base / "logs" / "pipeline.log", max_lines=1200)
@@ -502,15 +607,14 @@ def build_ml_overview(base_dir: Path) -> dict[str, Any]:
     feature_compat = predictions_payload.get("feature_compat")
     if not isinstance(feature_compat, Mapping):
         feature_compat = {}
-    freshness_stale = _coerce_bool(freshness_data.get("stale"))
-    if freshness_stale is None:
-        freshness_stale = _coerce_bool(status_ml_health.get("predictions_stale"))
-    if freshness_stale is None and predictions_payload:
-        compat = _coerce_bool(feature_compat.get("compatible"))
-        freshness_stale = False if compat is True else None
-    freshness_reason = _clean_text(freshness_data.get("reason")) or _clean_text(
-        status_ml_health.get("predictions_stale_reason")
-    )
+    historical_stale = _coerce_bool(freshness_data.get("stale"))
+    if historical_stale is None:
+        historical_stale = _coerce_bool(status_ml_health.get("predictions_stale"))
+    expected_session = _expected_prediction_session(base, now)
+    prediction_freshness = artifact_freshness(predictions_record, now=now,
+        expected_session=expected_session, historical_stale=historical_stale)
+    freshness_stale = prediction_freshness['stale']
+    freshness_reason = prediction_freshness['reason']
     pred_compatible = _coerce_bool(freshness_data.get("pred_compatible"))
     if pred_compatible is None:
         pred_compatible = _coerce_bool(feature_compat.get("compatible"))
@@ -547,10 +651,13 @@ def build_ml_overview(base_dir: Path) -> dict[str, Any]:
     if not isinstance(drift_payload, Mapping):
         drift_payload = {}
     ml_health_payload = status_ml_health
+    guard_decision = (_clean_text(ml_health_payload.get("decision")) or "").lower() or None
 
     status_label, status_tone = _status_label(
         freshness_stale=freshness_stale,
         recommended_action=monitor_action,
+        guard_decision=guard_decision,
+        refresh_due=_guard_refresh_due(ml_health_payload),
         coverage_pct=coverage_pct,
         has_any_ml_data=bool(
             predictions_record.get("present")
@@ -560,12 +667,7 @@ def build_ml_overview(base_dir: Path) -> dict[str, Any]:
         ),
     )
 
-    last_predict = _max_iso(
-        predictions_payload.get("generated_at_utc"),
-        predictions_record.get("created_at"),
-        freshness_entry.get("timestamp") if freshness_entry else None,
-        predict_entry.get("timestamp") if predict_entry else None,
-    )
+    last_predict = prediction_freshness['artifact_timestamp']
     last_eval = _max_iso(eval_record.get("created_at"), eval_payload.get("run_utc"))
     last_recalibrate = _max_iso(
         recalibrate_record.get("created_at"),
@@ -627,13 +729,13 @@ def build_ml_overview(base_dir: Path) -> dict[str, Any]:
     predict_status = "success"
     predict_tone = "success"
     predict_detail = freshness_reason or "Predictions available"
-    if freshness_stale is True:
-        predict_status = "stale"
-        predict_tone = "warning"
-    elif predict_entry and _coerce_int(predict_entry.get("data", {}).get("rc")) not in (None, 0):
+    if predict_entry and _coerce_int(predict_entry.get("data", {}).get("rc")) not in (None, 0):
         predict_status = "blocked"
         predict_tone = "error"
         predict_detail = "ranker_predict failed"
+    elif freshness_stale is True:
+        predict_status = "stale"
+        predict_tone = "warning"
     elif not predictions_record.get("present"):
         predict_status = "blocked"
         predict_tone = "neutral"
@@ -759,6 +861,32 @@ def build_ml_overview(base_dir: Path) -> dict[str, Any]:
         ),
     ]
 
+    # Artifacts prove availability, not successful execution of a current run.
+    records = [labels_record, features_record, model_snapshot, recalibrate_record,
+               predictions_record, eval_record, monitor_record, autoremediate_record, trade_attr_record]
+    for stage, record in zip(stages, records):
+        timing = artifact_freshness(record, now=now)
+        if stage['label'] == 'Predict':
+            timing = prediction_freshness
+        stage.update(artifact_present=bool(record.get('present')),
+                     execution_status='unverified', freshness_status=timing['status'],
+                     age_seconds=timing['age_seconds'],
+                     timestamp_source=timing['timestamp_source'], fresh_success=False)
+        if stage['status'] == 'success':
+            stage.update(status='available', tone='neutral',
+                         detail=(stage.get('detail') or '') + '; artifact present, execution unverified')
+        if record.get('present') and timing['status'] == 'stale' and stage['tone'] != 'error':
+            stage.update(status='stale', tone='warning')
+        elif record.get('present') and timing['status'] == 'unknown' and stage['tone'] == 'success':
+            stage.update(status='unknown', tone='neutral')
+    prediction_success = _matching_prediction_success(predict_entry, prediction_freshness)
+    prediction_stage = next(s for s in stages if s['label'] == 'Predict')
+    if prediction_success:
+        prediction_stage['execution_status'] = 'verified'
+        prediction_stage['fresh_success'] = freshness_stale is False
+        if freshness_stale is False and prediction_stage['tone'] != 'error':
+            prediction_stage.update(status='success', tone='success', detail='Fresh prediction execution verified')
+
     return {
         "ok": bool(
             predictions_record.get("present")
@@ -769,6 +897,10 @@ def build_ml_overview(base_dir: Path) -> dict[str, Any]:
             or freshness_entry
         ),
         "updated_at": last_ml_run,
+        "last_successful_execution": predict_entry.get('timestamp') if prediction_success else None,
+        "execution_evidence_scope": "PREDICTION_STAGE_ONLY",
+        "artifact_presence_count": sum(bool(r.get('present')) for r in records),
+        "fresh_success_count": sum(s['fresh_success'] for s in stages),
         "status": {
             "label": status_label,
             "tone": status_tone,
@@ -776,7 +908,8 @@ def build_ml_overview(base_dir: Path) -> dict[str, Any]:
             "last_ml_run": last_ml_run,
         },
         "freshness": {
-            "label": "Stale" if freshness_stale else ("Fresh" if freshness_stale is False else "No data"),
+            **prediction_freshness,
+            "label": "Stale" if freshness_stale else ("Fresh" if freshness_stale is False else "Unknown"),
             "stale": freshness_stale,
             "reason": freshness_reason,
             "model_path": _clean_text(freshness_data.get("model_path")) or _clean_text(
@@ -836,7 +969,7 @@ def build_ml_overview(base_dir: Path) -> dict[str, Any]:
             or _coerce_float((monitor_payload.get("recent_strategy") or {}).get("sharpe")),
             "ece": _coerce_float(recent_calibration.get("ece")),
             "delta_ece": _coerce_float(calibration_payload.get("delta_ece")),
-            "guard_decision": _clean_text(ml_health_payload.get("decision")),
+            "guard_decision": guard_decision,
             "guard_mode": _clean_text(ml_health_payload.get("mode")),
             "guard_reasons": [
                 str(reason)

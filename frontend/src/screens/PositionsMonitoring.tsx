@@ -4,6 +4,27 @@ import PositionsTab from "../components/positions/PositionsTab";
 import SourceNotice from "../components/ui/SourceNotice";
 import { canDisplay, finiteNumber, useSource } from "../components/ui/sourceState";
 import type { PositionRowProps } from "../components/positions/PositionRow";
+import type { MonitoringLogItem } from "../components/positions/MonitoringLogsPanel";
+
+export function toMonitoringLog(row: Record<string, unknown>): MonitoringLogItem {
+  const booleanOrNull = (value: unknown) => typeof value === "boolean" ? value : null;
+  return {
+    timestamp: String(row.timestamp ?? "Unknown"),
+    type: (["warning", "success"].includes(String(row.type)) ? row.type : "info") as MonitoringLogItem["type"],
+    message: String(row.message ?? ""), source: String(row.source ?? "unknown"),
+    source_kind: String(row.source_kind ?? "unknown"),
+    run_id: row.run_id ? String(row.run_id) : null, ts_utc: row.ts_utc ? String(row.ts_utc) : null,
+    timestamp_kind: row.timestamp_kind ? String(row.timestamp_kind) : null,
+    report_observed_at: row.report_observed_at ? String(row.report_observed_at) : null,
+    freshness: typeof row.freshness === "string" ? row.freshness : null,
+    stale: booleanOrNull(row.stale), protection_confirmed: booleanOrNull(row.protection_confirmed),
+    old_order_id: row.old_order_id ? String(row.old_order_id) : null,
+    replacement_order_id: row.replacement_order_id ? String(row.replacement_order_id) : null,
+    occurrences: finiteNumber(row.occurrences),
+    native_stops_trigger_only_regular_hours: booleanOrNull(row.native_stops_trigger_only_regular_hours),
+    extended_hours_native_protection: booleanOrNull(row.extended_hours_native_protection),
+  };
+}
 
 export function toPositionRow(position: Record<string, unknown>): PositionRowProps {
   return { symbol: String(position.symbol ?? "--"), logoUrl: String(position.logoUrl ?? ""),
@@ -26,8 +47,7 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: { active
   const navTabs = ["Dashboard", "Account", "Trades", "Positions", "Execute", "Screener", "ML Pipeline"].map(label => ({ label, isActive: label === currentTab }));
   const badges = buildNavbarBadges(live, positions.kind === "loading" ? "loading" : available && positions.kind !== "stale" ? "ready" : "error");
   // Positions and logs are intentionally independent: a logs timeout cannot zero broker exposure.
-  const monitoringLogs = logRows.map(row => ({ timestamp: String(row.timestamp ?? "Unknown"),
-    type: (["warning", "success"].includes(String(row.type)) ? row.type : "info") as "warning" | "success" | "info", message: String(row.message ?? "") }));
+  const monitoringLogs = logRows.map(toMonitoringLog);
   return <div className="dark min-h-screen bg-slate-950 text-slate-100">
     <NavbarDesktop tabs={navTabs} rightBadges={badges} onTabSelect={onTabSelect} />
     <main className="mx-auto max-w-7xl space-y-4 px-4 pb-12 pt-[calc(var(--app-nav-height,208px)+16px)]">

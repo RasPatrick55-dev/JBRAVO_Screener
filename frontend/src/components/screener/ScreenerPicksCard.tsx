@@ -1,3 +1,4 @@
+import { ComputationScope, computationStatus } from "./completion";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LiveDataSyncState } from "../navbar/liveStatus";
 import type { ScreenerPickRow, ScreenerPicksResponse } from "./types";
@@ -65,6 +66,7 @@ type ScreenerPicksCardProps = {
 };
 
 export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCardProps) {
+  const [contract, setContract] = useState<ScreenerPicksResponse | null>(null);
   const [rows, setRows] = useState<ScreenerPickRow[]>([]);
   const [scopeLabel, setScopeLabel] = useState("PostgreSQL candidate session; completion unverified");
   const [runTsUtc, setRunTsUtc] = useState<string | null>(null);
@@ -101,10 +103,11 @@ export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCa
         const normalizedRows = (payload.rows ?? [])
           .map((row) => normalizePickRow(row))
           .filter((row) => row.symbol !== "--");
-        setRows(normalizedRows);
+        setRows(payload.ok === true ? normalizedRows : []);
+        setContract(payload);
         setRunTsUtc(payload.run_ts_utc ?? null);
         setScopeLabel(`PostgreSQL candidate session ${payload.run_date ?? "unknown"}; completion ${payload.completion_status ?? "unverified"}`);
-        setStatusLabel(String(payload.status ?? "UNKNOWN").toUpperCase());
+        setStatusLabel(computationStatus(payload));
         setErrorMessage(null);
       } catch (error) {
         if (!isMounted) {
@@ -112,7 +115,7 @@ export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCa
         }
         const message = error instanceof Error ? error.message : "Unable to load screener picks.";
         setErrorMessage(message);
-        setRows([]); setStatusLabel("UNAVAILABLE");
+        setRows([]); setContract(null); setStatusLabel("UNAVAILABLE");
       } finally {
         if (isMounted) {
           setIsLoading(false);
@@ -200,7 +203,7 @@ export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCa
   };
 
   const statusChipClass =
-    statusLabel === "COMPLETE"
+    statusLabel === "COMPUTE COMPLETE"
       ? "jbravo-status-success"
       : statusLabel === "ERROR"
         ? "jbravo-status-error"
@@ -219,10 +222,11 @@ export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCa
           <span
             className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] ring-1 ring-inset sm:px-2.5 sm:text-[11px] ${statusChipClass}`}
           >
-            {statusLabel} � {scopeLabel}
+            {statusLabel} | {scopeLabel}
           </span>
         </div>
       </header>
+      <ComputationScope payload={contract} />
 
       {errorMessage ? (
         <div

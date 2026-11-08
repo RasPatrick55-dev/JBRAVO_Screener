@@ -20,6 +20,12 @@ export interface ScreenerPickRow {
 }
 
 export interface ScreenerPicksResponse {
+  computation_complete?: boolean;
+  completion_scope?: string | null;
+  research_qualified?: boolean;
+  order_submission_authorized?: boolean;
+  entry_readiness_scope?: string | null;
+  broker_preflight_required?: boolean;
   run_date?: string | null;
   completion_status?: string | null;
   ok?: boolean;

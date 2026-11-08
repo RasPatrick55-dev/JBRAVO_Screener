@@ -181,40 +181,17 @@ export const normalizeSide = (value: string | null | undefined): string => {
   return normalized;
 };
 
+// Preserve broker lifecycle states. Unknown, canceled and session-ended orders
+// are never evidence of a fill or a triggered stop.
 export const normalizeOrderStatus = (value: string | null | undefined): string => {
-  const normalized = String(value ?? "").trim().toUpperCase();
-  if (normalized.includes("REJECT") || normalized.includes("CANCEL") || normalized.includes("EXPIRE")) {
-    return "REJECTED";
-  }
-  if (normalized.includes("PARTIAL")) {
-    return "PARTIAL";
-  }
-  if (normalized.includes("FILL") || normalized.includes("CLOSE")) {
-    return "FILLED";
-  }
-  if (
-    normalized.includes("PEND") ||
-    normalized.includes("NEW") ||
-    normalized.includes("ACCEPT") ||
-    normalized.includes("OPEN")
-  ) {
-    return "PENDING";
-  }
-  return normalized || "PENDING";
+  const normalized = String(value ?? "").trim().toUpperCase().replace(/[ -]+/g, "_");
+  if (normalized === "PARTIALLY_FILLED") return "PARTIAL";
+  if (normalized === "CANCELLED") return "CANCELED";
+  return normalized || "UNKNOWN";
 };
 
-export const normalizeTrailingStatus = (value: string | null | undefined): string => {
-  const normalized = String(value ?? "").trim().toUpperCase();
-  if (
-    normalized.includes("TRIGGER") ||
-    normalized.includes("FILL") ||
-    normalized.includes("CANCEL") ||
-    normalized.includes("CLOSE")
-  ) {
-    return "TRIGGERED";
-  }
-  return "ACTIVE";
-};
+export const normalizeTrailingStatus = (value: string | null | undefined): string =>
+  normalizeOrderStatus(value);
 
 export const normalizeLogLevel = (value: string | null | undefined): string => {
   const normalized = String(value ?? "").trim().toUpperCase();
@@ -250,10 +227,10 @@ export const orderStatusChipClass = (status: string): string => {
   if (status === "FILLED") {
     return "bg-emerald-500/15 text-emerald-300 outline-emerald-400/50";
   }
-  if (status === "PENDING") {
+  if (["PENDING", "NEW", "ACCEPTED", "PENDING_NEW", "OPEN"].includes(status)) {
     return "bg-sky-500/15 text-sky-300 outline-sky-400/55";
   }
-  if (status === "PARTIAL") {
+  if (["PARTIAL", "PENDING_REPLACE", "PENDING_CANCEL"].includes(status)) {
     return "bg-amber-500/15 text-amber-300 outline-amber-400/55";
   }
   if (status === "REJECTED") {
@@ -328,9 +305,9 @@ const matchesStatusScope = (scope: ExecuteStatusScope, status: string): boolean 
     return true;
   }
   if (scope === "open") {
-    return ["PENDING", "PARTIAL", "ACTIVE"].includes(status);
+    return ["PENDING", "PARTIAL", "ACTIVE", "NEW", "ACCEPTED", "PENDING_NEW", "ACCEPTED_FOR_BIDDING", "OPEN", "PENDING_REPLACE", "PENDING_CANCEL", "DONE_FOR_DAY"].includes(status);
   }
-  return ["FILLED", "REJECTED", "TRIGGERED"].includes(status);
+  return ["FILLED", "REJECTED", "TRIGGERED", "CANCELED", "EXPIRED", "REPLACED"].includes(status);
 };
 
 const includesQuery = (query: string, text: string): boolean => {
@@ -349,7 +326,7 @@ export const filterOrdersClient = (
 ): ExecuteOrderRow[] => {
   return rows.filter((row) => {
     const side = normalizeSide(row.side);
-    const status = normalizeOrderStatus(row.status);
+    const status = normalizeOrderStatus(row.raw_status || row.status);
     const text = [
       row.ts_utc,
       row.symbol,
@@ -360,6 +337,9 @@ export const filterOrdersClient = (
       status,
       row.filled_avg,
       row.order_id,
+      row.replaces,
+      row.replaced_by,
+      row.raw_status,
       row.notes,
     ]
       .map((value) => String(value ?? ""))
@@ -379,11 +359,11 @@ export const filterTrailingClient = (
   lsx: ExecuteLsxFilter
 ): ExecuteTrailingStopRow[] => {
   return rows.filter((row) => {
-    const status = normalizeTrailingStatus(row.status);
-    const text = [row.symbol, row.qty, row.trail, row.stop_price, status, row.parent_leg]
+    const status = normalizeTrailingStatus(row.raw_status || row.status);
+    const text = [row.symbol, row.qty, row.trail, row.stop_price, status, row.parent_leg, row.order_id, row.replaces, row.replaced_by]
       .map((value) => String(value ?? ""))
       .join(" ");
-    const sideHint = status === "ACTIVE" ? "sell" : "";
+    const sideHint = "sell";
     return (
       includesQuery(query, text) &&
       matchesStatusScope(statusScope, status) &&

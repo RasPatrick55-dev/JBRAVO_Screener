@@ -31,3 +31,29 @@ The compiled frontend is built from the reviewed application sources. Local
 preview interceptors, synthetic banners, evidence packets and owner-run server
 scripts are not production assets. This source publication is separate from a
 production deployment or reload.
+
+## Operational display contracts
+
+Dashboard labels keep evidence scopes separate:
+
+- The 24-hour buy-fill count and buy-fill notional come from the same bounded
+  broker summary. A last-run submission count is never a filled-order count.
+- Order rows preserve raw broker status and replacement links. Cancellation,
+  rejection, a pending replacement and a session-ended order do not prove a
+  fill or a triggered stop. A successor order ID alone does not confirm that
+  a pending replacement completed or that protection is effective.
+- Monitor rows identify their source and timestamp meaning. Research replay
+  output is not a live position event. Receipt observation time is not an
+  invented broker-event time, and event logs do not override current positions.
+- Process completion, artifact presence, freshness, research qualification and
+  permission to submit orders are distinct. Historical receipt success is not
+  proof that a newer scheduled invocation succeeded.
+- Schedule labels require current source/configuration evidence. Unknown
+  windows stay unknown; a historical in-window flag does not describe now.
+- Resource snapshots retain their capture time, source and used/quota values.
+  Missing data stays unknown, and an over-quota percentage is not hidden by
+  clipping the text to a full visual progress bar.
+
+These are presentation and read-only evidence contracts. They neither add
+public trade controls nor authorize changes to broker orders, trading risk,
+strategy qualification, source guards or immutable historical receipts.

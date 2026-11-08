@@ -1,19 +1,30 @@
 import type { CSSProperties } from "react";
 
-interface PythonAnywhereResource {
+export interface PythonAnywhereResource {
   label: string;
-  value: number;
+  value: number | null;
+  used?: number | null;
+  limit?: number | null;
+  quota?: number | null;
+  unit?: string | null;
+  source?: string | null;
+  captured_at?: string | null;
+  age_seconds?: number | null;
+  max_age_seconds?: number | null;
+  stale?: boolean | null;
+  status?: string | null;
+  over_quota?: boolean;
 }
 
-const widthClassFor = (value: number) => {
-  if (value === 10) return "w-[10%]";
-  if (value === 35) return "w-[35%]";
-  if (value === 50) return "w-[50%]";
-  if (value === 75) return "w-[75%]";
-  if (value === 90) return "w-[90%]";
-  if (value === 100) return "w-[100%]";
-  return "w-[0%]";
-};
+export const unknownResources: PythonAnywhereResource[] = ["CPU Usage", "File Storage", "Postgres Storage"]
+  .map(label => ({ label, value: null, status: "unknown" }));
+
+export function resourceRows(resources: PythonAnywhereResource[] | null): PythonAnywhereResource[] {
+  return unknownResources.map(fallback => resources?.find(row => row.label.toLowerCase() === fallback.label.toLowerCase()) ?? fallback);
+}
+
+const formatAmount = (value: number | null | undefined) => typeof value === "number" && Number.isFinite(value)
+  ? value.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "unknown";
 
 interface PythonAnywhereResourcesProps {
   title?: string;
@@ -62,8 +73,10 @@ export default function PythonAnywhereResources({
 
       <div className="mt-4 flex flex-col gap-3">
         {resources.map((resource) => {
-          const safeValue = Math.max(0, Math.min(100, resource.value));
-          const widthClass = widthClassFor(safeValue);
+          const value = typeof resource.value === "number" && Number.isFinite(resource.value) ? resource.value : null;
+          const safeValue = value === null ? 0 : Math.max(0, Math.min(100, value));
+          const status = resource.stale === true || resource.status === "stale" ? "STALE"
+            : resource.status === "fresh" && resource.captured_at && value !== null ? "FRESH" : "UNKNOWN";
           return (
             <div
               key={resource.label}
@@ -71,13 +84,19 @@ export default function PythonAnywhereResources({
             >
               <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-[0.08em] text-sky-100/70">
                 <span>{resource.label}</span>
-                <span className="text-sky-100">{safeValue}%</span>
+                <span className="text-sky-100">{value === null ? "Unknown" : `${formatAmount(value)}%`}</span>
               </div>
               <div className="mt-2 h-2 w-full rounded-full bg-progress-rail">
                 <div
-                  className={`h-2 rounded-full bg-progress-fill ${widthClass}`}
+                  className="h-2 rounded-full bg-progress-fill"
                   style={{ width: `${safeValue}%` }}
                 />
+              </div>
+              <div className="mt-2 space-y-1 text-[10px] text-sky-100/80">
+                <p>{status}{value !== null && value > 100 ? " / Over quota in this snapshot" : ""}</p>
+                <p>Used / quota: {formatAmount(resource.used)} / {formatAmount(resource.quota ?? resource.limit)} {resource.unit ?? ""}</p>
+                <p>Source: {resource.source || "unknown"}</p>
+                <p>Captured: {resource.captured_at || "unknown"}</p>
               </div>
             </div>
           );

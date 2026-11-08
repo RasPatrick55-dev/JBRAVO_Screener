@@ -1,6 +1,20 @@
 export type ProcessStatus = "COMPLETED" | "FAILED" | "STALE" | "UNAVAILABLE" | "PENDING";
 
+export interface ScheduledAttempt {
+  ok?: boolean;
+  status?: string;
+  source?: string;
+  started_utc?: string | null;
+  finished_utc?: string | null;
+  rc?: number | null;
+  reason_code?: string | null;
+  orders_submitted?: number | null;
+  release_attribution?: string | null;
+}
+
 export type ProcessReceipt = {
+  last_scheduled_attempt?: ScheduledAttempt | null;
+  last_execution_receipt?: ProcessReceipt | null;
   ok?: boolean;
   status?: string;
   source?: string | null;

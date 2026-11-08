@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import type { LogEntry, StatusTone } from "../../types/ui";
 
 export type MlStage = {
+  artifact_present?: boolean;
+  execution_status?: string;
+  freshness_status?: string;
   label: string;
   status: string;
   tone: StatusTone;
@@ -12,6 +15,8 @@ export type MlStage = {
 export type MlOverviewResponse = {
   ok?: boolean;
   updated_at?: string | null;
+  last_successful_execution?: string | null;
+  execution_evidence_scope?: string | null;
   status?: {
     label?: string | null;
     tone?: StatusTone | null;
@@ -19,6 +24,14 @@ export type MlOverviewResponse = {
     last_ml_run?: string | null;
   };
   freshness?: {
+    status?: "fresh" | "stale" | "unknown" | "missing";
+    observed_at?: string | null;
+    artifact_timestamp?: string | null;
+    timestamp_source?: string | null;
+    age_seconds?: number | null;
+    max_age_seconds?: number | null;
+    expected_session?: string | null;
+    session_status?: string | null;
     label?: string | null;
     stale?: boolean | null;
     reason?: string | null;
