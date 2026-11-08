@@ -79,7 +79,7 @@ export function StrategyScorecardContent({ result, onRetry }: { result: Scorecar
                 <span className="mt-1 block text-[11px] font-normal text-secondary">Archive as of: {row.freshness.evidence_as_of || row.as_of || "unknown"}{row.freshness.source_age_calendar_days !== null ? ` (${row.freshness.source_age_calendar_days} calendar days old)` : ""}</span>
                 <span className="block text-[10px] font-normal text-secondary">Latest attempt: {evidenceLabel(row.freshness.latest_attempt_status)}</span>
                 {row.evidence_status !== "VERIFIED" ? <span className="mt-1 block text-[11px] font-normal text-secondary">Strategy-wide performance unavailable</span> : null}
-                
+
                 <ScorecardEvidence row={row}/>
               </th>
               <td className="font-cousine px-2 py-2.5 text-right tabular-nums text-primary">
