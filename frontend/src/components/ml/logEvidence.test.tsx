@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { formatMlReturnCode } from "./displayValues";
 import { useMlOverview, type MlOverviewResponse } from "./useMlOverview";
 import MLPipeline from "../../screens/MLPipeline";
+import MLDailyImprovements from "../dashboard/MLDailyImprovements";
+import { predictionFreshness, mlStagePresentation, successfulPredictionExecution } from "./freshness";
 
 vi.mock("./useMlOverview", () => ({ useMlOverview: vi.fn() }));
 vi.mock("../navbar/liveStatus", () => ({ useLiveTradingStatus: () => null, buildNavbarBadges: () => [] }));
@@ -51,4 +53,47 @@ describe("ML log diagnostic evidence", () => {
     expect(html).not.toContain("Historical missing-symbol sample");
     expect(html).toContain("Source unknown");
   });
+  it("does not trust legacy log-only execution or filesystem freshness claims", () => {
+    const data: MlOverviewResponse = {
+      ok: true, last_successful_execution: "2026-11-06T23:00:01Z",
+      execution_evidence_scope: "PREDICTION_STAGE_ONLY",
+      freshness: { source: "fs", status: "fresh", stale: false },
+      pipeline_stages: [{ label: "Predict", status: "success", tone: "success",
+        artifact_present: true, source: "fs", execution_status: "verified", freshness_status: "fresh" }],
+    };
+    expect(predictionFreshness(data.freshness)).toBe("Unknown");
+    expect(successfulPredictionExecution(data)).toBeNull();
+    expect(mlStagePresentation(data.pipeline_stages![0])).toMatchObject({ status: "Diagnostic only", execution_status: "unverified", tone: "neutral" });
+    const pipeline = render(data);
+    const dashboard = renderToStaticMarkup(<MLDailyImprovements />);
+    for (const html of [pipeline, dashboard]) {
+      expect(html).toContain("Diagnostic only");
+      expect(html).not.toContain(">success<");
+    }
+    expect(pipeline).toMatch(/Last verified prediction execution[\s\S]*?>Unknown<\/div>/);
+  });
+  it("keeps database artifact metadata freshness separate from current execution", () => {
+    const data: MlOverviewResponse = { freshness: { source: "db", source_authority: "postgresql", status: "fresh", stale: false },
+      status: { label: "Unknown", tone: "neutral" },
+      coverage: { pct: 100, non_null: 1, total: 1, diagnostic_only: true,
+        evidence: { timestamp: "2026-10-01T10:00:00Z", source: "logs/pipeline.log" } } };
+    expect(predictionFreshness(data.freshness)).toBe("Fresh");
+    expect(successfulPredictionExecution(data)).toBeNull();
+    const pipeline = render(data);
+    const dashboard = renderToStaticMarkup(<MLDailyImprovements />);
+    expect(pipeline).toContain("Prediction artifact freshness");
+    expect(pipeline).toContain("Historical score coverage");
+    expect(dashboard).toContain("Historical coverage");
+    expect(dashboard).toContain("current coverage unverified");
+    for (const html of [pipeline, dashboard]) {
+      expect(html).toContain("Oct 1, 2026, 10:00 UTC");
+      expect(html).not.toContain("Predictions fresh");
+    }
+  });
+  it("keeps a missing filesystem fallback missing rather than inventing available diagnostics", () => {
+    expect(predictionFreshness({ source: "fs", source_authority: "diagnostic_only", status: "missing" })).toBe("Missing");
+    const stage = { label: "Predict", source: "fs", artifact_present: false, status: "blocked", tone: "neutral" as const };
+    expect(mlStagePresentation(stage)).toBe(stage);
+  });
+
 });

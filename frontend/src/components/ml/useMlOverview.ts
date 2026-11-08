@@ -17,6 +17,9 @@ export type MlStage = {
   artifact_present?: boolean;
   execution_status?: string;
   freshness_status?: string;
+  source?: string | null;
+  source_authority?: "postgresql" | "diagnostic_only";
+  metadata_freshness_status?: string;
   label: string;
   status: string;
   tone: StatusTone;
@@ -59,6 +62,10 @@ export type MlOverviewResponse = {
     generated_at_utc?: string | null;
     snapshot_date?: string | null;
     source?: string | null;
+    source_authority?: "postgresql" | "diagnostic_only";
+    metadata_status?: string;
+    metadata_stale?: boolean | null;
+    evidence_scope?: string;
     latest_log_check?: MlLogDiagnostic | null;
     latest_auto_refresh?: MlLogDiagnostic | null;
   };
@@ -68,6 +75,8 @@ export type MlOverviewResponse = {
     pct?: number | null;
     source?: string | null;
     run_ts_utc?: string | null;
+    diagnostic_only?: boolean;
+    evidence?: MlDiagnosticEvidence | null;
   };
   champion?: {
     present?: boolean;
@@ -94,6 +103,7 @@ export type MlOverviewResponse = {
     delta_ece?: number | null;
     guard_decision?: string | null;
     guard_mode?: string | null;
+    guard_evidence?: MlDiagnosticEvidence | null;
     guard_reasons?: string[];
   };
   eval?: {
@@ -148,6 +158,7 @@ export type MlOverviewResponse = {
     latest_decision?: MlLogDiagnostic | null;
     candidate_refresh?: MlLogDiagnostic | null;
     candidate_refresh_done?: MlLogDiagnostic | null;
+    latest_prediction_event?: MlLogDiagnostic | null;
   };
   trade_attribution?: {
     present?: boolean;

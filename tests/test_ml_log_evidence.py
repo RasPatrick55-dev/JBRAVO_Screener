@@ -1,5 +1,9 @@
 """Offline ML log parsing/display evidence regressions; all source ports mocked."""
 import unittest
+import json
+import tempfile
+import types
+from pathlib import Path
 from unittest.mock import patch
 
 from test_dashboard_status_provenance import NOW, ROOT, artifact, source_module
@@ -41,12 +45,10 @@ class MlLogEvidenceTests(unittest.TestCase):
         for raw in (True, False):
             self.assertIsNone(self.ml._coerce_int(raw))
             self.assertIsNone(self.ml._coerce_float(raw))
-        freshness = self.ml.artifact_freshness(artifact(), now=NOW, expected_session='2026-11-06')
-        for raw in ('false', 'null', 'Unknown', 'true', '0.5'):
-            event = self.ml._parse_log_line(f'2026-11-06 23:00:01 [INFO] RANKER_PREDICT rc={raw}')
-            self.assertFalse(self.ml._matching_prediction_success(event, freshness))
-        event = self.ml._parse_log_line('2026-11-06 23:00:01 [INFO] RANKER_PREDICT rc=0')
-        self.assertTrue(self.ml._matching_prediction_success(event, freshness))
+        for raw in ('false', 'null', 'Unknown', 'true', '0.5', '0', '1'):
+            result = self.overview([f'2026-11-06 23:00:01 [INFO] RANKER_PREDICT rc={raw}'])
+            self.assertEqual(result['fresh_success_count'], 0)
+            self.assertIsNone(result['last_successful_execution'])
 
     def test_real_audit_dates_are_not_joined_into_one_run(self):
         result = self.overview([
@@ -107,6 +109,96 @@ class MlLogEvidenceTests(unittest.TestCase):
         self.assertEqual(fresh['latest_log_check']['evidence']['timestamp'], '2026-10-24T03:57:41+00:00')
         self.assertIsNone(result['monitor']['recommended_action'])
         self.assertEqual(result['enrichment']['latest_decision']['action'], 'retrain')
+
+    def assert_execution_unknown(self, result):
+        self.assertIsNone(result['last_successful_execution'])
+        self.assertEqual(result['fresh_success_count'], 0)
+        self.assertEqual(result['execution_evidence_scope'], 'UNVERIFIED_NO_PROVIDER_RECEIPT')
+        self.assertEqual(result['status']['label'], 'Unknown')
+        self.assertEqual(result['status']['tone'], 'neutral')
+        for stage in result['pipeline_stages']:
+            self.assertEqual(stage['execution_status'], 'unverified')
+            self.assertFalse(stage['fresh_success'])
+            self.assertNotEqual(stage['status'], 'success')
+            self.assertNotIn('execution verified', stage['detail'])
+
+    def test_fs_and_unbound_rc_zero_cannot_verify_current_state(self):
+        self.ml._artifact_record = lambda *a, **kw: dict(artifact(), source='fs')
+        result = self.overview([
+            '2026-11-06 23:00:01 [INFO] RANKER_PREDICT rc=0',
+            '2026-10-01 10:00:00 [INFO] MODEL_SCORE_COVERAGE total=1 non_null=1 pct=100',
+        ])
+        self.assert_execution_unknown(result)
+        self.assertEqual(result['freshness']['status'], 'unknown')
+        self.assertIsNone(result['freshness']['stale'])
+        self.assertEqual(result['freshness']['metadata_status'], 'fresh')
+        self.assertEqual(result['freshness']['source_authority'], 'diagnostic_only')
+        self.assertEqual(result['coverage']['evidence']['timestamp'], '2026-10-01T10:00:00+00:00')
+        self.assertTrue(result['coverage']['diagnostic_only'])
+        prediction = next(s for s in result['pipeline_stages'] if s['label'] == 'Predict')
+        self.assertEqual(prediction['status'], 'diagnostic')
+        self.assertEqual(prediction['timestamp'], '2026-11-06T23:00:00+00:00')
+
+    def test_db_metadata_freshness_is_not_a_provider_execution_receipt(self):
+        for rc in (0, 1):
+            result = self.overview([
+                f'2026-11-06 23:00:01 [INFO] RANKER_PREDICT rc={rc}',
+                '2026-10-01 10:00:00 [INFO] MODEL_SCORE_COVERAGE total=1 non_null=1 pct=100',
+            ])
+            self.assert_execution_unknown(result)
+            self.assertEqual(result['freshness']['status'], 'fresh')
+            self.assertEqual(result['freshness']['source_authority'], 'postgresql')
+            self.assertEqual(result['freshness']['evidence_scope'], 'artifact_metadata_only')
+            self.assertEqual(result['enrichment']['latest_prediction_event']['rc'], rc)
+
+    def test_filesystem_fallback_cannot_self_declare_database_authority(self):
+        # Exercise the actual fallback loader rather than only the overview mocks.
+        ml = source_module('dashboards/ml_overview_api.py')
+        ml.db = types.SimpleNamespace(db_enabled=lambda: False)
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            path = base / 'latest_meta.json'
+            path.write_text(json.dumps(dict(artifact()['payload'], source='db')), encoding='utf-8')
+            record = ml._artifact_record('predictions', base_dir=base, fs_json=path)
+            self.assertEqual(record['source'], 'fs')
+            self.assertTrue(record['diagnostic_only'])
+            timing = ml.artifact_freshness(record, now=NOW, expected_session='2026-11-06')
+            self.assertEqual(timing['status'], 'unknown')
+            self.assertEqual(timing['metadata_status'], 'fresh')
+            self.assertEqual(timing['artifact_timestamp'], '2026-11-06T23:00:00+00:00')
+
+    def test_log_updates_do_not_retimestamp_database_artifacts(self):
+        result = self.overview([
+            '2026-11-08 11:00:00 [INFO] RANKER_RECALIBRATE_END rc=0',
+            '2026-11-08 11:00:01 [INFO] AUTOREMEDIATE_END rc=0',
+            '2026-11-08 11:00:02 [INFO] TRADE_ATTRIBUTION_END rc=0',
+        ])
+        for key in ('last_eval', 'last_monitor', 'last_recalibrate', 'last_autoremediate', 'last_trade_attribution'):
+            self.assertEqual(result['timestamps'][key], '2026-11-06T23:00:00+00:00')
+        self.assertEqual(result['recent_events'][0]['timestamp'], '2026-11-08T11:00:02+00:00')
+
+    def test_fs_monitor_and_coverage_cannot_promote_current_summary(self):
+        def record(*a, **kw):
+            value = dict(artifact(), source='fs')
+            value['payload'] = dict(value['payload'], recommended_action='none')
+            return value
+        self.ml._artifact_record = record
+        self.ml._latest_status_payload = lambda *a: dict(
+            timestamp='2026-10-01T10:00:00Z', _diagnostic_source='data/pipeline_status.json',
+            model_score_coverage=dict(pct=100), ml_health=dict(decision='allow'))
+        result = self.overview([])
+        self.assert_execution_unknown(result)
+        self.assertIsNone(result['monitor']['recommended_action'])
+        self.assertEqual(result['monitor']['guard_decision'], 'allow')
+        self.assertEqual(result['monitor']['guard_evidence']['scope'], 'historical_diagnostic')
+        self.assertEqual(result['coverage']['evidence']['source'], 'data/pipeline_status.json')
+        self.assertEqual(result['coverage']['evidence']['timestamp'], '2026-10-01T10:00:00+00:00')
+        # Preserve conservative native guard holds, without inventing execution.
+        self.ml._latest_status_payload = lambda *a: dict(ml_health=dict(decision='block'))
+        held = self.overview([])
+        self.assertEqual(held['status']['label'], 'Guard held')
+        self.assertIsNone(held['last_successful_execution'])
+        self.assertEqual(held['fresh_success_count'], 0)
 
 
 if __name__ == '__main__':

@@ -209,7 +209,7 @@ export function StageTile({ stage: input }: { stage: MlStage }) {
         <StatusBadge label={stage.status} tone={stage.tone} size="sm" />
       </div>
       <p className="mt-3 font-cousine text-[11px] text-primary">{formatDateTime(stage.timestamp)}</p>
-      <p className="mt-1 text-[10px] text-secondary">Artifact: {stage.artifact_present === true ? "present" : stage.artifact_present === false ? "missing" : "unknown"} | Execution: {stage.execution_status ?? "unverified"} | Freshness: {stage.freshness_status ?? "unknown"}</p>
+      <p className="mt-1 text-[10px] text-secondary">Artifact: {stage.artifact_present === true ? "present" : stage.artifact_present === false ? "missing" : "unknown"} | Execution: {stage.execution_status ?? "unverified"} | Freshness: {stage.freshness_status ?? "unknown"} | Source: {stage.source ?? "unknown"} ({stage.source_authority ?? "unverified"})</p>
     </article>
   );
 }
@@ -240,7 +240,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
 
   const summaryCards = [
     {
-      title: "Predictions freshness",
+      title: "Prediction artifact freshness",
       value: predictionFreshness(data?.freshness),
       detail: data?.freshness?.reason ?? "Waiting for freshness diagnostics",
       footnote: `Last predict ${formatDateTime(data?.timestamps?.last_predict)}`,
@@ -249,46 +249,43 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
       statusTone: (data?.status?.tone ?? "neutral") as StatusTone,
     },
     {
-      title: "Score coverage",
+      title: "Historical score coverage",
       value: formatCoverage(
         data?.coverage?.pct ?? null,
         data?.coverage?.non_null ?? null,
         data?.coverage?.total ?? null
       ),
       detail: coverageDetail,
-      footnote: `run_ts ${formatDateTime(data?.coverage?.run_ts_utc)}`,
-      tone:
-        typeof data?.coverage?.pct === "number" && data.coverage.pct > 0
-          ? ("success" as StatusTone)
-          : ("warning" as StatusTone),
+      footnote: `${logEvidenceNote(data?.coverage?.evidence)} | run_ts ${formatDateTime(data?.coverage?.run_ts_utc)}`,
+      tone: "neutral" as StatusTone,
     },
     {
       title: "Monitor action",
       value: formatAction(data?.monitor?.recommended_action),
       detail:
         data?.monitor?.guard_decision && data.monitor.guard_decision !== "allow"
-          ? `Guard ${data.monitor.guard_decision} (${data.monitor.guard_mode ?? "n/a"})`
-          : data?.monitor?.guard_decision === "allow" ? "Health guard allows enrichment; accounting/entry readiness separate" : "Guard decision unknown",
+          ? `Recorded guard ${data.monitor.guard_decision} (${data.monitor.guard_mode ?? "n/a"}); historical diagnostic`
+          : data?.monitor?.guard_decision === "allow" ? "Recorded guard allow; historical diagnostic, current status unverified" : "Guard decision unknown",
       footnote: `PSI ${formatDecimal(data?.monitor?.psi_score ?? null)} · Sharpe ${formatDecimal(
         data?.monitor?.recent_sharpe ?? null
-      )}`,
+      )} | Guard diagnostic ${formatDateTime(data?.monitor?.guard_evidence?.timestamp)}`,
       tone:
         data?.monitor?.recommended_action === "retrain"
           ? ("error" as StatusTone)
           : data?.monitor?.recommended_action === "recalibrate"
             ? ("warning" as StatusTone)
-            : data?.monitor?.recommended_action === "none" ? ("success" as StatusTone) : ("neutral" as StatusTone),
+            : ("neutral" as StatusTone),
     },
     {
-      title: "Champion",
+      title: "Champion artifact",
       value: data?.champion?.present === true
         ? `${formatAction(data.champion.calibration)}`
         : "No data",
       detail: data?.champion?.present === true
         ? `Run ${formatRunDate(data.champion.run_date)} · feature ${data.champion.feature_set ?? "n/a"}`
         : "Champion artifact unavailable",
-      footnote: `min_model_score ${data?.champion?.execution?.min_model_score ?? "n/a"} · require ${formatMlBoolean(data?.champion?.execution?.require_model_score)}`,
-      tone: data?.champion?.present === true ? ("success" as StatusTone) : ("neutral" as StatusTone),
+      footnote: `Source ${data?.champion?.source ?? "unknown"}; artifact metadata only | min_model_score ${data?.champion?.execution?.min_model_score ?? "n/a"} · require ${formatMlBoolean(data?.champion?.execution?.require_model_score)}`,
+      tone: "neutral" as StatusTone,
     },
     {
       title: "Recent ML evidence",
@@ -453,7 +450,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                 <DetailRow
                   label="Last verified prediction execution"
                   value={formatDateTime(successfulPredictionExecution(data))}
-                  note="Prediction stage only; artifact and log updates are not evidence of a successful full ML pipeline run."
+                  note="Unknown: no DB/provider-bound execution receipt is available. Artifact metadata and local return-code logs do not verify execution."
                 />
                 <DetailRow
                   label="Market session"
@@ -488,6 +485,11 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                   label="Historical refresh return code"
                   value={formatMlReturnCode(candidateRefreshDone?.rc)}
                   note={`${logEvidenceNote(candidateRefreshDone?.evidence)} | Reported predictions source ${candidateRefreshDone?.predictions_source ?? "Unknown"}`}
+                />
+                <DetailRow
+                  label="Historical prediction return code"
+                  value={formatMlReturnCode(data?.enrichment?.latest_prediction_event?.rc)}
+                  note={logEvidenceNote(data?.enrichment?.latest_prediction_event?.evidence)}
                 />
                 {overlapSample ? (
                   <DetailRow

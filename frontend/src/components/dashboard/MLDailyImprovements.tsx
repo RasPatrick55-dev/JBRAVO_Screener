@@ -53,32 +53,29 @@ export default function MLDailyImprovements({ onOpenPipeline }: MLDailyImproveme
 
   const metricTiles = [
     {
-      label: "Freshness",
+      label: "Artifact freshness",
       value: predictionFreshness(data?.freshness),
       detail: data?.freshness?.reason ?? "Waiting for predictions data",
     },
     {
-      label: "Coverage",
+      label: "Historical coverage",
       value: formatCoverage(coverage?.pct ?? null, coverage?.non_null ?? null, coverage?.total ?? null),
-      detail:
-        typeof coverage?.pct === "number"
-          ? `${percentFormatter.format(coverage.pct)}% scored`
-          : "No model score overlay",
+      detail: `${formatDateTime(coverage?.evidence?.timestamp)}; diagnostic only, current coverage unverified`,
     },
     {
-      label: "Champion",
+      label: "Champion artifact",
       value:
         champion?.present === true
           ? `${formatAction(champion.calibration)} / ${formatRunDate(champion.run_date)}`
           : "No data",
-      detail: champion?.feature_set ? `Feature set ${champion.feature_set}` : "Champion not available",
+      detail: `Source ${champion?.source ?? "unknown"}; artifact metadata only`,
     },
     {
       label: "Action",
       value: formatAction(monitor?.recommended_action),
       detail:
         data?.monitor?.guard_decision
-          ? `Guard ${data.monitor.guard_decision}`
+          ? `Guard ${data.monitor.guard_decision} (historical diagnostic ${formatDateTime(data.monitor.guard_evidence?.timestamp)})`
           : monitor?.recommended_action === "none" ? "No remediation requested" : "Guard decision unknown",
     },
   ];

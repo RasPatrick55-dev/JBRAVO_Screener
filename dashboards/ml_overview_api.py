@@ -313,6 +313,7 @@ def _artifact_record(
     return {
         "present": True,
         "source": "fs",
+        "diagnostic_only": True,
         "run_date": inferred_run_date,
         "created_at": created_at,
         "rows_count": None,
@@ -328,7 +329,7 @@ def _latest_model_snapshot(base_dir: Path) -> dict[str, Any]:
     except Exception:
         matches = []
     if not matches:
-        return {"present": False, "path": None, "timestamp": None, "run_date": None}
+        return {"present": False, "source": "fs", "path": None, "timestamp": None, "run_date": None}
     latest = matches[-1]
     try:
         ts = datetime.fromtimestamp(latest.stat().st_mtime, tz=timezone.utc).isoformat()
@@ -337,6 +338,8 @@ def _latest_model_snapshot(base_dir: Path) -> dict[str, Any]:
     match = re.search(r"(\d{4}-\d{2}-\d{2})", latest.name)
     return {
         "present": True,
+        "source": "fs",
+        "diagnostic_only": True,
         "path": str(latest),
         "timestamp": ts,
         "run_date": match.group(1) if match else None,
@@ -350,7 +353,7 @@ def _latest_status_payload(base_dir: Path) -> dict[str, Any]:
     ):
         payload = _read_json(path)
         if payload:
-            return payload
+            return {**payload, "_diagnostic_source": str(path.relative_to(base_dir))}
     return {}
 
 
@@ -397,7 +400,7 @@ def _expected_prediction_session(base, now):
     return None
 
 
-def artifact_freshness(record, *, now, expected_session=None, historical_stale=None):
+def _artifact_metadata_freshness(record, *, now, expected_session=None, historical_stale=None):
     """Generation age and signal session are independent from compatibility.
 
     Embedded generation time takes precedence over storage time, including when
@@ -434,14 +437,22 @@ def artifact_freshness(record, *, now, expected_session=None, historical_stale=N
     return dict(result, status='fresh', stale=False, reason='age_and_signal_session_current')
 
 
-def _matching_prediction_success(entry, freshness):
-    if not entry or _coerce_int(entry.get('data', {}).get('rc')) != 0:
-        return False
-    stamp = _aware_timestamp(entry.get('timestamp'))
-    artifact = _aware_timestamp(freshness.get('artifact_timestamp'))
-    observed = _aware_timestamp(freshness.get('observed_at'))
-    return bool(stamp and artifact and observed and artifact <= stamp <= observed and
-                (stamp - artifact).total_seconds() <= 300)
+def _authoritative_artifact(record: Mapping[str, Any]) -> bool:
+    # These are the two DB read paths implemented by _artifact_record. Do not
+    # infer authority from a local payload claiming to have used a provider.
+    return record.get("source") in {"db", "db:VALIDATED_PERFORMANCE"}
+
+
+def artifact_freshness(record, *, now, expected_session=None, historical_stale=None):
+    timing = _artifact_metadata_freshness(record, now=now,
+        expected_session=expected_session, historical_stale=historical_stale)
+    timing.update(source=record.get("source"),
+                  source_authority="postgresql" if _authoritative_artifact(record) else "diagnostic_only",
+                  metadata_status=timing["status"], metadata_stale=timing["stale"],
+                  evidence_scope="artifact_metadata_only")
+    if record.get("present") and not _authoritative_artifact(record):
+        timing.update(status="unknown", stale=None, reason="diagnostic_only_source")
+    return timing
 
 
 def _guard_refresh_due(payload: Mapping[str, Any]) -> bool:
@@ -479,10 +490,8 @@ def _status_label(
         return "Retrain", "error"
     if recommended_action == "recalibrate":
         return "Recalibrate", "warning"
-    if coverage_pct is not None and coverage_pct <= 0 and has_any_ml_data:
-        return "Stale", "warning"
-    if has_any_ml_data and freshness_stale is False and coverage_pct is not None:
-        return "Predictions fresh", "success"
+    # Artifact freshness and diagnostic score coverage cannot establish a
+    # successful current execution. No provider-bound receipt is consumed here.
     if has_any_ml_data:
         return "Unknown", "neutral"
     return "No data", "neutral"
@@ -552,10 +561,7 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
     )
     predict_entry = _latest_token(parsed_entries, "RANKER_PREDICT")
     ml_decision_entry = _latest_token(parsed_entries, "ML_ENRICHMENT_DECISION")
-    recalibrate_event = _latest_token(parsed_entries, "RANKER_RECALIBRATE_END")
-    autoremediate_event = _latest_token(parsed_entries, "AUTOREMEDIATE_END")
     autoremediate_repredict_event = _latest_token(parsed_entries, "AUTOREMEDIATE_REPREDICT_END")
-    trade_attr_event = _latest_token(parsed_entries, "TRADE_ATTRIBUTION_END")
 
     predictions_record = _artifact_record(
         "predictions",
@@ -614,8 +620,15 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
     )
 
     coverage_payload = dict(status_payload.get("model_score_coverage") or {})
+    coverage_evidence = {
+        "source": status_payload.get("_diagnostic_source") or "local_status_snapshot",
+        "timestamp": _coerce_iso(coverage_payload.get("run_ts_utc") or status_payload.get("timestamp")),
+        "scope": "historical_diagnostic",
+        "run_binding": "unverified",
+    }
     if coverage_entry and not coverage_payload:
         coverage_payload = dict(coverage_entry.get("data") or {})
+        coverage_evidence = _log_diagnostic(coverage_entry)["evidence"]
 
     coverage_pct = _coerce_float(coverage_payload.get("pct"))
     coverage_total = _coerce_int(coverage_payload.get("total"))
@@ -650,7 +663,10 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
     pred_missing_frac = _coerce_float(predictions_payload.get("missing_feature_fraction"))
     pred_compat_reason = _clean_text(feature_compat.get("reason"))
 
-    monitor_action = _normalize_action(monitor_payload.get("recommended_action"))
+    monitor_action = (
+        _normalize_action(monitor_payload.get("recommended_action"))
+        if _authoritative_artifact(monitor_record) else None
+    )
 
     calibration_payload = monitor_payload.get("calibration")
     if not isinstance(calibration_payload, Mapping):
@@ -679,22 +695,13 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
     )
 
     last_predict = prediction_freshness['artifact_timestamp']
-    last_eval = _max_iso(eval_record.get("created_at"), eval_payload.get("run_utc"))
-    last_recalibrate = _max_iso(
-        recalibrate_record.get("created_at"),
-        recalibrate_event.get("timestamp") if recalibrate_event else None,
-    )
-    last_monitor = _max_iso(monitor_record.get("created_at"), monitor_payload.get("run_utc"))
-    last_autoremediate = _max_iso(
-        autoremediate_record.get("created_at"),
-        autoremediate_payload.get("run_utc"),
-        autoremediate_event.get("timestamp") if autoremediate_event else None,
-    )
-    last_trade_attr = _max_iso(
-        trade_attr_record.get("created_at"),
-        trade_attr_payload.get("run_utc"),
-        trade_attr_event.get("timestamp") if trade_attr_event else None,
-    )
+    # Display each artifact's own generation/storage timestamp. Independent
+    # local event timestamps must not make a DB artifact appear newly produced.
+    last_eval = artifact_freshness(eval_record, now=now)['artifact_timestamp']
+    last_recalibrate = artifact_freshness(recalibrate_record, now=now)['artifact_timestamp']
+    last_monitor = artifact_freshness(monitor_record, now=now)['artifact_timestamp']
+    last_autoremediate = artifact_freshness(autoremediate_record, now=now)['artifact_timestamp']
+    last_trade_attr = artifact_freshness(trade_attr_record, now=now)['artifact_timestamp']
     model_snapshot = _latest_model_snapshot(base)
     last_ml_run = _max_iso(
         status_payload.get("timestamp"),
@@ -744,11 +751,7 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
     predict_status = "success"
     predict_tone = "success"
     predict_detail = freshness_reason or "Predictions available"
-    if predict_entry and _coerce_int(predict_entry.get("data", {}).get("rc")) not in (None, 0):
-        predict_status = "blocked"
-        predict_tone = "error"
-        predict_detail = "ranker_predict failed"
-    elif freshness_stale is True:
+    if freshness_stale is True:
         predict_status = "stale"
         predict_tone = "warning"
     elif not predictions_record.get("present"):
@@ -886,7 +889,10 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
         stage.update(artifact_present=bool(record.get('present')),
                      execution_status='unverified', freshness_status=timing['status'],
                      age_seconds=timing['age_seconds'],
-                     timestamp_source=timing['timestamp_source'], fresh_success=False)
+                     timestamp_source=timing['timestamp_source'], fresh_success=False,
+                     source=record.get('source'), source_authority=timing['source_authority'],
+                     metadata_freshness_status=timing['metadata_status'],
+                     execution_evidence_reason='provider_bound_execution_receipt_unavailable')
         if stage['status'] == 'success':
             stage.update(status='available', tone='neutral',
                          detail=(stage.get('detail') or '') + '; artifact present, execution unverified')
@@ -894,13 +900,12 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
             stage.update(status='stale', tone='warning')
         elif record.get('present') and timing['status'] == 'unknown' and stage['tone'] == 'success':
             stage.update(status='unknown', tone='neutral')
-    prediction_success = _matching_prediction_success(predict_entry, prediction_freshness)
-    prediction_stage = next(s for s in stages if s['label'] == 'Predict')
-    if prediction_success:
-        prediction_stage['execution_status'] = 'verified'
-        prediction_stage['fresh_success'] = freshness_stale is False
-        if freshness_stale is False and prediction_stage['tone'] != 'error':
-            prediction_stage.update(status='success', tone='success', detail='Fresh prediction execution verified')
+        if record.get('present') and not _authoritative_artifact(record):
+            stage.update(status='diagnostic', tone='neutral',
+                         detail='Historical filesystem artifact; current state and execution unverified')
+    # Artifact records prove stored metadata only. A nearby rc=0 in a local log
+    # is not a DB/provider-bound execution receipt. Keep success unknown until
+    # an actual authoritative receipt adapter exists; never synthesize one.
 
     return {
         "ok": bool(
@@ -912,14 +917,15 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
             or freshness_entry
         ),
         "updated_at": last_ml_run,
-        "last_successful_execution": predict_entry.get('timestamp') if prediction_success else None,
-        "execution_evidence_scope": "PREDICTION_STAGE_ONLY",
+        "last_successful_execution": None,
+        "execution_evidence_scope": "UNVERIFIED_NO_PROVIDER_RECEIPT",
+        "execution_evidence_reason": "provider_bound_execution_receipt_unavailable",
         "artifact_presence_count": sum(bool(r.get('present')) for r in records),
         "fresh_success_count": sum(s['fresh_success'] for s in stages),
         "status": {
             "label": status_label,
             "tone": status_tone,
-            "detail": freshness_reason or "ML overview",
+            "detail": "Artifact metadata only; current execution unverified",
             "last_ml_run": last_ml_run,
         },
         "freshness": {
@@ -948,6 +954,8 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
             "pct": coverage_pct,
             "source": coverage_source,
             "run_ts_utc": coverage_run_ts,
+            "diagnostic_only": True,
+            "evidence": coverage_evidence,
         },
         "champion": {
             "present": bool(champion_payload),
@@ -984,6 +992,12 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
             "delta_ece": _coerce_float(calibration_payload.get("delta_ece")),
             "guard_decision": guard_decision,
             "guard_mode": _clean_text(ml_health_payload.get("mode")),
+            "guard_evidence": {
+                "source": status_payload.get("_diagnostic_source") or "local_status_snapshot",
+                "timestamp": _coerce_iso(status_payload.get("timestamp")),
+                "scope": "historical_diagnostic",
+                "run_binding": "unverified",
+            },
             "guard_reasons": [
                 str(reason)
                 for reason in list(ml_health_payload.get("reasons") or [])
@@ -1052,6 +1066,7 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
             "latest_decision": _log_diagnostic(ml_decision_entry),
             "candidate_refresh": _log_diagnostic(candidate_refresh_entry),
             "candidate_refresh_done": _log_diagnostic(candidate_refresh_done_entry),
+            "latest_prediction_event": _log_diagnostic(predict_entry),
         },
         "pipeline_stages": stages,
         "recent_events": _build_recent_events(parsed_entries, limit=10),
