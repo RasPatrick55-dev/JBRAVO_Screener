@@ -1,3 +1,4 @@
+import type { SourceKind } from "../ui/sourceState";
 export interface PythonAnywhereTaskRow {
   name: string;
   frequency: string;
@@ -21,12 +22,14 @@ interface PythonAnywhereTasksTableProps {
   title?: string;
   rows: PythonAnywhereTaskRow[];
   observedAt?: string | null;
+  sourceStatus?: SourceKind;
 }
 
 export default function PythonAnywhereTasksTable({
   title = "PythonAnywhere Tasks",
   rows,
   observedAt,
+  sourceStatus,
 }: PythonAnywhereTasksTableProps) {
   return (
     <div className="flex h-full flex-col rounded-2xl border border-emerald-400/30 bg-gradient-to-br from-slate-950/95 via-emerald-950/80 to-emerald-900/70 p-4 shadow-[0_18px_40px_-24px_rgba(16,185,129,0.45)] sm:p-5">
@@ -58,6 +61,7 @@ export default function PythonAnywhereTasksTable({
         </div>
       </div>
 
+      {sourceStatus ? <p role="status" className="mt-3 text-[11px] text-secondary">{sourceStatus === "loading" ? "Loading PythonAnywhere schedule." : sourceStatus === "stale" ? "Schedule feed stale. Showing last known configuration, not the current schedule." : `Schedule feed: ${sourceStatus}.`}</p> : null}
       <p className="mt-3 text-[10px] text-emerald-100/70">Provider observation: {observedAt || "unknown"}</p>
       <div className="mt-4 overflow-x-hidden rounded-xl border border-emerald-400/30 bg-slate-950/60 p-2.5 shadow-[0_0_18px_-12px_rgba(16,185,129,0.35)] sm:p-3">
         <table className="w-full table-fixed font-cousine text-sm text-emerald-50">
@@ -98,7 +102,7 @@ export default function PythonAnywhereTasksTable({
             ) : (
               <tr>
                 <td colSpan={3} className="py-4 text-center text-[12px] text-emerald-100/70">
-                  Scheduled tasks unavailable or unverified. Current schedule is unknown.
+                  {sourceStatus === "loading" ? "Loading scheduled tasks." : "Scheduled tasks unavailable or unverified. Current schedule is unknown."}
                 </td>
               </tr>
             )}

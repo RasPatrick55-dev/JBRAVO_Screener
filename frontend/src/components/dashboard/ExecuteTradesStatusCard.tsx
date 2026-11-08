@@ -72,9 +72,9 @@ export default function ExecuteTradesStatusCard({
     ),
   } as const;
 
-  const statusChip = evidenceStatus ? { label: evidenceStatus, tone: processTone(evidenceStatus), icon: statusIcons.overdue } : isCycleComplete
+  const statusChip = taskSource?.kind === "loading" ? { label: "LOADING", tone: "neutral" as const, icon: statusIcons.overdue } : evidenceStatus ? { label: evidenceStatus, tone: processTone(evidenceStatus), icon: statusIcons.overdue } : isCycleComplete
     ? { label: "COMPLETED", tone: "success" as const, icon: statusIcons.complete }
-    : { label: "OVERDUE", tone: "neutral" as const, icon: statusIcons.overdue };
+    : { label: "UNKNOWN", tone: "neutral" as const, icon: statusIcons.overdue };
 
   const valueStyles =
     "rounded-md border border-emerald-400/40 bg-slate-950/60 px-2 py-0.5 text-[13px] font-semibold tracking-[0.01em] text-emerald-200 tabular-nums";

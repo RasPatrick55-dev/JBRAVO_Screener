@@ -16,6 +16,8 @@ interface LatestLogsTableProps {
   receipts?: LogReceipt[];
   rows: LatestLogsRow[];
   enableFilter?: boolean;
+  notice?: string;
+  emptyMessage?: string;
 }
 
 export default function LatestLogsTable({
@@ -23,6 +25,8 @@ export default function LatestLogsTable({
   rows,
   receipts = [],
   enableFilter = true,
+  notice,
+  emptyMessage = "No entries in this returned log sample. This does not establish that no activity occurred.",
 }: LatestLogsTableProps) {
   const levelTone: Record<NonNullable<LatestLogsRow["level"]>, string> = {
     INFO: "border-sky-500/30 bg-sky-500/15 text-sky-200",
@@ -85,6 +89,7 @@ export default function LatestLogsTable({
         </div>
       </div>
 
+      {notice ? <p role="status" className="mt-3 break-words text-xs text-secondary">{notice}</p> : null}
       {receipts.map((receipt, index) => <LogSourceReceipt key={index} receipt={receipt} />)}
       <div className="mt-4 max-h-[360px] overflow-x-hidden overflow-y-auto rounded-xl border border-slate-500/30 bg-slate-950/60 p-2.5 shadow-[0_0_18px_-12px_rgba(148,163,184,0.35)] sm:p-3">
         <table className="w-full table-fixed font-cousine text-sm text-slate-200">
@@ -142,7 +147,7 @@ export default function LatestLogsTable({
             ) : (
               <tr>
                 <td colSpan={3} className="py-4 text-center text-[12px] text-slate-300">
-                  No recent logs available.
+                  {selectedScript !== "All Scripts" && rows.length ? "No entries match this script filter in the returned sample." : emptyMessage}
                 </td>
               </tr>
             )}

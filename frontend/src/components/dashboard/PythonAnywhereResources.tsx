@@ -1,3 +1,4 @@
+import type { SourceKind } from "../ui/sourceState";
 import type { CSSProperties } from "react";
 
 export interface PythonAnywhereResource {
@@ -29,11 +30,13 @@ const formatAmount = (value: number | null | undefined) => typeof value === "num
 interface PythonAnywhereResourcesProps {
   title?: string;
   resources: PythonAnywhereResource[];
+  sourceStatus?: SourceKind;
 }
 
 export default function PythonAnywhereResources({
   title = "PythonAnywhere",
   resources,
+  sourceStatus,
 }: PythonAnywhereResourcesProps) {
   return (
     <div
@@ -71,11 +74,12 @@ export default function PythonAnywhereResources({
         </div>
       </div>
 
+      {sourceStatus ? <p role="status" className="mt-3 text-[11px] text-secondary">{sourceStatus === "loading" ? "Loading PythonAnywhere resource evidence." : sourceStatus === "stale" ? "Resource feed stale. Showing last known observations, not current usage." : `Resource feed: ${sourceStatus}.`}</p> : null}
       <div className="mt-4 flex flex-col gap-3">
         {resources.map((resource) => {
           const value = typeof resource.value === "number" && Number.isFinite(resource.value) ? resource.value : null;
           const safeValue = value === null ? 0 : Math.max(0, Math.min(100, value));
-          const status = resource.stale === true || resource.status === "stale" ? "STALE"
+          const status = sourceStatus === "loading" ? "LOADING" : sourceStatus === "stale" ? "STALE" : resource.stale === true || resource.status === "stale" ? "STALE"
             : resource.status === "fresh" && resource.captured_at && value !== null ? "FRESH" : "UNKNOWN";
           return (
             <div
