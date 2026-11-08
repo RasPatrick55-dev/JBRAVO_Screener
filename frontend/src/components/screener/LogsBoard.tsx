@@ -41,10 +41,10 @@ export default function LogsBoard({ onSyncStateChange }: LogsBoardProps) {
   }, [boardState, onSyncStateChange]);
 
   return (
-    <section className="space-y-2" aria-label="Live logs board">
+    <section className="space-y-2" aria-label="Source logs board">
       <header className="flex items-center justify-between gap-3">
         <h2 className="font-arimo text-xs font-semibold uppercase tracking-[0.08em] text-primary sm:text-sm">
-          Live Logs Board
+          Source Logs Board
         </h2>
       </header>
 

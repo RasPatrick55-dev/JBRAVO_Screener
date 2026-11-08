@@ -5842,7 +5842,9 @@ def api_pythonanywhere_tasks():
 
 @server.route("/api/pythonanywhere/logs")
 def api_pythonanywhere_logs():
-    sources = _pythonanywhere_log_sources()
+    from dashboards.log_reporting import annotate_log_text
+    sources = [dict(item, **annotate_log_text(item["text"], item["source"]))
+               for item in _pythonanywhere_log_sources()]
     return jsonify({"ok": bool(sources), "sources": sources, "source": "pythonanywhere"})
 
 
@@ -10054,6 +10056,7 @@ def _screener_filter_log_rows(
                 "ts_utc": row.get("ts_utc"),
                 "level": level,
                 "message": str(row.get("message") or "").strip(),
+                "source": row.get("source"),
                 "_ts": ts_value,
             }
         )
@@ -10195,6 +10198,7 @@ def _screener_logs_from_files(stage: str, fetch_limit: int) -> tuple[list[dict[s
             parsed = _screener_parse_log_line(line)
             if not parsed:
                 continue
+            parsed["source"] = source
             parsed_rows.append(parsed)
 
     if not parsed_rows:
@@ -10365,6 +10369,14 @@ def api_screener_logs():
         source = "postgres" if db_rows else "none"
         source_detail = db_source_detail if db_rows else f"{file_source_detail};{db_source_detail}"
 
+    from dashboards.log_reporting import log_receipt, log_provenance
+    source_groups = {}
+    for item in staged_rows:
+        item.setdefault("source", source_detail)
+        source_groups.setdefault(item["source"], []).append(item)
+    source_receipts = [dict(source=key, **log_receipt(items)) for key, items in source_groups.items()]
+    receipt = log_receipt(staged_rows)
+
     rows = _screener_filter_log_rows(
         staged_rows,
         level_filter=level_filter,
@@ -10379,7 +10391,9 @@ def api_screener_logs():
             "stage": stage,
             "source": source,
             "source_detail": source_detail,
-            "rows": rows,
+            **receipt,
+            "source_receipts": source_receipts,
+            "rows": [dict(row, **log_provenance(row["message"], str(row.get("source") or ""))) for row in rows],
         }
     )
 

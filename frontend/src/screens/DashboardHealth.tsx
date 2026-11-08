@@ -161,6 +161,11 @@ type PythonAnywhereTasksResponse = {
 type PythonAnywhereLogSource = {
   source: string;
   text: string;
+  entries?: Array<{ raw: string; ts_utc?: string | null; provenance_label?: string }>;
+  observed_at?: string;
+  latest_event_at?: string | null;
+  unknown_timestamp_count?: number;
+  timestamp_basis?: string;
 };
 
 type PythonAnywhereLogsResponse = {
@@ -831,14 +836,14 @@ const parseLogLine = (line: string) => {
   return null;
 };
 
-const buildLogEntries = (
-  sources: Array<{ text: string | null; source: string }>,
+export const buildLogEntries = (
+  sources: Array<{ text: string | null; source: string; entries?: PythonAnywhereLogSource["entries"] }>,
   maxLinesPerSource = 240,
-  maxAgeHours = 48
+  _maxAgeHours = 48
 ) => {
   const entries: ParsedLogEntry[] = [];
 
-  sources.forEach(({ text, source }) => {
+  sources.forEach(({ text, source, entries: evidence }) => {
     if (!text) {
       return;
     }
@@ -847,33 +852,40 @@ const buildLogEntries = (
     const sample = lines.slice(-Math.max(maxLinesPerSource, 12));
     sample.forEach((line) => {
       const parsed = parseLogLine(line);
+      const metadata = evidence?.find((entry) => entry.raw === line);
+      const provenanceLabel = metadata?.provenance_label ?? "Unclassified · not broker evidence";
+      const fallbackTimestamp = parsed ? `${parsed.date}T${parsed.time}Z` : null;
+      const eventTimestamp = metadata ? metadata.ts_utc ?? null : fallbackTimestamp;
+      const timestampMs = eventTimestamp ? Date.parse(eventTimestamp) || 0 : 0;
+      const canonicalTime = timestampMs ? new Date(timestampMs).toISOString() : null;
+      const displayTime = canonicalTime ? formatLogDateTime(canonicalTime.slice(0, 10), canonicalTime.slice(11, 19)) : "--";
       if (parsed) {
         const cleanedMessage = parsed.message.trim().replace(/^[\s:=-]+/, "").trim();
-        const timestampMs = Date.parse(`${parsed.date}T${parsed.time}Z`) || 0;
         entries.push({
-          time: formatLogDateTime(parsed.date, parsed.time),
+          time: displayTime,
           level: normalizeLogLevel(parsed.level),
           message: cleanedMessage || "(no message)",
           source: sourceLabel,
+          provenanceLabel,
+          eventTimestamp,
           timestampMs,
         });
       } else {
         entries.push({
-          time: "--",
+          time: displayTime,
           level: "INFO",
           message: line.trim(),
           source: sourceLabel,
-          timestampMs: 0,
+          provenanceLabel,
+          eventTimestamp,
+          timestampMs,
         });
       }
     });
   });
 
   let filtered = entries;
-  if (maxAgeHours && Number.isFinite(maxAgeHours)) {
-    const cutoff = Date.now() - maxAgeHours * 60 * 60 * 1000;
-    filtered = entries.filter((entry) => entry.timestampMs > 0 && entry.timestampMs >= cutoff);
-  }
+  // Retain historical and untimed evidence; label age rather than silently dropping it.
 
   filtered.sort((a, b) => b.timestampMs - a.timestampMs);
   return filtered.map(({ timestampMs, ...entry }) => entry);
@@ -934,6 +946,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     useState<ExecuteOrdersSummaryResponse | null>(null);
   const [pipelineLogText, setPipelineLogText] = useState<string | null>(null);
   const [executeLogText, setExecuteLogText] = useState<string | null>(null);
+  const [logReceipts, setLogReceipts] = useState<PythonAnywhereLogSource[]>([]);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
   const [pythonAnywhereResources, setPythonAnywhereResources] =
     useState<PythonAnywhereResource[] | null>(null);
@@ -993,6 +1006,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
       ];
       const logSources = pythonAnyLogSources.length ? pythonAnyLogSources : fallbackSources;
       setLogEntries(buildLogEntries(logSources, 400, 48));
+      setLogReceipts(pythonAnyLogSources.map(source => ({ ...source, source: labelLogSource(source.source) })));
       inFlight = false;
     };
 
@@ -1406,6 +1420,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     dateTime: entry.time,
     script: entry.source ?? "--",
     text: entry.message,
+    provenanceLabel: entry.provenanceLabel,
+    eventTimestamp: entry.eventTimestamp,
     level: entry.level,
   }));
   const pythonAnywhereResourceRows = useMemo(() => resourceRows(pythonAnywhereResources), [pythonAnywhereResources]);
@@ -1447,7 +1463,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
               <MLDailyImprovements onOpenPipeline={() => onTabSelect?.("ML Pipeline")} />
             </div>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
-              <LatestLogsTable rows={latestLogsRows} />
+              <LatestLogsTable rows={latestLogsRows} receipts={logReceipts} />
               <PythonAnywhereTasksTable rows={pythonAnywhereTaskRows} observedAt={pythonAnywhereTasksObservedAt} />
             </div>
           </section>
