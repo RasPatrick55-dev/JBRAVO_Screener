@@ -36,7 +36,7 @@ MAX_SIGNALS = 20000
 MAX_FILLS = 100000
 CACHE_SECONDS = 900
 FAILURE_CACHE_SECONDS = 60
-PROVIDER_INTERVAL_SECONDS = .5
+PROVIDER_INTERVAL_SECONDS = 1.0
 REQUEST_SECONDS = 25
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,100}\Z")
@@ -55,20 +55,19 @@ LIMITATIONS = [
 ]
 
 # Select only metadata first. No oversized JSON payload crosses the connection.
-# Different episode/cost/universe contracts are intentionally separate rows.
+# Show one latest completed snapshot per configured strategy, with that exact
+# historical version/definition/episode. No older snapshot fallback on failure.
 ARCHIVES_SQL = """
 WITH ranked AS (
  SELECT run_id, recorded_at, octet_length(result::text) AS payload_bytes,
  row_number() OVER (
-  PARTITION BY result->>'strategy_id',
-   result#>>'{summary,strategies,0,strategy,version}',
-   result#>>'{summary,strategies,0,strategy,definition_sha256}',
-   result#>>'{summary,strategies,0,episode_id}'
+  PARTITION BY result->>'strategy_id'
   ORDER BY result->>'signal_session' DESC, recorded_at DESC, run_id DESC
  ) AS ordinal
  FROM jbravo_research.research_runs
  WHERE result->>'schema'='jbravo.daily-strategy-scan.v1'
  AND result->>'status'='COMPLETED_PAPER_SCREEN'
+ AND result->>'strategy_id'=ANY(%s)
 )
 SELECT run_id, payload_bytes FROM ranked WHERE ordinal=1
 ORDER BY recorded_at DESC, run_id DESC LIMIT %s
@@ -354,12 +353,14 @@ class ProviderReader:
         self.lock = threading.Lock()
         self.total = self.calls = 0
         self.next_call = 0.0
+        self.stopped = False
 
     def __call__(self, path, limit):
         require(isinstance(path, str) and path.startswith("/home/"+self.username+"/") and
                 ".." not in PurePosixPath(path).parts and "\\" not in path,
                 "provider_path_refused")
         with self.lock:
+            require(not self.stopped, "provider_reads_stopped")
             self.calls += 1
             require(self.calls <= MAX_GROUPS*3 and time.monotonic() < self.deadline,
                     "provider_budget_exceeded")
@@ -370,12 +371,23 @@ class ProviderReader:
         if delay > 0:
             time.sleep(delay)
         require(time.monotonic() < self.deadline, "provider_budget_exceeded")
+        with self.lock:
+            require(not self.stopped, "provider_reads_stopped")
         url = self.base+"/"+self.username+"/files/path"+urllib.parse.quote(path, safe="/")
         req = urllib.request.Request(url, headers={"Authorization": "Token "+self.token,
                                                     "Accept-Encoding": "identity"})
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         timeout = max(.1, min(5, self.deadline-time.monotonic()))
-        with opener.open(req, timeout=timeout) as response:
+        try:
+            response = opener.open(req, timeout=timeout)
+        except urllib.error.HTTPError as error:
+            if error.code in {401, 403, 429}:
+                with self.lock:
+                    self.stopped = True
+                raise EvidenceError("provider_rate_limited" if error.code == 429 else
+                                    "provider_access_unavailable") from None
+            raise EvidenceError("provider_request_failed") from None
+        with response:
             require(response.status == 200 and response.headers.get("Content-Encoding", "identity")
                     in ("identity", ""), "provider_response_invalid")
             length = response.headers.get("Content-Length")
@@ -482,12 +494,15 @@ def bound_lifecycle(record, identity, reader, producer_root, *, charge_expanded=
         historical_scope="SELECTED_SIMULATED_PORTFOLIO_SIGNALS_NOT_ALL_QUALIFYING_SETUPS")
 
 
-def read_archives(connection, *, deadline=None):
+def read_archives(connection, *, strategy_ids, deadline=None):
+    require(bool(strategy_ids) and len(strategy_ids) <= MAX_GROUPS and
+            all(isinstance(sid, str) and IDENTIFIER.fullmatch(sid) for sid in strategy_ids),
+            "configured_strategies_unavailable")
     connection.set_session(readonly=True, isolation_level="REPEATABLE READ", autocommit=False)
     with connection.cursor() as cursor:
         cursor.execute("SET LOCAL statement_timeout='5000ms'")
         cursor.execute("SET LOCAL lock_timeout='1000ms'")
-        cursor.execute(ARCHIVES_SQL, (MAX_GROUPS+1,))
+        cursor.execute(ARCHIVES_SQL, (sorted(strategy_ids), MAX_GROUPS+1))
         metadata = cursor.fetchall()
         records, rejected, total = [], [], 0
         for run_id, size in metadata[:MAX_GROUPS]:
@@ -538,7 +553,7 @@ def snapshot(*, base_dir, now=None, connection_factory=None, reader=None):
         artifact_source="pythonanywhere_api_hash_bound_to_postgres",
         metric_basis="STRATEGY_RESEARCH_SIMULATION", generated_at=now.isoformat(),
         cache_age_seconds=0, cache_ttl_seconds=CACHE_SECONDS, limitations=list(LIMITATIONS),
-        coverage=dict(selection="LATEST_ARCHIVE_PER_STRATEGY_VERSION_DEFINITION_EPISODE",
+        coverage=dict(selection="LATEST_COMPLETED_ARCHIVE_PER_CONFIGURED_STRATEGY",
                       max_groups=MAX_GROUPS, truncated=False, rejected_archives=0, reasons=[]),
         actual_paper=dict(status="UNAVAILABLE", net_metrics_available=False,
             reason="Complete actual paper cost accounting is not supplied by research archives."),
@@ -550,11 +565,12 @@ def snapshot(*, base_dir, now=None, connection_factory=None, reader=None):
         config_error = reason(error)
     connection, database_error = None, None
     try:
+        require(config_error is None, config_error or "configuration_unavailable")
         if connection_factory is None:
             from scripts.research_store import connect
             connection_factory = connect
         connection = connection_factory()
-        records, rejected, truncated = read_archives(connection, deadline=deadline)
+        records, rejected, truncated = read_archives(connection, strategy_ids=enabled, deadline=deadline)
     except Exception as error:
         records, rejected, truncated = [], [reason(error)], False
         database_error = reason(error)

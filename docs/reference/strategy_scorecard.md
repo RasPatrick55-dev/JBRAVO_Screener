@@ -10,8 +10,10 @@ isolated web package must not derive native data paths from its own location.
 
 The authoritative catalog is `jbravo_research.research_runs`. A read-only,
 repeatable-read transaction selects the latest **completed** daily archive for
-each strategy ID, version, definition fingerprint and episode ID. Up to 24
-groups are selected; truncation and rejected archives are explicit. The latest
+each currently configured strategy ID, displaying that snapshot's exact version,
+definition fingerprint and episode ID. Historical versions are not additional
+rows. Up to 24 configured strategies are supported; truncation and rejected
+archives are explicit. The latest
 record in a group is not silently replaced with an older valid record after a
 validation or provider failure. Configured strategies without usable archive
 metadata remain visible with unknown version/definition and unknown metrics.
@@ -86,7 +88,7 @@ It does not import research engines, live strategy definitions, execution code,
 or mutate native source guards. Repeated compatible full snapshots can be
 deduplicated by stable signal ID; open fills may only grow by prefix. Conflicting
 completed outcomes or disappearance of a filled signal fail closed. The live
-reader selects one latest full snapshot per group, so repeated daily history
+reader selects one latest full snapshot per configured strategy, so repeated daily history
 cannot be counted more than once.
 
 `actual_paper` remains a separate unavailable/not-evaluated evidence basis. This
@@ -113,9 +115,10 @@ Rows expose `closed_signals`, `open_signals`, `unfilled_signals`, `wins`, `losse
 
 Limits are fixed, not expanded by public query parameters:
 
-- 24 strategy/version/definition/episode groups, not 24 distinct strategies, and
-  at most 72 artifact GETs. Two concurrent readers share a half-second minimum
-  request-start interval; the overall deadline may leave some groups unavailable.
+- One snapshot per configured strategy (six in the initial deployment, at most
+  18 artifact GETs). There is a hard cap of 24 configured strategies / 72 GETs.
+  Two concurrent readers share a one-second minimum request-start interval;
+  the overall deadline may leave some groups unavailable if the catalog grows.
 - Two MiB per PostgreSQL payload, 128 KiB manifest, two MiB specification,
   eight MiB compressed/plain lifecycle and 32 MiB decompressed lifecycle.
 - 64 MiB request-wide provider bytes and 64 MiB expanded lifecycle bytes.

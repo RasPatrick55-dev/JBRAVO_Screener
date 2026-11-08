@@ -322,6 +322,7 @@ def test_provider_failure_keeps_identity_and_unknown_metrics(tmp_path):
 
 
 def test_oversized_db_record_never_downloaded(tmp_path):
+    config(tmp_path)
     f = fixture()
     conn = Connection([f.record], oversized=True)
     result = score.snapshot(base_dir=tmp_path, now=NOW, connection_factory=lambda: conn, reader=f.reader)
@@ -331,6 +332,7 @@ def test_oversized_db_record_never_downloaded(tmp_path):
 
 
 def test_db_errors_are_sanitized_and_connection_closed(tmp_path):
+    config(tmp_path)
     conn = Connection([], error=RuntimeError("postgres password=secret"))
     result = score.snapshot(base_dir=tmp_path, now=NOW, connection_factory=lambda: conn)
     assert result["failure_code"] == "evidence_unavailable" and conn.closed and conn.rolled_back
@@ -378,8 +380,19 @@ def test_database_whole_request_budget_is_checked():
     f = fixture()
     conn = Connection([f.record])
     with pytest.raises(score.EvidenceError, match="database_budget_exceeded"):
-        score.read_archives(conn, deadline=score.time.monotonic()-1)
+        score.read_archives(conn, strategy_ids=[SID], deadline=score.time.monotonic()-1)
     assert not any(sql == score.ARCHIVE_SQL for sql, _ in conn.queries)
+
+
+def test_selection_is_latest_snapshot_per_configured_strategy_only():
+    f = fixture()
+    conn = Connection([f.record])
+    score.read_archives(conn, strategy_ids=[SID])
+    query, parameters = next((sql, args) for sql, args in conn.queries if sql == score.ARCHIVES_SQL)
+    assert parameters == ([SID], score.MAX_GROUPS+1)
+    assert "PARTITION BY result->>'strategy_id'" in query
+    assert "result->>'strategy_id'=ANY(%s)" in query
+    assert "definition_sha256" not in query and "episode_id" not in query
 
 
 def test_provider_origin_path_redirect_timeout_and_body_caps(monkeypatch):
@@ -404,6 +417,21 @@ def test_provider_origin_path_redirect_timeout_and_body_caps(monkeypatch):
     with pytest.raises(score.EvidenceError, match="artifact_size_limit"):
         reader("/home/RasPatrick/file", 5)
     assert len(calls) == 1  # No automatic retry.
+
+
+@pytest.mark.parametrize("status", [401, 403, 429])
+def test_provider_access_or_rate_limit_stops_remaining_requests(monkeypatch, status):
+    reader = score.ProviderReader(env=dict(PYTHONANYWHERE_USERNAME="RasPatrick", PYTHONANYWHERE_API_TOKEN="dummy"))
+    calls = []
+    def refused(req, timeout):
+        calls.append(req)
+        raise score.urllib.error.HTTPError(req.full_url, status, "private server detail", {}, None)
+    monkeypatch.setattr(score.urllib.request, "build_opener", lambda *args: SimpleNamespace(open=refused))
+    with pytest.raises(score.EvidenceError, match="provider_(rate_limited|access_unavailable)"):
+        reader("/home/RasPatrick/file", 100)
+    with pytest.raises(score.EvidenceError, match="provider_reads_stopped"):
+        reader("/home/RasPatrick/other", 100)
+    assert len(calls) == 1
 
 
 def test_cache_single_flight_and_explicit_staleness(monkeypatch):
