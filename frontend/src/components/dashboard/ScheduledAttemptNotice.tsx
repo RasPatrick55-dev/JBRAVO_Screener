@@ -1,6 +1,7 @@
 import { taskEvidenceFreshness, type ScheduledAttempt, type TaskEvidenceSource } from "./processReceipt";
 
 export default function ScheduledAttemptNotice({ attempt, taskSource }: { attempt?: ScheduledAttempt | null; taskSource?: TaskEvidenceSource }) {
+  if (taskSource?.kind === "loading") return <p role="status" className="mt-3 text-[11px] text-secondary">Loading scheduled attempt and execution receipt. Their status is not yet known.</p>;
   const freshness = taskEvidenceFreshness(taskSource);
   const current = freshness === "current";
   const status = current && attempt?.ok === true ? attempt.status || "UNKNOWN"

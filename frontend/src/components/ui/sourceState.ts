@@ -40,7 +40,7 @@ export async function deadlineRead<T>(operation: (signal: AbortSignal) => Promis
     })]);
   } finally { globalThis.clearTimeout(timer); }
 }
-export function watchSource(path: string, publish: (result: SourceResult) => void, interval = 20000, transport: typeof fetch = fetch, maxAgeMs = 60000) {
+export function watchSource(path: string, publish: (result: SourceResult) => void, interval = 20000, transport: typeof fetch = fetch, maxAgeMs = 60000, timeoutMs = 10000) {
   let active = true, inFlight = false;
   let result: SourceResult = {payload: null, kind: "loading", validity: "loading", freshness: "unknown"};
   let observed = 0;
@@ -54,7 +54,7 @@ export function watchSource(path: string, publish: (result: SourceResult) => voi
         const response = await transport(path, {cache: "no-store", signal, headers: {Accept: "application/json"}});
         if (!response.ok) throw new Error("source_http_unavailable");
         return await response.json() as SourcePayload;
-      });
+      }, timeoutMs);
       const stamp = payload?.observed_at ?? payload?.taken_at_utc;
       observed = stamp ? Date.parse(String(stamp)) : Date.now();
       let validity = sourceValidity(payload);
@@ -77,9 +77,9 @@ export function watchSource(path: string, publish: (result: SourceResult) => voi
   }, Math.min(1000, maxAgeMs));
   return () => {active = false; globalThis.clearInterval(poll); globalThis.clearInterval(expiry);};
 }
-export function useSource(path: string, interval = 20000) {
+export function useSource(path: string, interval = 20000, timeoutMs = 10000) {
   const [result, setResult] = useState<SourceResult>({payload: null, kind: "loading", validity: "loading", freshness: "unknown"});
-  useEffect(() => watchSource(path, setResult, interval), [path, interval]);
+  useEffect(() => watchSource(path, setResult, interval, fetch, 60000, timeoutMs), [path, interval, timeoutMs]);
   return result;
 }
 

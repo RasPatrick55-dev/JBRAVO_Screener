@@ -49,7 +49,7 @@ export default function ExecutionSummaryCard({ summary, isLoading, hasError, las
 
   const resultValue = ready ? validatedExecutionPL(summary) : null;
   const resultTone =
-    resultValue !== null && resultValue > 0 ? "text-emerald-300" : resultValue !== null && resultValue < 0 ? "text-rose-300" : "text-slate-200";
+    resultValue !== null && resultValue > 0 ? "text-emerald-700 dark:text-emerald-300" : resultValue !== null && resultValue < 0 ? "text-rose-700 dark:text-rose-300" : "text-slate-900 dark:text-slate-200";
 
   const tiles = useMemo(
     () => [
@@ -58,42 +58,42 @@ export default function ExecutionSummaryCard({ summary, isLoading, hasError, las
         label: runLabel,
         value: formatTimeUtc(runTime ?? null),
         subValue: formatDateUtc(runTime ?? null),
-        tone: "text-slate-100",
+        tone: "text-slate-900 dark:text-slate-100",
       },
       {
         key: "in_window",
         label: "In window",
         value: inWindow === true ? "YES" : inWindow === false ? "NO" : "UNKNOWN",
         subValue: windowLabel,
-        tone: inWindow === true ? "text-emerald-300" : "text-amber-300",
+        tone: inWindow === true ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300",
       },
       {
         key: "candidates",
         label: "Candidates",
         value: formatNumber(summary?.candidates),
         subValue: "Scanned",
-        tone: "text-slate-100",
+        tone: "text-slate-900 dark:text-slate-100",
       },
       {
         key: "submitted",
         label: "Submitted",
         value: formatNumber(summary?.submitted),
         subValue: "Orders",
-        tone: "text-emerald-300",
+        tone: "text-emerald-700 dark:text-emerald-300",
       },
       {
         key: "filled",
         label: "Filled",
         value: formatNumber(summary?.filled),
         subValue: "Completed",
-        tone: "text-emerald-300",
+        tone: "text-emerald-700 dark:text-emerald-300",
       },
       {
         key: "rejected",
         label: "Rejected",
         value: formatNumber(summary?.rejected),
         subValue: "Blocked",
-        tone: "text-rose-300",
+        tone: "text-rose-700 dark:text-rose-300",
       },
       {
         key: "result",
@@ -129,8 +129,8 @@ export default function ExecutionSummaryCard({ summary, isLoading, hasError, las
           <span
             className={`${basePillClass} ${
               isLoading
-                ? "bg-slate-500/20 text-slate-200 outline-slate-400/60"
-                : "bg-slate-500/10 text-slate-400 outline-slate-500/45"
+                ? "bg-slate-500/20 text-slate-900 dark:text-slate-200 outline-slate-400/60"
+                : "bg-slate-500/10 text-slate-600 dark:text-slate-400 outline-slate-500/45"
             }`}
           >
             Loading
@@ -138,8 +138,8 @@ export default function ExecutionSummaryCard({ summary, isLoading, hasError, las
           <span
             className={`${basePillClass} ${
               !isLoading && !hasError && summary?.ok === true
-                ? "bg-emerald-500/20 text-emerald-300 outline-emerald-400/55"
-                : "bg-slate-500/10 text-slate-400 outline-slate-500/45"
+                ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 outline-emerald-400/55"
+                : "bg-slate-500/10 text-slate-600 dark:text-slate-400 outline-slate-500/45"
             }`}
           >
             Success
@@ -147,8 +147,8 @@ export default function ExecutionSummaryCard({ summary, isLoading, hasError, las
           <span
             className={`${basePillClass} ${
               hasError
-                ? "bg-rose-500/20 text-rose-300 outline-rose-400/55"
-                : "bg-slate-500/10 text-slate-400 outline-slate-500/45"
+                ? "bg-rose-500/20 text-rose-700 dark:text-rose-300 outline-rose-400/55"
+                : "bg-slate-500/10 text-slate-600 dark:text-slate-400 outline-slate-500/45"
             }`}
           >
             Error
@@ -170,7 +170,7 @@ export default function ExecutionSummaryCard({ summary, isLoading, hasError, las
             <p className={`mt-2 font-cousine text-xl font-bold tabular-nums sm:text-2xl ${tile.tone}`}>
               {ready ? tile.value : "--"}
             </p>
-            <p className="mt-1 font-cousine text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+            <p className="mt-1 font-cousine text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600 dark:text-slate-400">
               {ready ? tile.subValue : "--"}
             </p>
           </article>
@@ -188,7 +188,7 @@ export default function ExecutionSummaryCard({ summary, isLoading, hasError, las
       <ScheduledAttemptNotice attempt={lastScheduledAttempt} taskSource={taskSource} />
 
       {hasError ? (
-        <p className="mt-3 text-xs text-rose-300">Execution summary unavailable. Showing fallback values.</p>
+        <p className="mt-3 text-xs text-rose-700 dark:text-rose-300">Execution summary unavailable. Showing fallback values.</p>
       ) : null}
     </section>
   );

@@ -1,6 +1,6 @@
 import CardShell from "./CardShell";
 import StatusChip, { type StatusChipTone } from "./StatusChip";
-import { processTone, type ProcessStatus } from "./processReceipt";
+import { processTone, taskEvidenceFreshness, type TaskEvidenceSource, type ProcessStatus } from "./processReceipt";
 
 export interface PipelineStatusCardProps {
   lastRun: { date: string; start: string; end: string; duration: string };
@@ -11,6 +11,7 @@ export interface PipelineStatusCardProps {
   };
   isLive: boolean;
   status?: ProcessStatus;
+  taskSource?: TaskEvidenceSource;
 }
 
 const statusToneMap: Record<PipelineStatusCardProps["subprocess"]["screener"], StatusChipTone> = {
@@ -26,9 +27,13 @@ const formatValue = (value: string | null | undefined) => {
   return value;
 };
 
-export default function PipelineStatusCard({ lastRun, subprocess, isLive, status }: PipelineStatusCardProps) {
-  const statusLabel = status ?? (isLive ? "COMPLETED" : "OVERDUE");
-  const statusTone = status ? processTone(status) : isLive ? "success" : "neutral";
+export default function PipelineStatusCard({ lastRun, subprocess, isLive, status, taskSource }: PipelineStatusCardProps) {
+  const freshness = taskEvidenceFreshness(taskSource);
+  const loading = taskSource?.kind === "loading";
+  const evidenceStatus = taskSource && freshness !== "current"
+    ? freshness === "stale" ? "STALE" : "UNAVAILABLE" : status;
+  const statusLabel = loading ? "LOADING" : evidenceStatus ?? (isLive ? "COMPLETED" : "UNKNOWN");
+  const statusTone = loading ? "neutral" : evidenceStatus ? processTone(evidenceStatus) : isLive ? "success" : "neutral";
   const cycleIcon = (
     <svg
       className="h-3.5 w-3.5"
@@ -98,13 +103,15 @@ export default function PipelineStatusCard({ lastRun, subprocess, isLive, status
   } as const;
 
   const statusDisplay = (status: PipelineStatusCardProps["subprocess"]["screener"]) => {
+    if (loading) return { label: "LOADING", tone: "neutral" as const, icon: statusIcons.pending };
+    if (taskSource && freshness !== "current") return { label: "UNKNOWN", tone: "neutral" as const, icon: statusIcons.pending };
     if (status === "OK") {
       return { label: "COMPLETE", tone: statusToneMap[status], icon: statusIcons.ok };
     }
     if (status === "FAIL") {
       return { label: "FAILED", tone: statusToneMap[status], icon: statusIcons.fail };
     }
-    return { label: "PENDING", tone: statusToneMap[status], icon: statusIcons.pending };
+    return { label: "UNKNOWN", tone: statusToneMap[status], icon: statusIcons.pending };
   };
 
   const valueStyles =
@@ -119,9 +126,9 @@ export default function PipelineStatusCard({ lastRun, subprocess, isLive, status
   return (
     <CardShell className="border-cyan-400/30 bg-gradient-to-br from-slate-950/90 via-slate-900/80 to-cyan-950/70 p-4 shadow-[0_18px_40px_-24px_rgba(34,211,238,0.55)] sm:p-5">
       <div className="rounded-xl border border-cyan-400/40 bg-gradient-to-r from-slate-950/90 via-slate-900/90 to-cyan-950/80 p-2.5 shadow-[0_0_24px_-12px_rgba(34,211,238,0.6)] sm:p-3">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/20 text-cyan-200">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-cyan-500/20 text-cyan-200">
               <svg
                 className="h-5 w-5"
                 viewBox="0 0 24 24"
@@ -152,6 +159,11 @@ export default function PipelineStatusCard({ lastRun, subprocess, isLive, status
         </div>
       </div>
 
+      {taskSource ? <p role="status" className="mt-3 text-[11px] text-secondary">
+        {loading ? "Loading pipeline receipt; completion and subprocess results are not yet known."
+          : freshness !== "current" ? `Pipeline receipt feed ${freshness}. Retained dates do not establish current readiness.`
+          : "Pipeline receipt reports computation only; entry readiness is separate."}
+      </p> : null}
       <div className="mt-4 flex flex-col gap-3">
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-full bg-cyan-400 shadow-sm" />

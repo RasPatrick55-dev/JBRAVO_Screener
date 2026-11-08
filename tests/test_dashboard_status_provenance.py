@@ -112,7 +112,7 @@ class OfflineTests(unittest.TestCase):
         for health, expected in [
             ({'refresh_due': True}, 'Guard warning / refresh due'),
             ({'monitor_refresh_due': True}, 'Guard warning / refresh due'),
-            ({'refresh_due': False, 'monitor_refresh_due': True}, 'Predictions fresh'),
+            ({'refresh_due': False, 'monitor_refresh_due': True}, 'Unknown'),
             ({'refresh_due': 'false', 'monitor_refresh_due': True}, 'Guard warning / refresh due'),
             ({'decision': 'BLOCK', 'refresh_due': True}, 'Guard held'),
             ({'decision': ' WARNING '}, 'Guard warning / refresh due'),
@@ -125,7 +125,7 @@ class OfflineTests(unittest.TestCase):
                 self.assertEqual(result['monitor']['guard_decision'],
                     str(health.get('decision') or '').strip().lower() or None)
 
-    def test_full_overview_distinguishes_artifacts_and_matching_execution(self):
+    def test_full_overview_distinguishes_artifacts_and_unbound_execution(self):
         records = dict(predictions=artifact(), labels=artifact(), features=artifact(), ranker_eval=artifact(),
             ranker_monitor=artifact(), ranker_recalibrate=artifact(), ranker_autoremediate=artifact(),
             ranker_trade_attribution=artifact(), ranker_oos_predictions=artifact())
@@ -143,7 +143,9 @@ class OfflineTests(unittest.TestCase):
         self.assertFalse(any(s['status'] == 'success' for s in result['pipeline_stages']))
         self.ml.safe_tail_lines = lambda *a, **kw: ['2026-11-06 23:00:01 [INFO] RANKER_PREDICT rc=0']
         result = self.ml.build_ml_overview(ROOT, now=NOW)
-        self.assertEqual(result['fresh_success_count'], 1)
+        self.assertEqual(result['fresh_success_count'], 0)
+        self.assertIsNone(result['last_successful_execution'])
+        self.assertTrue(all(s['execution_status'] == 'unverified' for s in result['pipeline_stages']))
         records['predictions'] = artifact('2026-10-25T04:04:59Z')
         self.ml.safe_tail_lines = lambda *a, **kw: ['2026-11-08 11:00:00 [INFO] PREDICTIONS_FRESHNESS stale=false']
         result = self.ml.build_ml_overview(ROOT, now=NOW)
@@ -151,7 +153,7 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(result['timestamps']['last_predict'], '2026-10-25T04:04:59+00:00')
         self.assertEqual(result['fresh_success_count'], 0)
 
-    def test_prediction_failure_is_not_hidden_by_stale_artifact(self):
+    def test_unbound_prediction_failure_remains_diagnostic_with_stale_artifact(self):
         self.ml._artifact_record = lambda *a, **kw: artifact('2026-10-25T04:04:59Z')
         self.ml._latest_status_payload = lambda *a: dict(model_score_coverage=dict(pct=100))
         self.ml._latest_model_snapshot = lambda *a: artifact()
@@ -162,8 +164,9 @@ class OfflineTests(unittest.TestCase):
         result = self.ml.build_ml_overview(ROOT, now=NOW)
         prediction = next(s for s in result['pipeline_stages'] if s['label'] == 'Predict')
         self.assertEqual(prediction['freshness_status'], 'stale')
-        self.assertEqual(prediction['status'], 'blocked')
-        self.assertEqual(prediction['tone'], 'error')
+        self.assertEqual(prediction['status'], 'stale')
+        self.assertEqual(prediction['tone'], 'warning')
+        self.assertEqual(result['enrichment']['latest_prediction_event']['rc'], 1)
         self.assertFalse(prediction['fresh_success'])
         self.assertIsNone(result['last_successful_execution'])
 

@@ -51,13 +51,13 @@ export default function ProcessStatusCards({
 }: ProcessStatusCardsProps) {
   return (
     <div className="flex flex-col gap-4 lg:flex-row lg:gap-5">
-      <div className="flex-1">
+      <div className="min-w-0 flex-1">
         <PipelineStatusCard {...pipeline} />
       </div>
-      <div className="flex-1">
+      <div className="min-w-0 flex-1">
         <ExecuteTradesStatusCard {...executeTrades} />
       </div>
-      <div className="flex-1">
+      <div className="min-w-0 flex-1">
         <MonitoringPositionsCard {...monitoring} />
       </div>
     </div>

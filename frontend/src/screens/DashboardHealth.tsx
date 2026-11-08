@@ -1,5 +1,5 @@
-import { canDisplay, deadlineRead, useSource } from "../components/ui/sourceState";
-import { useEffect, useMemo, useState } from "react";
+import { canDisplay, useSource } from "../components/ui/sourceState";
+import { useMemo } from "react";
 import NavbarDesktop from "../components/navbar/NavbarDesktop";
 import { buildNavbarBadges, useLiveTradingStatus, parseTradingStatus, diagnosticsFresh } from "../components/navbar/liveStatus";
 import ProcessStatusCards, {
@@ -10,6 +10,7 @@ import { buyFillSummary, type ExecuteOrdersSummaryResponse } from "../components
 import PythonAnywhereResources, { resourceRows, type PythonAnywhereResource } from "../components/dashboard/PythonAnywhereResources";
 import MLDailyImprovements from "../components/dashboard/MLDailyImprovements";
 import LatestLogsTable from "../components/dashboard/LatestLogsTable";
+import { useProviderLogs, providerLogNotice, PROVIDER_READ_TIMEOUT_MS, type ProviderLogSource } from "../components/dashboard/providerLogs";
 import PythonAnywhereTasksTable, { scheduledTaskRows } from "../components/dashboard/PythonAnywhereTasksTable";
 import type { LogEntry, StatusTone, SystemStatusItem } from "../types/ui";
 import { isCurrentReceipt, receiptStatus, type ProcessReceipt } from "../components/dashboard/processReceipt";
@@ -158,21 +159,7 @@ type PythonAnywhereTasksResponse = {
   source?: string | null;
 };
 
-type PythonAnywhereLogSource = {
-  source: string;
-  text: string;
-  entries?: Array<{ raw: string; ts_utc?: string | null; provenance_label?: string }>;
-  observed_at?: string;
-  latest_event_at?: string | null;
-  unknown_timestamp_count?: number;
-  timestamp_basis?: string;
-};
-
-type PythonAnywhereLogsResponse = {
-  ok?: boolean;
-  sources?: PythonAnywhereLogSource[];
-  source?: string | null;
-};
+type PythonAnywhereLogSource = ProviderLogSource;
 
 type OpenPositionsSummary = {
   count: number | null;
@@ -471,332 +458,6 @@ const statusFromPipelineRc = (value: number | null | undefined) => {
   return "FAIL" as const;
 };
 
-const parsePipelineLogRun = (logText: string | null | undefined) => {
-  if (!logText) {
-    return {
-      start: null,
-      end: null,
-      durationSeconds: null,
-      rc: null,
-      stepRcs: { screener: null, backtest: null, metrics: null },
-    };
-  }
-
-  const timestampPattern =
-    /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:,(\d+))?/;
-  const normalizeTimestamp = (line: string) => {
-    const match = line.match(timestampPattern);
-    if (!match) {
-      return null;
-    }
-    const [, date, time, millis] = match;
-    const ms = (millis ?? "000").padEnd(3, "0").slice(0, 3);
-    return `${date}T${time}.${ms}Z`;
-  };
-
-  let start: string | null = null;
-  let end: string | null = null;
-  let durationSeconds: number | null = null;
-  let rc: number | null = null;
-  let startIndex = -1;
-  let endIndex = -1;
-  type StepKey = "screener" | "backtest" | "metrics";
-  const stepRcs: { screener: number | null; backtest: number | null; metrics: number | null } = {
-    screener: null,
-    backtest: null,
-    metrics: null,
-  };
-  const stepPriorities: Record<StepKey, number> = {
-    screener: 0,
-    backtest: 0,
-    metrics: 0,
-  };
-
-  const mapStepName = (raw: string): StepKey | null => {
-    const text = raw.toLowerCase();
-    if (text.includes("screener")) {
-      return "screener";
-    }
-    if (text.includes("backtest")) {
-      return "backtest";
-    }
-    if (text.includes("metrics")) {
-      return "metrics";
-    }
-    return null;
-  };
-
-  const setStepRc = (step: StepKey | null, value: number | null, priority: number) => {
-    if (!step) {
-      return;
-    }
-    if (value === null || Number.isNaN(value)) {
-      return;
-    }
-    if (priority >= stepPriorities[step]) {
-      stepRcs[step] = value;
-      stepPriorities[step] = priority;
-    }
-  };
-
-  const lines = logText.split(/\r?\n/);
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i];
-    if (line.includes("PIPELINE_END")) {
-      endIndex = i;
-      const parsed = normalizeTimestamp(line);
-      if (parsed) {
-        end = parsed;
-      }
-      const durationMatch = line.match(/duration=([0-9.]+)s/);
-      if (durationMatch) {
-        const seconds = Number(durationMatch[1]);
-        durationSeconds = Number.isFinite(seconds) ? seconds : durationSeconds;
-      }
-      const rcMatch = line.match(/rc=([0-9-]+)/);
-      if (rcMatch) {
-        const parsedRc = Number(rcMatch[1]);
-        rc = Number.isFinite(parsedRc) ? parsedRc : rc;
-      }
-      break;
-    }
-  }
-
-  if (endIndex >= 0) {
-    for (let i = endIndex - 1; i >= 0; i -= 1) {
-      const line = lines[i];
-      if (line.includes("PIPELINE_START")) {
-        startIndex = i;
-        const parsed = normalizeTimestamp(line);
-        if (parsed) {
-          start = parsed;
-        }
-        break;
-      }
-    }
-  }
-
-  if (startIndex >= 0 && endIndex >= 0) {
-    for (let i = startIndex; i <= endIndex; i += 1) {
-      const line = lines[i];
-
-      const endMatch = line.match(/\bEND\s+(screener|backtest|metrics)\b.*\brc=([0-9-]+)/i);
-      if (endMatch) {
-        const step = mapStepName(endMatch[1]);
-        const parsedRc = Number(endMatch[2]);
-        setStepRc(step, Number.isFinite(parsedRc) ? parsedRc : null, 2);
-        continue;
-      }
-
-      const timeoutMatch = line.match(/\bSTEP_TIMEOUT\b.*\bname=([a-zA-Z_]+)\b.*\brc=([0-9-]+)/i);
-      if (timeoutMatch) {
-        const step = mapStepName(timeoutMatch[1]);
-        const parsedRc = Number(timeoutMatch[2]);
-        setStepRc(step, Number.isFinite(parsedRc) ? parsedRc : null, 2);
-        continue;
-      }
-
-      const completedMatch = line.match(/\bCompleted\s+(.+?)\s+successfully\b/i);
-      if (completedMatch) {
-        const step = mapStepName(completedMatch[1]);
-        setStepRc(step, 0, 1);
-        continue;
-      }
-
-      const failedMatch = line.match(/\b(.+?)\s+failed with exit\s+([0-9-]+)\b/i);
-      if (failedMatch) {
-        const step = mapStepName(failedMatch[1]);
-        const parsedRc = Number(failedMatch[2]);
-        setStepRc(step, Number.isFinite(parsedRc) ? parsedRc : null, 1);
-        continue;
-      }
-
-      const stepFailedMatch = line.match(/\bStep\s+(.+?)\s+failed\b/i);
-      if (stepFailedMatch) {
-        const step = mapStepName(stepFailedMatch[1]);
-        if (step) {
-          const fallbackRc = stepRcs[step] ?? 1;
-          setStepRc(step, fallbackRc, 1);
-        }
-      }
-    }
-  }
-
-  if (rc === 0) {
-    (["screener", "backtest", "metrics"] as const).forEach((step) => {
-      if (stepRcs[step] === null) {
-        stepRcs[step] = 0;
-      }
-    });
-  }
-
-  return { start, end, durationSeconds, rc, stepRcs };
-};
-
-const parseExecuteLogSummary = (logText: string | null | undefined) => {
-  if (!logText) {
-    return {
-      ordersSubmitted: null as number | null,
-      ordersFilled: null as number | null,
-      filledCount24h: null as number | null,
-      filledValue24h: null as number | null,
-      skipCounts: {} as Record<string, number>,
-      marketInWindow: null as boolean | null,
-    };
-  }
-
-  let ordersSubmitted: number | null = null;
-  let ordersFilled: number | null = null;
-  let filledCount24h: number | null = null;
-  let filledValue24h: number | null = null;
-  let marketInWindow: boolean | null = null;
-  let skipCounts: Record<string, number> = {};
-
-  const lines = logText.split(/\r?\n/);
-  const nowMs = Date.now();
-  const windowMs = 24 * 60 * 60 * 1000;
-  const seenOrders = new Set<string>();
-  let fillCount = 0;
-  let fillValue = 0;
-
-  const parseTimestampMs = (line: string) => {
-    const match = line.match(/(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:,(\d+))?/);
-    if (!match) {
-      return null;
-    }
-    const [, date, time, millis] = match;
-    const ms = (millis ?? "000").padEnd(3, "0").slice(0, 3);
-    const parsed = Date.parse(`${date}T${time}.${ms}Z`);
-    return Number.isNaN(parsed) ? null : parsed;
-  };
-
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i];
-    if (!line.includes("BUY_FILL") || !line.includes("avg_price=")) {
-      continue;
-    }
-    const ts = parseTimestampMs(line);
-    if (ts === null || nowMs - ts > windowMs) {
-      continue;
-    }
-    const orderMatch = line.match(/order_id=([a-f0-9-]+)/i);
-    const qtyMatch = line.match(/filled_qty=([0-9.]+)/);
-    const priceMatch = line.match(/avg_price=([0-9.]+)/);
-    if (!qtyMatch || !priceMatch) {
-      continue;
-    }
-    const qty = Number(qtyMatch[1]);
-    const price = Number(priceMatch[1]);
-    if (!Number.isFinite(qty) || !Number.isFinite(price)) {
-      continue;
-    }
-    const key = orderMatch?.[1] ?? `${ts}-${qty}-${price}`;
-    if (seenOrders.has(key)) {
-      continue;
-    }
-    seenOrders.add(key);
-    fillCount += 1;
-    fillValue += qty * price;
-  }
-  filledCount24h = fillCount;
-  filledValue24h = fillCount > 0 ? fillValue : null;
-
-  let endIndex = -1;
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i];
-    if (line.includes("EXECUTE_SUMMARY") || line.includes("EXECUTE END")) {
-      endIndex = i;
-      break;
-    }
-  }
-  const startMarkers = ["Starting pre-market trade execution", "Starting trade execution"];
-  let startIndex = 0;
-  if (endIndex >= 0) {
-    for (let i = endIndex; i >= 0; i -= 1) {
-      const line = lines[i];
-      if (startMarkers.some((marker) => line.includes(marker))) {
-        startIndex = i;
-        break;
-      }
-    }
-  } else {
-    endIndex = lines.length - 1;
-  }
-
-  const parseSkipCounts = (line: string) => {
-    const counts: Record<string, number> = {};
-    const dotMatches = line.matchAll(/skips\.([A-Z_]+)=(\d+)/g);
-    for (const match of dotMatches) {
-      counts[match[1]] = Number(match[2]);
-    }
-    const dictMatches = line.matchAll(/'([A-Z_]+)'\s*:\s*(\d+)/g);
-    for (const match of dictMatches) {
-      counts[match[1]] = Number(match[2]);
-    }
-    return counts;
-  };
-
-  for (let i = endIndex; i >= startIndex; i -= 1) {
-    const line = lines[i];
-    if (line.includes("EXECUTE_SUMMARY") || line.includes("EXECUTE END")) {
-      const submittedMatch = line.match(/orders_submitted=(\d+)/);
-      const submittedAltMatch = line.match(/submitted=(\d+)/);
-      if (submittedMatch) {
-        const submitted = Number(submittedMatch[1]);
-        ordersSubmitted = Number.isFinite(submitted) ? submitted : ordersSubmitted;
-      } else if (submittedAltMatch) {
-        const submitted = Number(submittedAltMatch[1]);
-        ordersSubmitted = Number.isFinite(submitted) ? submitted : ordersSubmitted;
-      }
-      const filledMatch = line.match(/orders_filled=(\d+)/);
-      if (filledMatch) {
-        const filled = Number(filledMatch[1]);
-        ordersFilled = Number.isFinite(filled) ? filled : ordersFilled;
-      }
-      skipCounts = { ...skipCounts, ...parseSkipCounts(line) };
-      break;
-    }
-  }
-
-  for (let i = endIndex; i >= startIndex; i -= 1) {
-    const line = lines[i];
-    if (line.includes("MARKET_TIME") && line.includes("in_window=")) {
-      const match = line.match(/in_window=(True|False)/);
-      if (match) {
-        marketInWindow = match[1] === "True";
-        break;
-      }
-    }
-  }
-
-  return {
-    ordersSubmitted,
-    ordersFilled,
-    filledCount24h,
-    filledValue24h,
-    skipCounts,
-    marketInWindow,
-  };
-};
-
-
-
-
-
-const fetchJson = async <T,>(path: string): Promise<T | null> => {
-  try { return await deadlineRead(async signal => {
-    const response = await fetch(path, {signal, cache: "no-store", headers: {Accept: "application/json"}});
-    return response.ok ? await response.json() as T : null;
-  }); } catch { return null; }
-};
-
-const fetchText = async (path: string): Promise<string | null> => {
-  try {return await deadlineRead(async signal => {
-    const response = await fetch(path, {signal, cache: "no-store", headers: {Accept: "text/plain"}});
-    return response.ok ? await response.text() : null;
-  });} catch {return null;}
-};
-
 type ParsedLogEntry = LogEntry & { timestampMs: number };
 
 const normalizeLogLevel = (rawLevel: string | undefined): LogEntry["level"] => {
@@ -929,8 +590,8 @@ type DashboardHealthProps = {
 };
 
 export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHealthProps) {
-  const [healthSnapshot, setHealthSnapshot] = useState<ApiHealthResponse | null>(null);
-  const [overviewSnapshot, setOverviewSnapshot] = useState<HealthOverviewResponse | null>(null);
+  const healthSource = useSource("/api/health");
+  const healthSnapshot = healthSource.freshness === "current" ? healthSource.payload as ApiHealthResponse | null : null;
   const accountPayloadSource = useSource("/api/account/overview");
   const accountSnapshot = canDisplay(accountPayloadSource.kind) ? (accountPayloadSource.payload as AccountOverviewResponse | null)?.snapshot ?? null : null;
   const tradesPayloadSource = useSource("/api/trades/overview");
@@ -939,84 +600,23 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   const executeSnapshot = canDisplay(executePayloadSource.kind) ? executePayloadSource.payload as ExecutionSnapshot | null : null;
   const monitoringSource = useSource("/api/positions/monitoring");
   const monitoringSnapshot = canDisplay(monitoringSource.kind) ? monitoringSource.payload as MonitoringPositionsResponse | null : null;
-  const [pipelineTaskRun, setPipelineTaskRun] = useState<PipelineTaskRunResponse | null>(null);
+  const pipelineTaskSource = useSource("/api/pipeline/task");
+  const pipelineTaskRun = pipelineTaskSource.payload as PipelineTaskRunResponse | null;
   const executeTaskSource = useSource("/api/execute/task");
   const executeTaskRun = executeTaskSource.payload as ExecuteTaskRunResponse | null;
-  const [executeOrdersSummary, setExecuteOrdersSummary] =
-    useState<ExecuteOrdersSummaryResponse | null>(null);
-  const [pipelineLogText, setPipelineLogText] = useState<string | null>(null);
-  const [executeLogText, setExecuteLogText] = useState<string | null>(null);
-  const [logReceipts, setLogReceipts] = useState<PythonAnywhereLogSource[]>([]);
-  const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
-  const [pythonAnywhereResources, setPythonAnywhereResources] =
-    useState<PythonAnywhereResource[] | null>(null);
-  const [pythonAnywhereTasks, setPythonAnywhereTasks] = useState<PythonAnywhereTask[] | null>(null);
-  const [pythonAnywhereTasksObservedAt, setPythonAnywhereTasksObservedAt] = useState<string | null>(null);
-
-  useEffect(() => {
-    let isMounted = true, inFlight = false;
-    const load = async () => {
-      if (inFlight) return;
-      inFlight = true;
-      const [
-        overview,
-        health,
-        taskRunPayload,
-        executeOrdersPayload,
-        pythonAnywhereResourcesPayload,
-        pythonAnywhereTasksPayload,
-        pythonAnywhereLogsPayload,
-        pipelineLog,
-        executeLog,
-        monitorLog,
-      ] = await Promise.all([
-        fetchJson<HealthOverviewResponse>("/api/health/overview"),
-        fetchJson<ApiHealthResponse>("/api/health"),
-        fetchJson<PipelineTaskRunResponse>("/api/pipeline/task"),
-        fetchJson<ExecuteOrdersSummaryResponse>("/api/execute/orders-summary"),
-        fetchJson<PythonAnywhereResourcesResponse>("/api/pythonanywhere/resources"),
-        fetchJson<PythonAnywhereTasksResponse>("/api/pythonanywhere/tasks"),
-        fetchJson<PythonAnywhereLogsResponse>("/api/pythonanywhere/logs"),
-        fetchText(`/api/logs/pipeline.log?ts=${Date.now()}`),
-        fetchText(`/api/logs/execute_trades.log?ts=${Date.now()}`),
-        fetchText(`/api/logs/monitor.log?ts=${Date.now()}`),
-      ]);
-
-      if (!isMounted) {
-        return;
-      }
-
-      setOverviewSnapshot(overview);
-      setHealthSnapshot(health);
-      setPipelineTaskRun(taskRunPayload);
-      setExecuteOrdersSummary(executeOrdersPayload);
-      setPythonAnywhereResources(pythonAnywhereResourcesPayload?.ok === true ? pythonAnywhereResourcesPayload.resources ?? null : null);
-      setPythonAnywhereTasks(scheduledTaskRows(pythonAnywhereTasksPayload));
-      setPythonAnywhereTasksObservedAt(pythonAnywhereTasksPayload?.ok === true ? pythonAnywhereTasksPayload.observed_at ?? null : null);
-      setPipelineLogText(pipelineLog);
-      setExecuteLogText(executeLog);
-      const pythonAnyLogSources =
-        pythonAnywhereLogsPayload?.sources?.filter(
-          (source) => source && typeof source.text === "string" && source.text.trim()
-        ) ?? [];
-      const fallbackSources = [
-        { source: "pipeline", text: pipelineLog },
-        { source: "execute", text: executeLog },
-        { source: "monitor", text: monitorLog },
-      ];
-      const logSources = pythonAnyLogSources.length ? pythonAnyLogSources : fallbackSources;
-      setLogEntries(buildLogEntries(logSources, 400, 48));
-      setLogReceipts(pythonAnyLogSources.map(source => ({ ...source, source: labelLogSource(source.source) })));
-      inFlight = false;
-    };
-
-    void load();
-    const timer = globalThis.setInterval(() => void load(), 20000);
-    return () => {
-      globalThis.clearInterval(timer);
-      isMounted = false;
-    };
-  }, []);
+  const executeOrdersSource = useSource("/api/execute/orders-summary");
+  const executeOrdersSummary = executeOrdersSource.freshness === "current"
+    ? executeOrdersSource.payload as ExecuteOrdersSummaryResponse | null : null;
+  const resourcesSource = useSource("/api/pythonanywhere/resources", 20000, PROVIDER_READ_TIMEOUT_MS);
+  const resourcesPayload = resourcesSource.payload as PythonAnywhereResourcesResponse | null;
+  const pythonAnywhereResources = resourcesPayload?.ok === true ? resourcesPayload.resources ?? null : null;
+  const tasksSource = useSource("/api/pythonanywhere/tasks", 20000, PROVIDER_READ_TIMEOUT_MS);
+  const pythonAnywhereTasksPayload = tasksSource.payload as PythonAnywhereTasksResponse | null;
+  const pythonAnywhereTasks = scheduledTaskRows(pythonAnywhereTasksPayload);
+  const pythonAnywhereTasksObservedAt = pythonAnywhereTasksPayload?.ok === true ? pythonAnywhereTasksPayload.observed_at ?? null : null;
+  const providerLogs = useProviderLogs();
+  const logEntries = useMemo(() => buildLogEntries(providerLogs.sources, 400, 48), [providerLogs.sources]);
+  const logReceipts = useMemo(() => providerLogs.sources.map(source => ({ ...source, source: labelLogSource(source.source) })), [providerLogs.sources]);
 
   const liveTradingStatus = useLiveTradingStatus(
     parseTradingStatus(healthSnapshot)
@@ -1070,15 +670,6 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   }, [monitoringSnapshot?.positions]);
   const hasMonitoringApi = monitoringSnapshot?.ok === true && Array.isArray(monitoringSnapshot.positions);
 
-  const pipelineLogRun = useMemo(
-    () => parsePipelineLogRun(pipelineLogText),
-    [pipelineLogText]
-  );
-  const executeLogSummary = useMemo(
-    () => parseExecuteLogSummary(executeLogText),
-    [executeLogText]
-  );
-
   const openPositions = useMemo<OpenPositionsSummary>(() => ({
     count: hasMonitoringApi ? monitoringPositionsFromApi.length : null,
     pnl: hasMonitoringApi ? parseNumber(monitoringSnapshot?.summary?.totalOpenPL) : null,
@@ -1114,42 +705,21 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   const processStatusCards = useMemo<ProcessStatusCardsProps>(() => {
     const currentPipeline = isCurrentReceipt(pipelineTaskRun);
     const currentExecutor = isCurrentReceipt(executeTaskRun);
-    const pipelineState = receiptStatus(pipelineTaskRun);
-    const executorState = receiptStatus(executeTaskRun);
-    const pipelineStartRaw = overviewSnapshot?.kpis?.last_run_utc;
-    const pipelineStart =
-      currentPipeline ? pipelineTaskRun?.started_utc ?? null : pipelineTaskRun?.started_utc ??
-      pipelineLogRun.start ??
-      (pipelineStartRaw ? String(pipelineStartRaw) : null);
-    const pipelineEnd =
-      currentPipeline ? pipelineTaskRun?.finished_utc ?? null : pipelineTaskRun?.finished_utc ?? pipelineLogRun.end ?? healthSnapshot?.last_run_utc ?? null;
-    const pipelineDuration =
-      pipelineTaskRun?.duration_seconds !== null &&
-      pipelineTaskRun?.duration_seconds !== undefined
-        ? formatDurationSeconds(pipelineTaskRun.duration_seconds)
-        : !currentPipeline && pipelineLogRun.durationSeconds
-          ? formatDurationSeconds(pipelineLogRun.durationSeconds)
-          : formatDuration(pipelineStart, pipelineEnd);
-    const pipelineEndDate = pipelineEnd ? new Date(pipelineEnd) : null;
-    const pipelineRecent =
-      pipelineEndDate && !Number.isNaN(pipelineEndDate.getTime())
-        ? Date.now() - pipelineEndDate.getTime() <= 24 * 60 * 60 * 1000
-        : false;
-    const pipelineRc = currentPipeline ? pipelineTaskRun?.rc : pipelineTaskRun?.rc ?? pipelineLogRun.rc;
-    const pipelineLive = pipelineState ? pipelineState === "COMPLETED" : pipelineRecent && pipelineRc === 0;
-    const executeStart = currentExecutor ? executeTaskRun?.started_utc ?? null : executeTaskRun?.started_utc ?? executeSnapshot?.last_execution ?? null;
-    const executeEnd =
-      currentExecutor ? executeTaskRun?.finished_utc ?? null : executeTaskRun?.finished_utc ?? executeSnapshot?.ny_now ?? executeSnapshot?.last_execution ?? null;
+    const pipelineState = receiptStatus(pipelineTaskRun) ?? "UNAVAILABLE";
+    const executorState = receiptStatus(executeTaskRun) ?? "UNAVAILABLE";
+    const pipelineStart = currentPipeline ? pipelineTaskRun?.started_utc ?? null : null;
+    const pipelineEnd = currentPipeline ? pipelineTaskRun?.finished_utc ?? null : null;
+    const pipelineDuration = currentPipeline && pipelineTaskRun?.duration_seconds != null
+      ? formatDurationSeconds(pipelineTaskRun.duration_seconds)
+      : formatDuration(pipelineStart, pipelineEnd);
+    const pipelineLive = pipelineState === "COMPLETED";
+    const executeStart = currentExecutor ? executeTaskRun?.started_utc ?? null : null;
+    const executeEnd = currentExecutor ? executeTaskRun?.finished_utc ?? null : null;
     const executeDuration =
-      executeTaskRun?.duration_seconds !== null && executeTaskRun?.duration_seconds !== undefined
+      currentExecutor && executeTaskRun?.duration_seconds !== null && executeTaskRun?.duration_seconds !== undefined
         ? formatDurationSeconds(executeTaskRun.duration_seconds)
         : formatDuration(executeStart, executeEnd);
-    const executeEndDate = executeEnd ? new Date(executeEnd) : null;
-    const executeRecent =
-      executeEndDate && !Number.isNaN(executeEndDate.getTime())
-        ? Date.now() - executeEndDate.getTime() <= 24 * 60 * 60 * 1000
-        : false;
-    const executeCycleComplete = executorState ? executorState === "COMPLETED" : executeRecent && executeTaskRun?.rc === 0;
+    const executeCycleComplete = executorState === "COMPLETED";
 
     const ordersSubmitted = executeSnapshot?.orders_submitted;
     const ordersFilled = executeSnapshot?.orders_filled;
@@ -1173,12 +743,13 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
           duration: pipelineDuration,
         },
         subprocess: {
-          screener: statusFromPipelineRc(currentPipeline ? pipelineTaskRun?.stage_rcs?.screener ?? null : pipelineLogRun.stepRcs.screener),
-          backTester: statusFromPipelineRc(currentPipeline ? pipelineTaskRun?.stage_rcs?.backtest ?? null : pipelineLogRun.stepRcs.backtest),
-          metrics: statusFromPipelineRc(currentPipeline ? pipelineTaskRun?.stage_rcs?.metrics ?? null : pipelineLogRun.stepRcs.metrics),
+          screener: statusFromPipelineRc(currentPipeline && pipelineTaskRun?.ok === true ? pipelineTaskRun.stage_rcs?.screener ?? null : null),
+          backTester: statusFromPipelineRc(currentPipeline && pipelineTaskRun?.ok === true ? pipelineTaskRun.stage_rcs?.backtest ?? null : null),
+          metrics: statusFromPipelineRc(currentPipeline && pipelineTaskRun?.ok === true ? pipelineTaskRun.stage_rcs?.metrics ?? null : null),
         },
         isLive: pipelineLive,
         status: pipelineState,
+        taskSource: pipelineTaskSource,
       },
       executeTrades: {
         lastRun: {
@@ -1203,18 +774,13 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     };
   }, [
     pipelineTaskRun,
+    pipelineTaskSource,
     executeTaskRun,
     executeSnapshot?.in_window,
     executeSnapshot?.last_execution,
     executeSnapshot?.ny_now,
     executeSnapshot?.orders_filled,
     executeSnapshot?.orders_submitted,
-    executeLogSummary.filledCount24h,
-    executeLogSummary.filledValue24h,
-    executeLogSummary.marketInWindow,
-    executeLogSummary.ordersFilled,
-    executeLogSummary.ordersSubmitted,
-    executeLogSummary.skipCounts,
     executeTaskRun?.duration_seconds,
     executeTaskRun?.finished_utc,
     executeTaskRun?.started_utc,
@@ -1234,18 +800,10 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     hasMonitoringApi,
     monitoringSource.kind,
     monitoringSnapshot?.observed_at,
-    overviewSnapshot?.kpis,
     pipelineTaskRun?.duration_seconds,
     pipelineTaskRun?.finished_utc,
     pipelineTaskRun?.rc,
     pipelineTaskRun?.started_utc,
-    pipelineLogRun.durationSeconds,
-    pipelineLogRun.end,
-    pipelineLogRun.rc,
-    pipelineLogRun.stepRcs.backtest,
-    pipelineLogRun.stepRcs.metrics,
-    pipelineLogRun.stepRcs.screener,
-    pipelineLogRun.start,
   ]);
 
   const kpiCards = useMemo(
@@ -1408,15 +966,10 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     return "Updated n/a";
   }, [healthSnapshot?.freshness?.age_seconds]);
 
-  const emptyEntries: LogEntry[] = [
-    { time: "--", level: "INFO", message: "No recent activity logged." },
-  ];
-
-  const displayEntries = logEntries.length ? logEntries : emptyEntries;
   const alpacaEquity = formatCurrency(
     parseNumber(accountSnapshot?.equity ?? accountSnapshot?.portfolio_value ?? null)
   );
-  const latestLogsRows = displayEntries.map((entry) => ({
+  const latestLogsRows = logEntries.map((entry) => ({
     dateTime: entry.time,
     script: entry.source ?? "--",
     text: entry.message,
@@ -1434,10 +987,10 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   );
 
   return (
-    <div className="dark min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] font-['Manrope'] text-slate-900 dark:bg-[radial-gradient(circle_at_top,_#0B1220,_#0F172A_55%,_#020617_100%)] dark:text-slate-100">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] text-slate-900 dark:bg-[radial-gradient(circle_at_top,_#0B1220,_#0F172A_55%,_#020617_100%)] dark:text-slate-100">
       <NavbarDesktop tabs={navTabs} rightBadges={rightBadges} onTabSelect={onTabSelect} />
 
-      <main className="relative pt-36 pb-12 sm:pt-28">
+      <main className="relative pb-12 pt-[calc(var(--app-nav-height,208px)+16px)]">
         <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-gradient-to-br from-sky-100 via-white to-amber-100 opacity-70 blur-3xl dark:from-cyan-500/15 dark:via-slate-950/40 dark:to-amber-500/20 dark:opacity-70" />
         <div className="pointer-events-none absolute left-0 top-40 h-72 w-72 rounded-full bg-gradient-to-br from-emerald-100 via-white to-slate-100 opacity-60 blur-3xl dark:from-emerald-500/15 dark:via-slate-950/40 dark:to-cyan-500/15 dark:opacity-70" />
 
@@ -1459,12 +1012,12 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
           <section className="mt-6">
             <div className="grid gap-4 lg:grid-cols-3">
               <AlpacaCard value={alpacaEquity} subtitle={`Broker equity: ${accountPayloadSource.kind}`} />
-              <PythonAnywhereResources resources={pythonAnywhereResourceRows} />
+              <PythonAnywhereResources resources={pythonAnywhereResourceRows} sourceStatus={resourcesSource.kind} />
               <MLDailyImprovements onOpenPipeline={() => onTabSelect?.("ML Pipeline")} />
             </div>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
-              <LatestLogsTable rows={latestLogsRows} receipts={logReceipts} />
-              <PythonAnywhereTasksTable rows={pythonAnywhereTaskRows} observedAt={pythonAnywhereTasksObservedAt} />
+              <LatestLogsTable rows={latestLogsRows} receipts={logReceipts} notice={providerLogNotice(providerLogs)} emptyMessage={providerLogNotice(providerLogs)} />
+              <PythonAnywhereTasksTable rows={pythonAnywhereTaskRows} observedAt={pythonAnywhereTasksObservedAt} sourceStatus={tasksSource.kind} />
             </div>
           </section>
         </div>

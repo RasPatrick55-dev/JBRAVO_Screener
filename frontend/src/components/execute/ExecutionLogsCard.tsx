@@ -87,8 +87,8 @@ export default function ExecutionLogsCard({ logs, isLoading, hasError }: Props) 
                   className={
                     "rounded-md px-3 py-1.5 text-xs font-medium outline outline-1 outline-offset-[-1px] transition sm:px-4 sm:py-2 sm:text-sm " +
                     (active
-                      ? "bg-sky-500/20 text-sky-200 outline-sky-400/60"
-                      : "text-slate-300 outline-slate-600/80 hover:text-slate-100")
+                      ? "bg-sky-500/20 text-sky-700 dark:text-sky-200 outline-sky-400/60"
+                      : "text-slate-600 dark:text-slate-300 outline-slate-600/80 hover:text-slate-900 dark:hover:text-slate-100")
                   }
                 >
                   {option.label}
@@ -103,9 +103,9 @@ export default function ExecutionLogsCard({ logs, isLoading, hasError }: Props) 
             type="button"
             aria-label="Search execution logs"
             onClick={() => setShowSearch((current) => !current)}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md outline outline-1 outline-slate-500/55 transition hover:bg-slate-700/35"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md outline outline-1 outline-slate-500/55 transition hover:bg-slate-200/60 dark:hover:bg-slate-700/35"
           >
-            <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-200" fill="none">
+            <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-900 dark:text-slate-200" fill="none">
               <path
                 d="M11 19a8 8 0 1 1 5.29-2l4.35 4.36"
                 stroke="currentColor"
@@ -123,7 +123,7 @@ export default function ExecutionLogsCard({ logs, isLoading, hasError }: Props) 
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder="Search"
-                className="h-8 w-32 rounded-md border border-slate-600/70 bg-slate-900/70 px-2 py-1 text-xs text-slate-100 outline-none transition focus:border-sky-400 sm:w-44"
+                className="h-8 w-32 rounded-md border border-slate-600/70 bg-white/90 dark:bg-slate-900/70 px-2 py-1 text-xs text-slate-900 dark:text-slate-100 outline-none transition focus:border-sky-400 sm:w-44"
               />
             </label>
           ) : null}
@@ -133,9 +133,9 @@ export default function ExecutionLogsCard({ logs, isLoading, hasError }: Props) 
             aria-label={`Logs level filter ${levelFilterLabel(levelFilter)}`}
             title={`Level: ${levelFilterLabel(levelFilter)}`}
             onClick={() => setLevelFilter((current) => cycleLevelFilter(current))}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md outline outline-1 outline-slate-500/55 transition hover:bg-slate-700/35"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md outline outline-1 outline-slate-500/55 transition hover:bg-slate-200/60 dark:hover:bg-slate-700/35"
           >
-            <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-200" fill="none">
+            <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-900 dark:text-slate-200" fill="none">
               <path
                 d="M4 5h16l-6 7v6l-4 1v-7z"
                 stroke="currentColor"
@@ -157,8 +157,8 @@ export default function ExecutionLogsCard({ logs, isLoading, hasError }: Props) 
                 className={
                   "h-8 min-w-8 rounded-md px-2 text-xs font-semibold uppercase tracking-[0.08em] outline outline-1 outline-offset-[-1px] transition " +
                   (active
-                    ? "bg-sky-500/20 text-sky-200 outline-sky-400/60"
-                    : "text-slate-300 outline-slate-600/80 hover:text-slate-100")
+                    ? "bg-sky-500/20 text-sky-700 dark:text-sky-200 outline-sky-400/60"
+                    : "text-slate-600 dark:text-slate-300 outline-slate-600/80 hover:text-slate-900 dark:hover:text-slate-100")
                 }
               >
                 {chip.label}
@@ -171,8 +171,8 @@ export default function ExecutionLogsCard({ logs, isLoading, hasError }: Props) 
       <div className="mt-3 overflow-x-auto">
         <div className="min-w-[760px] max-h-[320px] overflow-auto rounded-xl jbravo-panel-inner jbravo-panel-inner-amber">
           <table className="min-w-full table-auto">
-            <thead className="sticky top-0 z-10 bg-slate-900/95">
-              <tr className="font-arimo border-b border-slate-700/80 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-300">
+            <thead className="sticky top-0 z-10 bg-slate-100/95 dark:bg-slate-900/95">
+              <tr className="font-arimo border-b border-slate-700/80 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600 dark:text-slate-300">
                 <th scope="col" className="px-3 py-2 text-left whitespace-nowrap">
                   Time (UTC)
                 </th>
@@ -210,12 +210,12 @@ export default function ExecutionLogsCard({ logs, isLoading, hasError }: Props) 
                     return (
                       <tr
                         key={`${row.ts_utc ?? "log-ts"}-${index}`}
-                        className="border-b border-slate-700/70 text-sm transition-colors hover:bg-slate-800/45"
+                        className="border-b border-slate-700/70 text-sm transition-colors hover:bg-slate-200/60 dark:hover:bg-slate-800/45"
                       >
-                        <td className="font-cousine px-3 py-2 text-left tabular-nums text-slate-300 whitespace-nowrap">
+                        <td className="font-cousine px-3 py-2 text-left tabular-nums text-slate-600 dark:text-slate-300 whitespace-nowrap">
                           <div className="flex flex-col whitespace-nowrap leading-tight">
                             <span>{ts.time}</span>
-                            <span className="text-[10px] text-slate-400">{ts.date}</span>
+                            <span className="text-[10px] text-slate-600 dark:text-slate-400">{ts.date}</span>
                           </div>
                         </td>
                         <td className="px-3 py-2 text-left whitespace-nowrap">
@@ -227,7 +227,7 @@ export default function ExecutionLogsCard({ logs, isLoading, hasError }: Props) 
                             {level}
                           </span>
                         </td>
-                        <td className="px-3 py-2 text-left text-slate-100">{row.message || ""}</td>
+                        <td className="px-3 py-2 text-left text-slate-900 dark:text-slate-100">{row.message || ""}</td>
                       </tr>
                     );
                   })
@@ -238,7 +238,7 @@ export default function ExecutionLogsCard({ logs, isLoading, hasError }: Props) 
       </div>
 
       {hasError ? (
-        <p className="mt-3 text-xs text-rose-300">Execution logs endpoint unavailable. Showing fallback state.</p>
+        <p className="mt-3 text-xs text-rose-700 dark:text-rose-300">Execution logs endpoint unavailable. Showing fallback state.</p>
       ) : null}
     </section>
   );

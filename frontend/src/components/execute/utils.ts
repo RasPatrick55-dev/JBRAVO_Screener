@@ -76,12 +76,12 @@ export const parseSseJson = <T,>(raw: string): T | null => {
 export const auditSeverityChipClass = (severity: string): string => {
   const normalized = String(severity || "").trim().toLowerCase();
   if (normalized === "high" || normalized === "error") {
-    return "bg-rose-500/15 text-rose-300 outline-rose-400/50";
+    return "bg-rose-500/15 text-rose-700 dark:text-rose-300 outline-rose-400/50";
   }
   if (normalized === "warning" || normalized === "warn") {
-    return "bg-amber-500/15 text-amber-300 outline-amber-400/55";
+    return "bg-amber-500/15 text-amber-700 dark:text-amber-300 outline-amber-400/55";
   }
-  return "bg-sky-500/15 text-sky-300 outline-sky-400/55";
+  return "bg-sky-500/15 text-sky-700 dark:text-sky-300 outline-sky-400/55";
 };
 
 export const formatAgeSeconds = (value: number | null | undefined): string => {
@@ -215,51 +215,51 @@ export const normalizeLogLevel = (value: string | null | undefined): string => {
 
 export const sideChipClass = (side: string): string => {
   if (side === "BUY") {
-    return "bg-emerald-500/15 text-emerald-300 outline-emerald-400/50";
+    return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 outline-emerald-400/50";
   }
   if (side === "SELL") {
-    return "bg-rose-500/15 text-rose-300 outline-rose-400/50";
+    return "bg-rose-500/15 text-rose-700 dark:text-rose-300 outline-rose-400/50";
   }
-  return "bg-slate-500/15 text-slate-300 outline-slate-500/50";
+  return "bg-slate-500/15 text-slate-600 dark:text-slate-300 outline-slate-500/50";
 };
 
 export const orderStatusChipClass = (status: string): string => {
   if (status === "FILLED") {
-    return "bg-emerald-500/15 text-emerald-300 outline-emerald-400/50";
+    return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 outline-emerald-400/50";
   }
   if (["PENDING", "NEW", "ACCEPTED", "PENDING_NEW", "OPEN"].includes(status)) {
-    return "bg-sky-500/15 text-sky-300 outline-sky-400/55";
+    return "bg-sky-500/15 text-sky-700 dark:text-sky-300 outline-sky-400/55";
   }
   if (["PARTIAL", "PENDING_REPLACE", "PENDING_CANCEL"].includes(status)) {
-    return "bg-amber-500/15 text-amber-300 outline-amber-400/55";
+    return "bg-amber-500/15 text-amber-700 dark:text-amber-300 outline-amber-400/55";
   }
   if (status === "REJECTED") {
-    return "bg-rose-500/15 text-rose-300 outline-rose-400/50";
+    return "bg-rose-500/15 text-rose-700 dark:text-rose-300 outline-rose-400/50";
   }
-  return "bg-slate-500/15 text-slate-300 outline-slate-500/50";
+  return "bg-slate-500/15 text-slate-600 dark:text-slate-300 outline-slate-500/50";
 };
 
 export const trailingStatusChipClass = (status: string): string => {
   if (status === "ACTIVE") {
-    return "bg-emerald-500/15 text-emerald-300 outline-emerald-400/50";
+    return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 outline-emerald-400/50";
   }
-  return "bg-amber-500/15 text-amber-300 outline-amber-400/55";
+  return "bg-amber-500/15 text-amber-700 dark:text-amber-300 outline-amber-400/55";
 };
 
 export const logLevelChipClass = (level: string): string => {
   if (level === "INFO") {
-    return "bg-sky-500/15 text-sky-300 outline-sky-400/55";
+    return "bg-sky-500/15 text-sky-700 dark:text-sky-300 outline-sky-400/55";
   }
   if (level === "SUCCESS") {
-    return "bg-emerald-500/15 text-emerald-300 outline-emerald-400/50";
+    return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 outline-emerald-400/50";
   }
   if (level === "WARNING") {
-    return "bg-amber-500/15 text-amber-300 outline-amber-400/55";
+    return "bg-amber-500/15 text-amber-700 dark:text-amber-300 outline-amber-400/55";
   }
   if (level === "ERROR") {
-    return "bg-rose-500/15 text-rose-300 outline-rose-400/50";
+    return "bg-rose-500/15 text-rose-700 dark:text-rose-300 outline-rose-400/50";
   }
-  return "bg-slate-500/15 text-slate-300 outline-slate-500/50";
+  return "bg-slate-500/15 text-slate-600 dark:text-slate-300 outline-slate-500/50";
 };
 
 export const cycleStatusScope = (scope: ExecuteStatusScope): ExecuteStatusScope => {

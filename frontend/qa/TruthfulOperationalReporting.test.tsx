@@ -230,13 +230,13 @@ describe("ML freshness and artifacts", () => {
     const positive: MlStage = {label:"Eval",status:"available",tone:"neutral",artifact_present:true,execution_status:"unverified",freshness_status:"fresh"};
     expect(mlStagePresentation(positive)).toMatchObject({status:"Present / unverified",tone:"neutral"});
     const verified: MlStage = {...positive,status:"success",tone:"success",execution_status:"verified"};
-    expect(mlStagePresentation(verified)).toBe(verified);
+    expect(mlStagePresentation(verified)).toMatchObject({ status:"Present / unverified", tone:"neutral", execution_status:"unverified" });
   });
   it("does not relabel a recent log update as a successful ML run", () => {
     const evidence = { ok:true, updated_at:"2026-02-05T12:00:00Z", status:{last_ml_run:"2026-02-05T12:00:00Z"} };
     expect(successfulPredictionExecution(evidence)).toBeNull();
     expect(successfulPredictionExecution({...evidence,last_successful_execution:"2026-02-04T10:00:00Z"})).toBeNull();
-    expect(successfulPredictionExecution({...evidence,last_successful_execution:"2026-02-04T10:00:00Z",execution_evidence_scope:"PREDICTION_STAGE_ONLY"})).toBe("2026-02-04T10:00:00Z");
+    expect(successfulPredictionExecution({...evidence,last_successful_execution:"2026-02-04T10:00:00Z",execution_evidence_scope:"PREDICTION_STAGE_ONLY"})).toBeNull();
     expect(successfulPredictionExecution({...evidence,last_successful_execution:"invalid",execution_evidence_scope:"PREDICTION_STAGE_ONLY"})).toBeNull();
     expect(successfulPredictionExecution({...evidence,ok:false,last_successful_execution:"2026-02-04T10:00:00Z",execution_evidence_scope:"PREDICTION_STAGE_ONLY"})).toBeNull();
     for (const file of ["../src/screens/MLPipeline.tsx", "../src/components/dashboard/MLDailyImprovements.tsx"]) {
@@ -247,7 +247,7 @@ describe("ML freshness and artifacts", () => {
   it("stale backend state wins over an old Fresh label", () => {
     expect(predictionFreshness({label:"Fresh",status:"stale",stale:true})).toBe("Stale");
     expect(predictionFreshness({label:"Fresh",pred_compatible:true})).toBe("Unknown");
-    expect(predictionFreshness({status:"fresh",stale:false})).toBe("Fresh");
+    expect(predictionFreshness({status:"fresh",stale:false,source_authority:"postgresql"})).toBe("Fresh");
   });
   it("does not equate artifact presence with execution success", () => {
     const stage = { label:"Predict",status:"Success",tone:"success" as const,artifact_present:true,execution_status:"unverified",freshness_status:"stale" };

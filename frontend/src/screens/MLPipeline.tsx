@@ -1,11 +1,11 @@
-import { formatRunDate, formatMlTimestamp as formatDateTime, formatMlInstantDate as formatShortDate, formatMlBoolean } from "../components/ml/displayValues";
+import { formatRunDate, formatMlTimestamp as formatDateTime, formatMlInstantDate as formatShortDate, formatMlBoolean, formatMlReturnCode } from "../components/ml/displayValues";
 import { predictionFreshness, mlStagePresentation, successfulPredictionExecution } from "../components/ml/freshness";
 import { useMemo, type ReactNode } from "react";
 import { buildNavbarBadges, type LiveDataSyncState, useLiveTradingStatus } from "../components/navbar/liveStatus";
 import NavbarDesktop from "../components/navbar/NavbarDesktop";
 import LatestLogsTable from "../components/dashboard/LatestLogsTable";
 import StatusBadge from "../components/badges/StatusBadge";
-import { useMlOverview, type MlStage } from "../components/ml/useMlOverview";
+import { useMlOverview, type MlStage, type MlDiagnosticEvidence } from "../components/ml/useMlOverview";
 import type { StatusTone } from "../types/ui";
 
 type MLPipelineProps = {
@@ -44,11 +44,11 @@ const summaryCardSurfaces = [
 ];
 
 const cardTone: Record<StatusTone, string> = {
-  success: "text-emerald-300",
-  warning: "text-amber-300",
-  error: "text-rose-300",
-  info: "text-sky-300",
-  neutral: "text-slate-200",
+  success: "text-emerald-700 dark:text-emerald-300",
+  warning: "text-amber-700 dark:text-amber-300",
+  error: "text-rose-700 dark:text-rose-300",
+  info: "text-sky-700 dark:text-sky-300",
+  neutral: "text-slate-900 dark:text-slate-200",
 };
 
 const formatNumber = (value: number | null | undefined) => {
@@ -100,6 +100,9 @@ const formatCoverage = (pct: number | null | undefined, nonNull: number | null |
   return formatPercent(pct);
 };
 
+const logEvidenceNote = (evidence: MlDiagnosticEvidence | null | undefined) =>
+  `Historical log diagnostic | ${formatDateTime(evidence?.timestamp)} | ${evidence?.source ?? "Source unknown"} | Run association unverified; not current readiness`;
+
 function SummaryCard({
   title,
   value,
@@ -120,8 +123,8 @@ function SummaryCard({
   surface: string;
 }) {
   return (
-    <article className={`rounded-2xl p-4 shadow-card jbravo-panel ${surface}`}>
-      <div className="flex items-start justify-between gap-3">
+    <article className={`min-w-0 break-words rounded-2xl p-4 shadow-card jbravo-panel ${surface}`}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">
             {title}
@@ -180,14 +183,14 @@ function DetailRow({
         ? "jbravo-panel-inner-emerald"
         : "jbravo-panel-inner-cyan";
   return (
-    <div className={`flex items-start justify-between gap-3 rounded-xl px-3 py-3 jbravo-panel-inner ${variantClass}`}>
+    <div className={`flex flex-wrap items-start justify-between gap-3 rounded-xl px-3 py-3 jbravo-panel-inner ${variantClass}`}>
       <div className="min-w-0">
         <div className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">
           {label}
         </div>
-        {note ? <div className="mt-1 text-[11px] text-secondary">{note}</div> : null}
+        {note ? <div className="mt-1 break-words text-[11px] text-secondary">{note}</div> : null}
       </div>
-      <div className="min-w-0 text-right font-cousine text-sm font-bold text-primary">{value}</div>
+      <div className="min-w-0 break-words text-right font-cousine text-sm font-bold text-primary">{value}</div>
     </div>
   );
 }
@@ -196,7 +199,7 @@ export function StageTile({ stage: input }: { stage: MlStage }) {
   const stage = mlStagePresentation(input);
   return (
     <article className="rounded-xl px-3 py-3 jbravo-panel-inner jbravo-panel-inner-violet outline outline-1 outline-indigo-400/30">
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <p className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">
             {stage.label}
@@ -206,7 +209,7 @@ export function StageTile({ stage: input }: { stage: MlStage }) {
         <StatusBadge label={stage.status} tone={stage.tone} size="sm" />
       </div>
       <p className="mt-3 font-cousine text-[11px] text-primary">{formatDateTime(stage.timestamp)}</p>
-      <p className="mt-1 text-[10px] text-secondary">Artifact: {stage.artifact_present === true ? "present" : stage.artifact_present === false ? "missing" : "unknown"} | Execution: {stage.execution_status ?? "unverified"} | Freshness: {stage.freshness_status ?? "unknown"}</p>
+      <p className="mt-1 text-[10px] text-secondary">Artifact: {stage.artifact_present === true ? "present" : stage.artifact_present === false ? "missing" : "unknown"} | Execution: {stage.execution_status ?? "unverified"} | Freshness: {stage.freshness_status ?? "unknown"} | Source: {stage.source ?? "unknown"} ({stage.source_authority ?? "unverified"})</p>
     </article>
   );
 }
@@ -237,7 +240,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
 
   const summaryCards = [
     {
-      title: "Predictions freshness",
+      title: "Prediction artifact freshness",
       value: predictionFreshness(data?.freshness),
       detail: data?.freshness?.reason ?? "Waiting for freshness diagnostics",
       footnote: `Last predict ${formatDateTime(data?.timestamps?.last_predict)}`,
@@ -246,46 +249,43 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
       statusTone: (data?.status?.tone ?? "neutral") as StatusTone,
     },
     {
-      title: "Score coverage",
+      title: "Historical score coverage",
       value: formatCoverage(
         data?.coverage?.pct ?? null,
         data?.coverage?.non_null ?? null,
         data?.coverage?.total ?? null
       ),
       detail: coverageDetail,
-      footnote: `run_ts ${formatDateTime(data?.coverage?.run_ts_utc)}`,
-      tone:
-        typeof data?.coverage?.pct === "number" && data.coverage.pct > 0
-          ? ("success" as StatusTone)
-          : ("warning" as StatusTone),
+      footnote: `${logEvidenceNote(data?.coverage?.evidence)} | run_ts ${formatDateTime(data?.coverage?.run_ts_utc)}`,
+      tone: "neutral" as StatusTone,
     },
     {
       title: "Monitor action",
       value: formatAction(data?.monitor?.recommended_action),
       detail:
         data?.monitor?.guard_decision && data.monitor.guard_decision !== "allow"
-          ? `Guard ${data.monitor.guard_decision} (${data.monitor.guard_mode ?? "n/a"})`
-          : data?.monitor?.guard_decision === "allow" ? "Health guard allows enrichment; accounting/entry readiness separate" : "Guard decision unknown",
+          ? `Recorded guard ${data.monitor.guard_decision} (${data.monitor.guard_mode ?? "n/a"}); historical diagnostic`
+          : data?.monitor?.guard_decision === "allow" ? "Recorded guard allow; historical diagnostic, current status unverified" : "Guard decision unknown",
       footnote: `PSI ${formatDecimal(data?.monitor?.psi_score ?? null)} · Sharpe ${formatDecimal(
         data?.monitor?.recent_sharpe ?? null
-      )}`,
+      )} | Guard diagnostic ${formatDateTime(data?.monitor?.guard_evidence?.timestamp)}`,
       tone:
         data?.monitor?.recommended_action === "retrain"
           ? ("error" as StatusTone)
           : data?.monitor?.recommended_action === "recalibrate"
             ? ("warning" as StatusTone)
-            : data?.monitor?.recommended_action === "none" ? ("success" as StatusTone) : ("neutral" as StatusTone),
+            : ("neutral" as StatusTone),
     },
     {
-      title: "Champion",
+      title: "Champion artifact",
       value: data?.champion?.present === true
         ? `${formatAction(data.champion.calibration)}`
         : "No data",
       detail: data?.champion?.present === true
         ? `Run ${formatRunDate(data.champion.run_date)} · feature ${data.champion.feature_set ?? "n/a"}`
         : "Champion artifact unavailable",
-      footnote: `min_model_score ${data?.champion?.execution?.min_model_score ?? "n/a"} · require ${formatMlBoolean(data?.champion?.execution?.require_model_score)}`,
-      tone: data?.champion?.present === true ? ("success" as StatusTone) : ("neutral" as StatusTone),
+      footnote: `Source ${data?.champion?.source ?? "unknown"}; artifact metadata only | min_model_score ${data?.champion?.execution?.min_model_score ?? "n/a"} · require ${formatMlBoolean(data?.champion?.execution?.require_model_score)}`,
+      tone: "neutral" as StatusTone,
     },
     {
       title: "Recent ML evidence",
@@ -305,6 +305,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
     data?.enrichment?.candidate_refresh_done && typeof data.enrichment.candidate_refresh_done === "object"
       ? data.enrichment.candidate_refresh_done
       : null;
+  const overlapSample = data?.overlap?.latest_sample;
   const recentEventRows = (data?.recent_events ?? []).map((event) => ({
     dateTime: formatDateTime(event.timestamp),
     script: event.token ?? "ML",
@@ -313,10 +314,10 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
   }));
 
   return (
-    <div className="dark min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] font-['Manrope'] text-slate-900 dark:bg-[radial-gradient(circle_at_top,_#0B1220,_#0F172A_55%,_#020617_100%)] dark:text-slate-100">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] text-slate-900 dark:bg-[radial-gradient(circle_at_top,_#0B1220,_#0F172A_55%,_#020617_100%)] dark:text-slate-100">
       <NavbarDesktop tabs={navTabs} rightBadges={rightBadges} onTabSelect={onTabSelect} />
 
-      <main className="relative pt-36 pb-12 sm:pt-28">
+      <main className="relative pb-12 pt-[calc(var(--app-nav-height,208px)+16px)]">
         <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-gradient-to-br from-sky-100 via-white to-amber-100 opacity-70 blur-3xl dark:from-cyan-500/15 dark:via-slate-950/40 dark:to-indigo-500/16 dark:opacity-70" />
         <div className="pointer-events-none absolute left-0 top-40 h-72 w-72 rounded-full bg-gradient-to-br from-emerald-100 via-white to-slate-100 opacity-60 blur-3xl dark:from-emerald-500/15 dark:via-slate-950/40 dark:to-cyan-500/15 dark:opacity-70" />
 
@@ -324,7 +325,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
           <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">ML Pipeline</h1>
-              <p className="mt-2 text-sm text-slate-500">
+              <p className="mt-2 text-sm text-secondary">
                 Freshness, monitoring, remediation, and scoring pipeline
               </p>
             </div>
@@ -335,14 +336,14 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                 size="sm"
                 showDot
               />
-              <span className="rounded-full border border-slate-400/30 bg-slate-900/40 px-3 py-1 text-xs text-slate-300">
+              <span className="rounded-full border border-slate-400/30 bg-white/70 dark:bg-slate-900/40 px-3 py-1 text-xs text-slate-600 dark:text-slate-300">
                 Last ML evidence {formatDateTime(data?.status?.last_ml_run ?? data?.updated_at)}
               </span>
             </div>
           </header>
 
           {hasError ? (
-            <div className="mt-6 rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+            <div className="mt-6 rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-200">
               ML overview could not be loaded. The page is holding layout with empty-state values.
             </div>
           ) : null}
@@ -422,7 +423,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                       (reason) => (
                         <span
                           key={reason}
-                          className="rounded-full border border-amber-400/25 bg-amber-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-100"
+                          className="rounded-full border border-amber-400/25 bg-amber-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700 dark:text-amber-100"
                         >
                           {reason}
                         </span>
@@ -444,12 +445,12 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                 <DetailRow
                   label="Artifact freshness"
                   value={predictionFreshness(data?.freshness)}
-                  note={`Captured ${formatDateTime(data?.freshness?.artifact_timestamp)} | Source ${data?.freshness?.timestamp_source ?? "unknown"} | Age ${data?.freshness?.age_seconds ?? "unknown"} seconds | Maximum age ${data?.freshness?.max_age_seconds ?? "unknown"} seconds`}
+                  note={`Captured ${formatDateTime(data?.freshness?.artifact_timestamp)} | Source ${data?.freshness?.source ?? "unknown"} / ${data?.freshness?.timestamp_source ?? "unknown"} | Age ${data?.freshness?.age_seconds ?? "unknown"} seconds | Maximum age ${data?.freshness?.max_age_seconds ?? "unknown"} seconds`}
                 />
                 <DetailRow
                   label="Last verified prediction execution"
                   value={formatDateTime(successfulPredictionExecution(data))}
-                  note="Prediction stage only; artifact and log updates are not evidence of a successful full ML pipeline run."
+                  note="Unknown: no DB/provider-bound execution receipt is available. Artifact metadata and local return-code logs do not verify execution."
                 />
                 <DetailRow
                   label="Market session"
@@ -457,9 +458,9 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                   note={`Expected session ${formatRunDate(data?.freshness?.expected_session)}; checked ${formatDateTime(data?.freshness?.observed_at)}`}
                 />
                 <DetailRow
-                  label="Latest model"
+                  label="Prediction artifact model"
                   value={truncateMiddle(data?.freshness?.model_path)}
-                  note={`Predictions model ${truncateMiddle(data?.freshness?.pred_model_path)}`}
+                  note="Model metadata from the dated prediction artifact; current model compatibility is not verified by this record."
                 />
                 <DetailRow
                   label="Feature set"
@@ -474,29 +475,29 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                   note={truncateMiddle(data?.freshness?.pred_features_signature, 34)}
                 />
                 <DetailRow
-                  label="Overlap"
+                  label="Historical overlap"
                   value={`${formatNumber(data?.overlap?.overlap ?? null)} of ${formatNumber(
                     data?.overlap?.candidates ?? null
                   )}`}
-                  note={`Pred symbols ${formatNumber(data?.overlap?.prediction_symbols ?? null)} · ${
-                    data?.overlap?.score_col ?? "n/a"
-                  }`}
+                  note={`${logEvidenceNote(data?.overlap?.evidence)} | Pred symbols ${formatNumber(data?.overlap?.prediction_symbols ?? null)} | ${data?.overlap?.score_col ?? "n/a"}`}
                 />
                 <DetailRow
-                  label="Refresh result"
-                  value={
-                    candidateRefreshDone && "rc" in candidateRefreshDone
-                      ? String(candidateRefreshDone.rc)
-                      : "No recent refresh"
-                  }
-                  note={
-                    data?.overlap?.sample_reason
-                      ? `Sample reason ${data.overlap.sample_reason} · missing ${
-                          data.overlap.missing_symbols?.slice(0, 3).join(", ") || "none"
-                        }`
-                      : `Freshness reason ${data?.freshness?.reason ?? "n/a"}`
-                  }
+                  label="Historical refresh return code"
+                  value={formatMlReturnCode(candidateRefreshDone?.rc)}
+                  note={`${logEvidenceNote(candidateRefreshDone?.evidence)} | Reported predictions source ${candidateRefreshDone?.predictions_source ?? "Unknown"}`}
                 />
+                <DetailRow
+                  label="Historical prediction return code"
+                  value={formatMlReturnCode(data?.enrichment?.latest_prediction_event?.rc)}
+                  note={logEvidenceNote(data?.enrichment?.latest_prediction_event?.evidence)}
+                />
+                {overlapSample ? (
+                  <DetailRow
+                    label="Historical missing-symbol sample"
+                    value={overlapSample.missing_symbols?.slice(0, 3).join(", ") || "Unknown"}
+                    note={`${logEvidenceNote(overlapSample.evidence)} | Reason ${overlapSample.reason ?? "Unknown"}. This sample is not bound to the overlap or refresh above.`}
+                  />
+                ) : null}
               </div>
             </SectionCard>
 

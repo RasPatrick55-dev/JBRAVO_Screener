@@ -1,26 +1,9 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
-type ThemeMode = "light" | "dark";
-
-const getInitialTheme = (): ThemeMode => {
-  if (typeof window === "undefined") {
-    return "light";
-  }
-  const stored = window.localStorage.getItem("theme");
-  if (stored === "dark" || stored === "light") {
-    return stored;
-  }
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-};
+import { currentTheme, setTheme, subscribeTheme } from "./theme";
 
 export default function ThemeToggle() {
-  const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
-
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-    window.localStorage.setItem("theme", theme);
-  }, [theme]);
-
+  const theme = useSyncExternalStore(subscribeTheme, currentTheme, () => "light");
   const isDark = theme === "dark";
   const nextTheme = isDark ? "light" : "dark";
 

@@ -34,3 +34,8 @@ export function formatMlInstantDate(value: unknown): string {
 export function formatMlBoolean(value: unknown): string {
   return value === true ? "true" : value === false ? "false" : "Unknown";
 }
+
+// Do not render malformed legacy boolean return codes as success or failure.
+export function formatMlReturnCode(value: unknown): string {
+  return typeof value === "number" && Number.isInteger(value) ? String(value) : "Unknown";
+}

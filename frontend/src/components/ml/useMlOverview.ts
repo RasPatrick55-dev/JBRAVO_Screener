@@ -1,10 +1,25 @@
 import { useEffect, useState } from "react";
 import type { LogEntry, StatusTone } from "../../types/ui";
 
+export type MlDiagnosticEvidence = {
+  source?: string | null;
+  timestamp?: string | null;
+  token?: string | null;
+  scope?: "historical_diagnostic";
+  run_binding?: "unverified";
+};
+
+export type MlLogDiagnostic = Record<string, unknown> & {
+  evidence?: MlDiagnosticEvidence | null;
+};
+
 export type MlStage = {
   artifact_present?: boolean;
   execution_status?: string;
   freshness_status?: string;
+  source?: string | null;
+  source_authority?: "postgresql" | "diagnostic_only";
+  metadata_freshness_status?: string;
   label: string;
   status: string;
   tone: StatusTone;
@@ -46,7 +61,13 @@ export type MlOverviewResponse = {
     pred_compat_reason?: string | null;
     generated_at_utc?: string | null;
     snapshot_date?: string | null;
-    latest_auto_refresh?: Record<string, unknown> | null;
+    source?: string | null;
+    source_authority?: "postgresql" | "diagnostic_only";
+    metadata_status?: string;
+    metadata_stale?: boolean | null;
+    evidence_scope?: string;
+    latest_log_check?: MlLogDiagnostic | null;
+    latest_auto_refresh?: MlLogDiagnostic | null;
   };
   coverage?: {
     total?: number | null;
@@ -54,6 +75,8 @@ export type MlOverviewResponse = {
     pct?: number | null;
     source?: string | null;
     run_ts_utc?: string | null;
+    diagnostic_only?: boolean;
+    evidence?: MlDiagnosticEvidence | null;
   };
   champion?: {
     present?: boolean;
@@ -80,6 +103,7 @@ export type MlOverviewResponse = {
     delta_ece?: number | null;
     guard_decision?: string | null;
     guard_mode?: string | null;
+    guard_evidence?: MlDiagnosticEvidence | null;
     guard_reasons?: string[];
   };
   eval?: {
@@ -124,14 +148,17 @@ export type MlOverviewResponse = {
     pred_ts_min?: string | null;
     pred_ts_max?: string | null;
     sample_reason?: string | null;
-    missing_symbols?: string[];
+    missing_symbols?: string[] | null;
+    evidence?: MlDiagnosticEvidence | null;
+    latest_sample?: (MlLogDiagnostic & { reason?: string | null; missing_symbols?: string[] | null }) | null;
   };
   enrichment?: {
-    latest_result?: Record<string, unknown> | null;
-    latest_skip?: Record<string, unknown> | null;
-    latest_decision?: Record<string, unknown> | null;
-    candidate_refresh?: Record<string, unknown> | null;
-    candidate_refresh_done?: Record<string, unknown> | null;
+    latest_result?: MlLogDiagnostic | null;
+    latest_skip?: MlLogDiagnostic | null;
+    latest_decision?: MlLogDiagnostic | null;
+    candidate_refresh?: MlLogDiagnostic | null;
+    candidate_refresh_done?: MlLogDiagnostic | null;
+    latest_prediction_event?: MlLogDiagnostic | null;
   };
   trade_attribution?: {
     present?: boolean;

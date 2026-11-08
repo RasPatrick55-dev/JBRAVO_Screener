@@ -72,9 +72,9 @@ export default function ExecuteTradesStatusCard({
     ),
   } as const;
 
-  const statusChip = evidenceStatus ? { label: evidenceStatus, tone: processTone(evidenceStatus), icon: statusIcons.overdue } : isCycleComplete
+  const statusChip = taskSource?.kind === "loading" ? { label: "LOADING", tone: "neutral" as const, icon: statusIcons.overdue } : evidenceStatus ? { label: evidenceStatus, tone: processTone(evidenceStatus), icon: statusIcons.overdue } : isCycleComplete
     ? { label: "COMPLETED", tone: "success" as const, icon: statusIcons.complete }
-    : { label: "OVERDUE", tone: "neutral" as const, icon: statusIcons.overdue };
+    : { label: "UNKNOWN", tone: "neutral" as const, icon: statusIcons.overdue };
 
   const valueStyles =
     "rounded-md border border-emerald-400/40 bg-slate-950/60 px-2 py-0.5 text-[13px] font-semibold tracking-[0.01em] text-emerald-200 tabular-nums";
@@ -106,9 +106,9 @@ export default function ExecuteTradesStatusCard({
   return (
     <CardShell className="border-emerald-400/30 bg-gradient-to-br from-slate-950/90 via-emerald-950/80 to-lime-950/70 p-4 shadow-[0_18px_40px_-24px_rgba(16,185,129,0.55)] sm:p-5">
       <div className="rounded-xl border border-emerald-400/40 bg-gradient-to-r from-emerald-950/90 via-emerald-900/90 to-teal-950/80 p-2.5 shadow-[0_0_24px_-12px_rgba(34,197,94,0.6)] sm:p-3">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-200">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-200">
               <svg
                 className="h-5 w-5"
                 viewBox="0 0 24 24"

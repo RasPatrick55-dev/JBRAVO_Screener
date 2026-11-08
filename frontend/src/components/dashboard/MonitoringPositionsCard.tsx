@@ -80,11 +80,11 @@ export default function MonitoringPositionsCard({ positions, available = true, s
   };
 
   return (
-    <CardShell className="border-emerald-400/30 bg-gradient-to-br from-slate-950/95 via-emerald-950/80 to-amber-950/70 p-4 shadow-[0_18px_40px_-24px_rgba(16,185,129,0.5)] sm:p-5">
+    <CardShell className="monitoring-positions border-emerald-400/30 bg-gradient-to-br from-slate-950/95 via-emerald-950/80 to-amber-950/70 p-4 shadow-[0_18px_40px_-24px_rgba(16,185,129,0.5)] sm:p-5">
       <div className="rounded-xl border border-emerald-400/40 bg-gradient-to-r from-slate-950/90 via-emerald-900/90 to-amber-950/80 p-2 shadow-[0_0_24px_-12px_rgba(16,185,129,0.5)] sm:p-2.5">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-200">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-200">
               <svg
                 className="h-5 w-5"
                 viewBox="0 0 24 24"
@@ -110,9 +110,9 @@ export default function MonitoringPositionsCard({ positions, available = true, s
         </div>
       </div>
 
-      <p className="mt-2 text-xs text-secondary">Source: Alpaca | Status: {sourceStatus ?? (available ? "available" : "unavailable")} | Observed UTC: {observedAt ?? "unknown"}</p>
+      <p className="mt-2 break-words text-xs text-secondary">Source: Alpaca | Status: {sourceStatus ?? (available ? "available" : "unavailable")} | Observed UTC: {observedAt ?? "unknown"}</p>
       <div className="mt-3 flex flex-col gap-3">
-        <div className="hidden grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] items-center gap-4 text-[11px] font-bold uppercase tracking-[0.08em] text-cyan-200/70 sm:grid">
+        <div className="monitoring-position-heading text-[11px] font-bold uppercase tracking-[0.08em] text-cyan-200/70">
           <span>Position</span>
           <span className="text-right">Price</span>
           <span className="text-right">P/L Trend</span>
@@ -139,42 +139,42 @@ export default function MonitoringPositionsCard({ positions, available = true, s
                   key={`${displaySymbol}-${index}`}
                   className="rounded-xl border border-emerald-400/30 bg-slate-950/60 p-2.5 shadow-[0_0_18px_-12px_rgba(34,211,238,0.35)] sm:p-3"
                 >
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] sm:items-center sm:gap-4">
-                    <div className="flex items-center gap-2 sm:pr-6 sm:mr-2">
+                  <div className="monitoring-position-row">
+                    <div className="flex min-w-0 items-center gap-2">
                       <StockLogo symbol={displaySymbol} logoUrl={position.logoUrl} />
-                      <div className="min-w-[44px] flex-shrink-0">
+                      <div className="min-w-0 break-words">
                         <div className="text-[13px] font-bold leading-[18px] text-slate-100">
                           {displaySymbol}
                         </div>
                       </div>
                     </div>
-                    <div className="hidden text-right text-[12px] font-semibold leading-[16px] text-slate-100 sm:block">
+                    <div className="monitoring-position-wide text-right text-[12px] font-semibold leading-[16px] text-slate-100">
                       {formatCurrency(position.currentPrice)}
                     </div>
-                    <div className="hidden items-center justify-end sm:flex">
+                    <div className="monitoring-position-trend items-center justify-end">
                       <Sparkline data={plSparkline} width={64} stroke={plTone} />
                     </div>
                     <div
-                      className={`hidden text-right text-[12px] font-semibold leading-[16px] sm:block ${toneClass}`}
+                      className={`monitoring-position-wide text-right text-[12px] font-semibold leading-[16px] ${toneClass}`}
                     >
                       {formatSignedPercent(position.percentPL)}
                     </div>
                     <div
-                      className={`hidden text-right text-[12px] font-semibold leading-[16px] sm:block ${toneClass}`}
+                      className={`monitoring-position-wide text-right text-[12px] font-semibold leading-[16px] ${toneClass}`}
                     >
                       {formatSignedCurrency(position.dollarPL)}
                     </div>
-                    <div className="flex items-center justify-between sm:hidden">
+                    <div className="monitoring-position-compact flex flex-wrap items-center justify-between gap-2">
                       <div className="text-[13px] font-semibold leading-[18px] text-slate-100">
                         {formatCurrency(position.currentPrice)}
                       </div>
                       <Sparkline data={plSparkline} stroke={plTone} />
                     </div>
-                    <div className="flex items-center justify-between text-[11px] text-slate-300 sm:hidden">
+                    <div className="monitoring-position-compact flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-300">
                       <span>% P/L</span>
                       <span className={toneClass}>{formatSignedPercent(position.percentPL)}</span>
                     </div>
-                    <div className="flex items-center justify-between text-[11px] text-slate-300 sm:hidden">
+                    <div className="monitoring-position-compact flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-300">
                       <span>Total $ P/L</span>
                       <span className={toneClass}>{formatSignedCurrency(position.dollarPL)}</span>
                     </div>
