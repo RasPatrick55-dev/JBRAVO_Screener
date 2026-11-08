@@ -44,11 +44,11 @@ const summaryCardSurfaces = [
 ];
 
 const cardTone: Record<StatusTone, string> = {
-  success: "text-emerald-300",
-  warning: "text-amber-300",
-  error: "text-rose-300",
-  info: "text-sky-300",
-  neutral: "text-slate-200",
+  success: "text-emerald-700 dark:text-emerald-300",
+  warning: "text-amber-700 dark:text-amber-300",
+  error: "text-rose-700 dark:text-rose-300",
+  info: "text-sky-700 dark:text-sky-300",
+  neutral: "text-slate-900 dark:text-slate-200",
 };
 
 const formatNumber = (value: number | null | undefined) => {
@@ -123,8 +123,8 @@ function SummaryCard({
   surface: string;
 }) {
   return (
-    <article className={`rounded-2xl p-4 shadow-card jbravo-panel ${surface}`}>
-      <div className="flex items-start justify-between gap-3">
+    <article className={`min-w-0 break-words rounded-2xl p-4 shadow-card jbravo-panel ${surface}`}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">
             {title}
@@ -183,14 +183,14 @@ function DetailRow({
         ? "jbravo-panel-inner-emerald"
         : "jbravo-panel-inner-cyan";
   return (
-    <div className={`flex items-start justify-between gap-3 rounded-xl px-3 py-3 jbravo-panel-inner ${variantClass}`}>
+    <div className={`flex flex-wrap items-start justify-between gap-3 rounded-xl px-3 py-3 jbravo-panel-inner ${variantClass}`}>
       <div className="min-w-0">
         <div className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">
           {label}
         </div>
-        {note ? <div className="mt-1 text-[11px] text-secondary">{note}</div> : null}
+        {note ? <div className="mt-1 break-words text-[11px] text-secondary">{note}</div> : null}
       </div>
-      <div className="min-w-0 text-right font-cousine text-sm font-bold text-primary">{value}</div>
+      <div className="min-w-0 break-words text-right font-cousine text-sm font-bold text-primary">{value}</div>
     </div>
   );
 }
@@ -199,7 +199,7 @@ export function StageTile({ stage: input }: { stage: MlStage }) {
   const stage = mlStagePresentation(input);
   return (
     <article className="rounded-xl px-3 py-3 jbravo-panel-inner jbravo-panel-inner-violet outline outline-1 outline-indigo-400/30">
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <p className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">
             {stage.label}
@@ -317,10 +317,10 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
   }));
 
   return (
-    <div className="dark min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] font-['Manrope'] text-slate-900 dark:bg-[radial-gradient(circle_at_top,_#0B1220,_#0F172A_55%,_#020617_100%)] dark:text-slate-100">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f1f5f9,_#f8fafc_55%,_#ffffff_100%)] text-slate-900 dark:bg-[radial-gradient(circle_at_top,_#0B1220,_#0F172A_55%,_#020617_100%)] dark:text-slate-100">
       <NavbarDesktop tabs={navTabs} rightBadges={rightBadges} onTabSelect={onTabSelect} />
 
-      <main className="relative pt-36 pb-12 sm:pt-28">
+      <main className="relative pb-12 pt-[calc(var(--app-nav-height,208px)+16px)]">
         <div className="pointer-events-none absolute -top-32 right-0 h-72 w-72 rounded-full bg-gradient-to-br from-sky-100 via-white to-amber-100 opacity-70 blur-3xl dark:from-cyan-500/15 dark:via-slate-950/40 dark:to-indigo-500/16 dark:opacity-70" />
         <div className="pointer-events-none absolute left-0 top-40 h-72 w-72 rounded-full bg-gradient-to-br from-emerald-100 via-white to-slate-100 opacity-60 blur-3xl dark:from-emerald-500/15 dark:via-slate-950/40 dark:to-cyan-500/15 dark:opacity-70" />
 
@@ -328,7 +328,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
           <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">ML Pipeline</h1>
-              <p className="mt-2 text-sm text-slate-500">
+              <p className="mt-2 text-sm text-secondary">
                 Freshness, monitoring, remediation, and scoring pipeline
               </p>
             </div>
@@ -339,14 +339,14 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                 size="sm"
                 showDot
               />
-              <span className="rounded-full border border-slate-400/30 bg-slate-900/40 px-3 py-1 text-xs text-slate-300">
+              <span className="rounded-full border border-slate-400/30 bg-white/70 dark:bg-slate-900/40 px-3 py-1 text-xs text-slate-600 dark:text-slate-300">
                 Last ML evidence {formatDateTime(data?.status?.last_ml_run ?? data?.updated_at)}
               </span>
             </div>
           </header>
 
           {hasError ? (
-            <div className="mt-6 rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+            <div className="mt-6 rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-200">
               ML overview could not be loaded. The page is holding layout with empty-state values.
             </div>
           ) : null}
@@ -426,7 +426,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                       (reason) => (
                         <span
                           key={reason}
-                          className="rounded-full border border-amber-400/25 bg-amber-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-100"
+                          className="rounded-full border border-amber-400/25 bg-amber-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700 dark:text-amber-100"
                         >
                           {reason}
                         </span>

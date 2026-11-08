@@ -48,7 +48,7 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: { active
   const badges = buildNavbarBadges(live, positions.kind === "loading" ? "loading" : available && positions.kind !== "stale" ? "ready" : "error");
   // Positions and logs are intentionally independent: a logs timeout cannot zero broker exposure.
   const monitoringLogs = logRows.map(toMonitoringLog);
-  return <div className="dark min-h-screen bg-slate-950 text-slate-100">
+  return <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
     <NavbarDesktop tabs={navTabs} rightBadges={badges} onTabSelect={onTabSelect} />
     <main className="mx-auto max-w-7xl space-y-4 px-4 pb-12 pt-[calc(var(--app-nav-height,208px)+16px)]">
       <SourceNotice label="Broker positions" {...positions} />

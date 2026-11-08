@@ -45,7 +45,7 @@ export default function LatestLogsTable({
       : rows.filter((row) => row.script === selectedScript);
 
   return (
-    <div className="flex h-full flex-col rounded-2xl border border-slate-400/30 bg-gradient-to-br from-slate-950/95 via-slate-900/85 to-slate-800/70 p-4 shadow-[0_18px_40px_-24px_rgba(148,163,184,0.4)] sm:p-5">
+    <div className="jbravo-inverse flex h-full min-w-0 flex-col rounded-2xl border border-slate-400/30 bg-gradient-to-br from-slate-950/95 via-slate-900/85 to-slate-800/70 p-4 shadow-[0_18px_40px_-24px_rgba(148,163,184,0.4)] sm:p-5">
       <div className="rounded-xl border border-slate-500/40 bg-gradient-to-r from-slate-950/90 via-slate-900/90 to-slate-800/80 p-2.5 shadow-[0_0_24px_-12px_rgba(148,163,184,0.45)] sm:p-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">

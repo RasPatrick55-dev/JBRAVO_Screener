@@ -93,9 +93,9 @@ export default function MLDailyImprovements({ onOpenPipeline }: MLDailyImproveme
     <button type="button" onClick={onOpenPipeline} className="h-full w-full text-left">
       <CardShell className="border-indigo-400/30 bg-gradient-to-br from-slate-950/95 via-indigo-950/80 to-cyan-950/72 p-4 shadow-[0_18px_40px_-24px_rgba(99,102,241,0.45)] transition-transform duration-200 hover:-translate-y-0.5 hover:border-indigo-300/45 hover:shadow-[0_22px_46px_-24px_rgba(99,102,241,0.58)] sm:p-5">
         <div className="rounded-xl border border-indigo-400/40 bg-gradient-to-r from-slate-950/90 via-indigo-950/85 to-cyan-950/80 p-2.5 shadow-[0_0_24px_-12px_rgba(129,140,248,0.55)] sm:p-3">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/20 text-indigo-100">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-500/20 text-indigo-100">
                 <svg
                   className="h-5 w-5"
                   viewBox="0 0 24 24"
@@ -118,7 +118,7 @@ export default function MLDailyImprovements({ onOpenPipeline }: MLDailyImproveme
                 </svg>
               </div>
               <div className="min-w-0">
-                <h3 className="truncate text-[15px] font-bold leading-[22px] text-white">
+                <h3 className="text-[15px] font-bold leading-[22px] text-white">
                   Machine Learning
                 </h3>
                 <p className="text-[11px] text-indigo-100/80">
@@ -135,7 +135,7 @@ export default function MLDailyImprovements({ onOpenPipeline }: MLDailyImproveme
             ? Array.from({ length: 4 }).map((_, index) => (
                 <div
                   key={`ml-card-skeleton-${index}`}
-                  className="rounded-xl border border-indigo-400/20 bg-slate-950/55 px-3 py-3"
+                  className="min-w-0 break-words rounded-xl border border-indigo-400/20 bg-slate-950/55 px-3 py-3"
                 >
                   <div className="h-3 w-16 animate-pulse rounded bg-slate-700/70" />
                   <div className="mt-2 h-4 w-20 animate-pulse rounded bg-slate-600/70" />
@@ -145,29 +145,29 @@ export default function MLDailyImprovements({ onOpenPipeline }: MLDailyImproveme
             : metricTiles.map((tile) => (
                 <div
                   key={tile.label}
-                  className="rounded-xl border border-indigo-400/20 bg-slate-950/55 px-3 py-3 shadow-[0_0_18px_-14px_rgba(129,140,248,0.45)]"
+                  className="min-w-0 break-words rounded-xl border border-indigo-400/20 bg-slate-950/55 px-3 py-3 shadow-[0_0_18px_-14px_rgba(129,140,248,0.45)]"
                 >
-                  <div className="text-[10px] font-bold uppercase tracking-[0.1em] text-indigo-100/60">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.1em] text-indigo-100/80">
                     {tile.label}
                   </div>
                   <div className="mt-2 font-cousine text-[15px] font-semibold text-indigo-50">
                     {tile.value}
                   </div>
-                  <div className="mt-1 text-[11px] leading-4 text-indigo-100/62">{tile.detail}</div>
+                  <div className="mt-1 text-[11px] leading-4 text-indigo-100/80">{tile.detail}</div>
                 </div>
               ))}
         </div>
 
         <div className="mt-4 rounded-xl border border-indigo-400/25 bg-slate-950/55 px-3 py-3 shadow-[0_0_18px_-14px_rgba(56,189,248,0.32)]">
           <div className="flex items-center justify-between gap-2">
-            <div className="text-[10px] font-bold uppercase tracking-[0.1em] text-indigo-100/60">
+            <div className="text-[10px] font-bold uppercase tracking-[0.1em] text-indigo-100/80">
               Pipeline Stages
             </div>
-            <div className="text-[11px] text-indigo-100/60">
+            <div className="text-[11px] text-indigo-100/80">
               Last ML evidence {formatShortDate(data?.status?.last_ml_run ?? data?.updated_at)}
             </div>
           </div>
-          <div className="mt-3 grid grid-cols-5 gap-2">
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
             {(stages.length ? stages : [
               { label: "Features", tone: "neutral" as const, status: "No data" },
               { label: "Predict", tone: "neutral" as const, status: "No data" },
@@ -178,7 +178,7 @@ export default function MLDailyImprovements({ onOpenPipeline }: MLDailyImproveme
               <div key={stage.label} className="flex min-w-0 flex-col items-center gap-2 text-center">
                 <span className={`h-2.5 w-2.5 rounded-full ${stageDotTone[stage.tone ?? "neutral"]}`} />
                 <span className="text-[10px] font-semibold text-indigo-50/90">{stage.label}</span>
-                <span className="text-[9px] uppercase tracking-[0.08em] text-indigo-100/52">
+                <span className="text-[9px] uppercase tracking-[0.08em] text-indigo-100/80">
                   {stage.status}
                 </span>
               </div>
@@ -191,14 +191,14 @@ export default function MLDailyImprovements({ onOpenPipeline }: MLDailyImproveme
             {activityTiles.map((item) => (
               <span
                 key={item.label}
-                className="inline-flex items-center gap-1 rounded-full border border-indigo-400/20 bg-indigo-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-indigo-100/72"
+                className="inline-flex items-center gap-1 rounded-full border border-indigo-400/20 bg-indigo-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-indigo-100/80"
               >
-                <span className="text-indigo-100/44">{item.label}</span>
+                <span className="text-indigo-100/80">{item.label}</span>
                 {item.value}
               </span>
             ))}
           </div>
-          <div className="text-[11px] text-indigo-100/64">
+          <div className="text-[11px] text-indigo-100/80">
             {hasError ? "ML data unavailable" : `Updated ${formatDateTime(data?.updated_at)}`}
           </div>
         </div>

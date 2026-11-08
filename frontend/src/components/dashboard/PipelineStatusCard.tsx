@@ -126,9 +126,9 @@ export default function PipelineStatusCard({ lastRun, subprocess, isLive, status
   return (
     <CardShell className="border-cyan-400/30 bg-gradient-to-br from-slate-950/90 via-slate-900/80 to-cyan-950/70 p-4 shadow-[0_18px_40px_-24px_rgba(34,211,238,0.55)] sm:p-5">
       <div className="rounded-xl border border-cyan-400/40 bg-gradient-to-r from-slate-950/90 via-slate-900/90 to-cyan-950/80 p-2.5 shadow-[0_0_24px_-12px_rgba(34,211,238,0.6)] sm:p-3">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/20 text-cyan-200">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-cyan-500/20 text-cyan-200">
               <svg
                 className="h-5 w-5"
                 viewBox="0 0 24 24"

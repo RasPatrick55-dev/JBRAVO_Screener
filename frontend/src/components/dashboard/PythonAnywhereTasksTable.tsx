@@ -32,7 +32,7 @@ export default function PythonAnywhereTasksTable({
   sourceStatus,
 }: PythonAnywhereTasksTableProps) {
   return (
-    <div className="flex h-full flex-col rounded-2xl border border-emerald-400/30 bg-gradient-to-br from-slate-950/95 via-emerald-950/80 to-emerald-900/70 p-4 shadow-[0_18px_40px_-24px_rgba(16,185,129,0.45)] sm:p-5">
+    <div className="jbravo-inverse flex h-full min-w-0 flex-col rounded-2xl border border-emerald-400/30 bg-gradient-to-br from-slate-950/95 via-emerald-950/80 to-emerald-900/70 p-4 shadow-[0_18px_40px_-24px_rgba(16,185,129,0.45)] sm:p-5">
       <div className="rounded-xl border border-emerald-400/40 bg-gradient-to-r from-slate-950/90 via-emerald-950/90 to-emerald-900/80 p-2.5 shadow-[0_0_24px_-12px_rgba(16,185,129,0.55)] sm:p-3">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-200">

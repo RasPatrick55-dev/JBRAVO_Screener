@@ -40,7 +40,7 @@ export default function PythonAnywhereResources({
 }: PythonAnywhereResourcesProps) {
   return (
     <div
-      className="flex h-full flex-col rounded-2xl border border-sky-400/30 bg-gradient-to-br from-slate-950/95 via-slate-900/85 to-sky-950/70 p-4 shadow-[0_18px_40px_-24px_rgba(56,189,248,0.5)] sm:p-5"
+      className="jbravo-inverse flex h-full min-w-0 flex-col rounded-2xl border border-sky-400/30 bg-gradient-to-br from-slate-950/95 via-slate-900/85 to-sky-950/70 p-4 shadow-[0_18px_40px_-24px_rgba(56,189,248,0.5)] sm:p-5"
       style={
         {
           "--ds-progress-rail": "rgba(15, 23, 42, 0.7)",

@@ -75,8 +75,8 @@ export default function TrailingStopsCard({ rows, isLoading, hasError }: Props) 
               <col className="w-[92px]" />
               <col className="w-[278px]" />
             </colgroup>
-            <thead className="sticky top-0 z-10 bg-slate-900/95">
-              <tr className="font-arimo border-b border-slate-700/80 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-300">
+            <thead className="sticky top-0 z-10 bg-slate-100/95 dark:bg-slate-900/95">
+              <tr className="font-arimo border-b border-slate-700/80 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600 dark:text-slate-300">
                 <th scope="col" className="px-1.5 py-1 text-left whitespace-nowrap">
                   Time (UTC)
                 </th>
@@ -128,24 +128,24 @@ export default function TrailingStopsCard({ rows, isLoading, hasError }: Props) 
                     return (
                       <tr
                         key={`${row.parent_leg ?? "leg"}-${row.symbol ?? "symbol"}-${index}`}
-                        className="border-b border-slate-700/70 text-sm transition-colors hover:bg-slate-800/45"
+                        className="border-b border-slate-700/70 text-sm transition-colors hover:bg-slate-200/60 dark:hover:bg-slate-800/45"
                       >
-                        <td className="font-cousine px-1.5 py-1 text-left tabular-nums text-slate-300 whitespace-nowrap">
+                        <td className="font-cousine px-1.5 py-1 text-left tabular-nums text-slate-600 dark:text-slate-300 whitespace-nowrap">
                           <div className="flex flex-col whitespace-nowrap leading-tight">
                             <span>{ts.time}</span>
-                            <span className="text-[10px] text-slate-400">{ts.date}</span>
+                            <span className="text-[10px] text-slate-600 dark:text-slate-400">{ts.date}</span>
                           </div>
                         </td>
-                        <th scope="row" className="font-arimo px-1.5 py-1 text-left font-semibold text-sky-300 whitespace-nowrap">
+                        <th scope="row" className="font-arimo px-1.5 py-1 text-left font-semibold text-sky-700 dark:text-sky-300 whitespace-nowrap">
                           {row.symbol || "--"}
                         </th>
-                        <td className="font-cousine px-1.5 py-1 text-right tabular-nums text-slate-100 whitespace-nowrap">
+                        <td className="font-cousine px-1.5 py-1 text-right tabular-nums text-slate-900 dark:text-slate-100 whitespace-nowrap">
                           {formatNumber(row.qty)}
                         </td>
-                        <td className="font-cousine px-1.5 py-1 text-left tabular-nums text-slate-100 whitespace-nowrap">
+                        <td className="font-cousine px-1.5 py-1 text-left tabular-nums text-slate-900 dark:text-slate-100 whitespace-nowrap">
                           {row.trail || "--"}
                         </td>
-                        <td className="font-cousine px-1.5 py-1 text-left tabular-nums text-slate-100 whitespace-nowrap">
+                        <td className="font-cousine px-1.5 py-1 text-left tabular-nums text-slate-900 dark:text-slate-100 whitespace-nowrap">
                           {formatCurrency(row.stop_price)}
                         </td>
                         <td className="px-1.5 py-1 text-left whitespace-nowrap">
@@ -158,7 +158,7 @@ export default function TrailingStopsCard({ rows, isLoading, hasError }: Props) 
                           </span>
                         </td>
                         <td
-                          className="font-cousine px-2 py-1 text-left text-[11px] text-slate-300 break-words leading-tight"
+                          className="font-cousine px-2 py-1 text-left text-[11px] text-slate-600 dark:text-slate-300 break-words leading-tight"
                           title={referenceRaw && referenceRaw !== "--" ? referenceRaw : undefined}
                         >
                           {referenceLabel}
@@ -177,7 +177,7 @@ export default function TrailingStopsCard({ rows, isLoading, hasError }: Props) 
       </div>
 
       {hasError ? (
-        <p className="mt-3 text-xs text-rose-300">Trailing stops endpoint unavailable. Any displayed rows are last known observations; current protection is unverified.</p>
+        <p className="mt-3 text-xs text-rose-700 dark:text-rose-300">Trailing stops endpoint unavailable. Any displayed rows are last known observations; current protection is unverified.</p>
       ) : null}
     </section>
   );

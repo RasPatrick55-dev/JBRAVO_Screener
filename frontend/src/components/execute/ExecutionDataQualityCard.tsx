@@ -130,7 +130,7 @@ export default function ExecutionDataQualityCard() {
           <h2 className="font-arimo text-[26px] font-semibold leading-none text-primary sm:text-[30px]">
             Data Quality
           </h2>
-          <p className="mt-1 font-cousine text-xs text-slate-400">
+          <p className="mt-1 font-cousine text-xs text-slate-600 dark:text-slate-400">
             Updated {isLoading ? "--:--:--" : fetched.time} {isLoading ? "---- -- --" : fetched.date} UTC
           </p>
         </div>
@@ -138,8 +138,8 @@ export default function ExecutionDataQualityCard() {
           className={
             `${chipClass} ` +
             (isHealthy
-              ? "bg-emerald-500/20 text-emerald-300 outline-emerald-400/55"
-              : "bg-rose-500/20 text-rose-300 outline-rose-400/55")
+              ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 outline-emerald-400/55"
+              : "bg-rose-500/20 text-rose-700 dark:text-rose-300 outline-rose-400/55")
           }
         >
           {isHealthy ? "Healthy" : "Issues"}
@@ -149,22 +149,22 @@ export default function ExecutionDataQualityCard() {
       <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
         <article className="rounded-xl px-3 py-3 jbravo-panel-inner jbravo-panel-inner-violet outline outline-1 outline-indigo-400/35">
           <p className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">High</p>
-          <p className="mt-1 font-cousine text-xl font-bold text-rose-300 tabular-nums">{formatNumber(highCount)}</p>
+          <p className="mt-1 font-cousine text-xl font-bold text-rose-700 dark:text-rose-300 tabular-nums">{formatNumber(highCount)}</p>
         </article>
         <article className="rounded-xl px-3 py-3 jbravo-panel-inner jbravo-panel-inner-amber outline outline-1 outline-amber-400/35">
           <p className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">Warnings</p>
-          <p className="mt-1 font-cousine text-xl font-bold text-amber-300 tabular-nums">{formatNumber(warningCount)}</p>
+          <p className="mt-1 font-cousine text-xl font-bold text-amber-700 dark:text-amber-300 tabular-nums">{formatNumber(warningCount)}</p>
         </article>
         <article className="rounded-xl px-3 py-3 jbravo-panel-inner jbravo-panel-inner-cyan outline outline-1 outline-cyan-400/35">
           <p className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">Open/Closed Overlap</p>
-          <p className="mt-1 font-cousine text-xl font-bold text-sky-300 tabular-nums">{formatNumber(overlapCount)}</p>
+          <p className="mt-1 font-cousine text-xl font-bold text-sky-700 dark:text-sky-300 tabular-nums">{formatNumber(overlapCount)}</p>
         </article>
         <article className="rounded-xl px-3 py-3 jbravo-panel-inner jbravo-panel-inner-emerald outline outline-1 outline-emerald-400/35">
           <p className="font-arimo text-[11px] font-semibold uppercase tracking-[0.08em] text-secondary">Freshness</p>
-          <p className="mt-1 font-cousine text-sm font-bold text-emerald-300 tabular-nums">
+          <p className="mt-1 font-cousine text-sm font-bold text-emerald-700 dark:text-emerald-300 tabular-nums">
             Orders {formatAgeSeconds(ordersAge)}
           </p>
-          <p className="font-cousine text-sm font-bold text-emerald-300 tabular-nums">
+          <p className="font-cousine text-sm font-bold text-emerald-700 dark:text-emerald-300 tabular-nums">
             Logs {formatAgeSeconds(logsAge)}
           </p>
         </article>
@@ -173,8 +173,8 @@ export default function ExecutionDataQualityCard() {
       <div className="mt-3 overflow-x-auto">
         <div className="min-w-[620px] max-h-[240px] overflow-auto rounded-xl jbravo-panel-inner jbravo-panel-inner-cyan">
           <table className="min-w-full table-auto">
-            <thead className="sticky top-0 z-10 bg-slate-900/95">
-              <tr className="font-arimo border-b border-slate-700/80 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-300">
+            <thead className="sticky top-0 z-10 bg-slate-100/95 dark:bg-slate-900/95">
+              <tr className="font-arimo border-b border-slate-700/80 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600 dark:text-slate-300">
                 <th scope="col" className="px-3 py-2 text-left whitespace-nowrap">
                   Severity
                 </th>
@@ -209,15 +209,15 @@ export default function ExecutionDataQualityCard() {
                     return (
                       <tr
                         key={`${item.code || "finding"}-${index}`}
-                        className="border-b border-slate-700/70 text-sm transition-colors hover:bg-slate-800/45"
+                        className="border-b border-slate-700/70 text-sm transition-colors hover:bg-slate-200/60 dark:hover:bg-slate-800/45"
                       >
                         <td className="px-3 py-2 text-left whitespace-nowrap">
                           <span className={`${chipClass} ${auditSeverityChipClass(severity)}`}>{severity}</span>
                         </td>
-                        <td className="font-cousine px-3 py-2 text-left tabular-nums text-slate-300 whitespace-nowrap">
+                        <td className="font-cousine px-3 py-2 text-left tabular-nums text-slate-600 dark:text-slate-300 whitespace-nowrap">
                           {item.code || "--"}
                         </td>
-                        <td className="px-3 py-2 text-left text-slate-100">{item.message || "--"}</td>
+                        <td className="px-3 py-2 text-left text-slate-900 dark:text-slate-100">{item.message || "--"}</td>
                       </tr>
                     );
                   })
@@ -228,7 +228,7 @@ export default function ExecutionDataQualityCard() {
       </div>
 
       {hasError ? (
-        <p className="mt-3 text-xs text-rose-300">Data quality audit stream unavailable.</p>
+        <p className="mt-3 text-xs text-rose-700 dark:text-rose-300">Data quality audit stream unavailable.</p>
       ) : null}
     </section>
   );
