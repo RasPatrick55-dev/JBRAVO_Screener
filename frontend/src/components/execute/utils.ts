@@ -358,6 +358,11 @@ export const filterOrdersClient = (
   });
 };
 
+// New responses bind lifecycle status to explicit provenance. Older servers did
+// not reconcile history, so retain raw-status precedence for legacy payloads.
+export const trailingObservationStatus = (row: ExecuteTrailingStopRow): string =>
+  normalizeTrailingStatus(row.observation_source ? row.status || row.raw_status : row.raw_status || row.status);
+
 export const filterTrailingClient = (
   rows: ExecuteTrailingStopRow[],
   query: string,
@@ -365,7 +370,7 @@ export const filterTrailingClient = (
   lsx: ExecuteLsxFilter
 ): ExecuteTrailingStopRow[] => {
   return rows.filter((row) => {
-    const status = normalizeTrailingStatus(row.raw_status || row.status);
+    const status = trailingObservationStatus(row);
     const text = [row.symbol, row.qty, row.trail, row.stop_price, status, row.parent_leg, row.order_id, row.replaces, row.replaced_by]
       .map((value) => String(value ?? ""))
       .join(" ");

@@ -5,7 +5,7 @@ import {
   formatCurrency,
   formatDateTimeUtc,
   formatNumber,
-  normalizeTrailingStatus,
+  trailingObservationStatus,
   trailingStatusChipClass,
 } from "./utils";
 
@@ -61,7 +61,7 @@ export default function TrailingStopsCard({ rows, isLoading, hasError }: Props) 
           Trailing Stops
         </h2>
       </header>
-      <p className="mt-2 text-[11px] text-secondary">Broker order observations. Pending replacement does not confirm current protection.</p>
+      <p className="mt-2 text-[11px] text-secondary">Bounded order observations, not a complete protection inventory. Historical rows may be stale; current protection is unverified. Pending replacement does not confirm protection.</p>
 
       <div className="mt-3 overflow-x-auto">
         <div className="min-w-[980px] max-h-[270px] overflow-auto rounded-xl jbravo-panel-inner jbravo-panel-inner-emerald">
@@ -114,14 +114,14 @@ export default function TrailingStopsCard({ rows, isLoading, hasError }: Props) 
               {!isLoading && visibleRows.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-3 py-8 text-center text-sm text-secondary">
-                    No trailing stops available.
+                    No trailing-stop observations in this response.
                   </td>
                 </tr>
               ) : null}
 
               {!isLoading
                 ? visibleRows.map((row, index) => {
-                    const status = normalizeTrailingStatus(row.raw_status || row.status);
+                    const status = trailingObservationStatus(row);
                     const ts = formatDateTimeUtc(row.ts_utc ?? null);
                     const referenceRaw = String(row.parent_leg ?? "").trim();
                     const referenceLabel = trailingReferenceLabel(referenceRaw);
@@ -162,7 +162,10 @@ export default function TrailingStopsCard({ rows, isLoading, hasError }: Props) 
                           title={referenceRaw && referenceRaw !== "--" ? referenceRaw : undefined}
                         >
                           {referenceLabel}
-                          <OrderProvenance order={row} />
+                          <div>{!hasError && row.observation_source === "broker_response" ? "Broker response" : "Historical / unverified"}</div>
+                          <div>Observed status: {row.raw_status || row.status || "unknown"}</div>
+                          {row.terms_observed_at ? <div>Trail terms observed: {row.terms_observed_at}</div> : null}
+                          <OrderProvenance order={row} showStatus={false} />
                         </td>
                       </tr>
                     );
