@@ -99,6 +99,8 @@ def _coerce_bool(value: Any) -> bool | None:
 
 
 def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+        return None
     try:
         out = int(value)
     except Exception:
@@ -107,6 +109,8 @@ def _coerce_int(value: Any) -> int | None:
 
 
 def _coerce_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         out = float(value)
     except Exception:
@@ -136,9 +140,13 @@ def _coerce_scalar(value: str) -> Any:
     cleaned = value.strip().rstrip(",")
     if cleaned == "":
         return ""
-    maybe_bool = _coerce_bool(cleaned)
-    if maybe_bool is not None:
-        return maybe_bool
+    # Generic log fields include return codes and counts. Only explicit words
+    # are booleans; numeric 0/1 must retain their numeric type.
+    lowered = cleaned.lower()
+    if lowered in {"none", "null", "unknown"}:
+        return None
+    if lowered in {"true", "yes", "on", "false", "no", "off"}:
+        return _coerce_bool(cleaned)
     if re.fullmatch(r"-?\d+", cleaned):
         try:
             return int(cleaned)
@@ -215,6 +223,22 @@ def _latest_token(entries: list[dict[str, Any]], token: str) -> dict[str, Any] |
         if entry.get("token") == token:
             return entry
     return None
+
+
+def _log_diagnostic(entry: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Keep independent log events dated without asserting a shared run."""
+    if entry is None:
+        return None
+    return {
+        **dict(entry.get("data") or {}),
+        "evidence": {
+            "source": "logs/pipeline.log",
+            "timestamp": entry.get("timestamp"),
+            "token": entry.get("token"),
+            "scope": "historical_diagnostic",
+            "run_binding": "unverified",
+        },
+    }
 
 
 def _artifact_record(
@@ -611,35 +635,22 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
     if historical_stale is None:
         historical_stale = _coerce_bool(status_ml_health.get("predictions_stale"))
     expected_session = _expected_prediction_session(base, now)
+    # A latest-token lookup is not a binding to this prediction artifact. Keep
+    # old producer checks diagnostic instead of overriding newer DB metadata.
     prediction_freshness = artifact_freshness(predictions_record, now=now,
-        expected_session=expected_session, historical_stale=historical_stale)
+        expected_session=expected_session)
+    prediction_freshness["historical_stale"] = historical_stale
     freshness_stale = prediction_freshness['stale']
     freshness_reason = prediction_freshness['reason']
-    pred_compatible = _coerce_bool(freshness_data.get("pred_compatible"))
-    if pred_compatible is None:
-        pred_compatible = _coerce_bool(feature_compat.get("compatible"))
-    latest_features_set = _clean_text(freshness_data.get("latest_features_set")) or _clean_text(
-        predictions_payload.get("features_feature_set")
-    )
-    latest_features_signature = _clean_text(
-        freshness_data.get("latest_features_signature")
-    ) or _clean_text(predictions_payload.get("features_feature_signature"))
-    pred_features_set = _clean_text(freshness_data.get("pred_features_set")) or _clean_text(
-        predictions_payload.get("feature_set")
-    )
-    pred_features_signature = _clean_text(
-        freshness_data.get("pred_features_signature")
-    ) or _clean_text(predictions_payload.get("feature_signature"))
-    pred_missing_frac = _coerce_float(freshness_data.get("pred_missing_frac"))
-    if pred_missing_frac is None:
-        pred_missing_frac = _coerce_float(predictions_payload.get("missing_feature_fraction"))
-    pred_compat_reason = _clean_text(freshness_data.get("pred_compat_reason")) or _clean_text(
-        feature_compat.get("reason")
-    )
+    pred_compatible = _coerce_bool(feature_compat.get("compatible"))
+    latest_features_set = _clean_text(predictions_payload.get("features_feature_set"))
+    latest_features_signature = _clean_text(predictions_payload.get("features_feature_signature"))
+    pred_features_set = _clean_text(predictions_payload.get("feature_set"))
+    pred_features_signature = _clean_text(predictions_payload.get("feature_signature"))
+    pred_missing_frac = _coerce_float(predictions_payload.get("missing_feature_fraction"))
+    pred_compat_reason = _clean_text(feature_compat.get("reason"))
 
     monitor_action = _normalize_action(monitor_payload.get("recommended_action"))
-    if monitor_action is None and ml_decision_entry:
-        monitor_action = _normalize_action(ml_decision_entry.get("data", {}).get("action"))
 
     calibration_payload = monitor_payload.get("calibration")
     if not isinstance(calibration_payload, Mapping):
@@ -696,7 +707,7 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
     )
 
     overlap_data = dict(overlap_entry.get("data") or {}) if overlap_entry else {}
-    overlap_sample_data = dict(overlap_sample_entry.get("data") or {}) if overlap_sample_entry else {}
+    overlap_diagnostic = _log_diagnostic(overlap_entry)
     overlap_payload = {
         "candidates": _coerce_int(overlap_data.get("candidates")),
         "prediction_symbols": _coerce_int(overlap_data.get("prediction_symbols")),
@@ -706,8 +717,12 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
         "score_col": _clean_text(overlap_data.get("score_col")),
         "pred_ts_min": _clean_text(overlap_data.get("pred_ts_min")),
         "pred_ts_max": _clean_text(overlap_data.get("pred_ts_max")),
-        "sample_reason": _clean_text(overlap_sample_data.get("reason")),
-        "missing_symbols": overlap_sample_data.get("missing_symbols") or [],
+        # The producer's sample token has no run ID. Never attach an older
+        # missing-symbol warning to a later overlap count, even on the same day.
+        "sample_reason": None,
+        "missing_symbols": None,
+        "evidence": overlap_diagnostic["evidence"] if overlap_diagnostic else None,
+        "latest_sample": _log_diagnostic(overlap_sample_entry),
     }
 
     features_status = "success"
@@ -912,12 +927,10 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
             "label": "Stale" if freshness_stale else ("Fresh" if freshness_stale is False else "Unknown"),
             "stale": freshness_stale,
             "reason": freshness_reason,
-            "model_path": _clean_text(freshness_data.get("model_path")) or _clean_text(
-                predictions_payload.get("model_path")
-            ),
-            "pred_model_path": _clean_text(freshness_data.get("pred_model_path")) or _clean_text(
-                predictions_payload.get("model_path")
-            ),
+            "model_path": _clean_text(predictions_payload.get("model_path")),
+            "pred_model_path": _clean_text(predictions_payload.get("model_path")),
+            "source": predictions_record.get("source"),
+            "latest_log_check": _log_diagnostic(freshness_entry),
             "latest_features_set": latest_features_set,
             "latest_features_signature": latest_features_signature,
             "pred_features_set": pred_features_set,
@@ -927,7 +940,7 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
             "pred_compat_reason": pred_compat_reason,
             "generated_at_utc": _clean_text(predictions_payload.get("generated_at_utc")),
             "snapshot_date": _clean_text(predictions_payload.get("snapshot_date")),
-            "latest_auto_refresh": candidate_refresh_done_entry.get("data") if candidate_refresh_done_entry else None,
+            "latest_auto_refresh": _log_diagnostic(candidate_refresh_done_entry),
         },
         "coverage": {
             "total": coverage_total,
@@ -1006,9 +1019,7 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
                     (autoremediate_payload.get("repredict") or {}).get("features_refresh") or {}
                 ).get("attempted")
             ),
-            "last_repredict_event": autoremediate_repredict_event.get("data")
-            if autoremediate_repredict_event
-            else None,
+            "last_repredict_event": _log_diagnostic(autoremediate_repredict_event),
         },
         "artifacts": {
             "labels": labels_record,
@@ -1036,13 +1047,11 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
         },
         "overlap": overlap_payload,
         "enrichment": {
-            "latest_result": enrich_entry.get("data") if enrich_entry else None,
-            "latest_skip": enrich_skip_entry.get("data") if enrich_skip_entry else None,
-            "latest_decision": ml_decision_entry.get("data") if ml_decision_entry else None,
-            "candidate_refresh": candidate_refresh_entry.get("data") if candidate_refresh_entry else None,
-            "candidate_refresh_done": candidate_refresh_done_entry.get("data")
-            if candidate_refresh_done_entry
-            else None,
+            "latest_result": _log_diagnostic(enrich_entry),
+            "latest_skip": _log_diagnostic(enrich_skip_entry),
+            "latest_decision": _log_diagnostic(ml_decision_entry),
+            "candidate_refresh": _log_diagnostic(candidate_refresh_entry),
+            "candidate_refresh_done": _log_diagnostic(candidate_refresh_done_entry),
         },
         "pipeline_stages": stages,
         "recent_events": _build_recent_events(parsed_entries, limit=10),

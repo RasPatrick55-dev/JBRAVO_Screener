@@ -1,6 +1,18 @@
 import { useEffect, useState } from "react";
 import type { LogEntry, StatusTone } from "../../types/ui";
 
+export type MlDiagnosticEvidence = {
+  source?: string | null;
+  timestamp?: string | null;
+  token?: string | null;
+  scope?: "historical_diagnostic";
+  run_binding?: "unverified";
+};
+
+export type MlLogDiagnostic = Record<string, unknown> & {
+  evidence?: MlDiagnosticEvidence | null;
+};
+
 export type MlStage = {
   artifact_present?: boolean;
   execution_status?: string;
@@ -46,7 +58,9 @@ export type MlOverviewResponse = {
     pred_compat_reason?: string | null;
     generated_at_utc?: string | null;
     snapshot_date?: string | null;
-    latest_auto_refresh?: Record<string, unknown> | null;
+    source?: string | null;
+    latest_log_check?: MlLogDiagnostic | null;
+    latest_auto_refresh?: MlLogDiagnostic | null;
   };
   coverage?: {
     total?: number | null;
@@ -124,14 +138,16 @@ export type MlOverviewResponse = {
     pred_ts_min?: string | null;
     pred_ts_max?: string | null;
     sample_reason?: string | null;
-    missing_symbols?: string[];
+    missing_symbols?: string[] | null;
+    evidence?: MlDiagnosticEvidence | null;
+    latest_sample?: (MlLogDiagnostic & { reason?: string | null; missing_symbols?: string[] | null }) | null;
   };
   enrichment?: {
-    latest_result?: Record<string, unknown> | null;
-    latest_skip?: Record<string, unknown> | null;
-    latest_decision?: Record<string, unknown> | null;
-    candidate_refresh?: Record<string, unknown> | null;
-    candidate_refresh_done?: Record<string, unknown> | null;
+    latest_result?: MlLogDiagnostic | null;
+    latest_skip?: MlLogDiagnostic | null;
+    latest_decision?: MlLogDiagnostic | null;
+    candidate_refresh?: MlLogDiagnostic | null;
+    candidate_refresh_done?: MlLogDiagnostic | null;
   };
   trade_attribution?: {
     present?: boolean;

@@ -1,11 +1,11 @@
-import { formatRunDate, formatMlTimestamp as formatDateTime, formatMlInstantDate as formatShortDate, formatMlBoolean } from "../components/ml/displayValues";
+import { formatRunDate, formatMlTimestamp as formatDateTime, formatMlInstantDate as formatShortDate, formatMlBoolean, formatMlReturnCode } from "../components/ml/displayValues";
 import { predictionFreshness, mlStagePresentation, successfulPredictionExecution } from "../components/ml/freshness";
 import { useMemo, type ReactNode } from "react";
 import { buildNavbarBadges, type LiveDataSyncState, useLiveTradingStatus } from "../components/navbar/liveStatus";
 import NavbarDesktop from "../components/navbar/NavbarDesktop";
 import LatestLogsTable from "../components/dashboard/LatestLogsTable";
 import StatusBadge from "../components/badges/StatusBadge";
-import { useMlOverview, type MlStage } from "../components/ml/useMlOverview";
+import { useMlOverview, type MlStage, type MlDiagnosticEvidence } from "../components/ml/useMlOverview";
 import type { StatusTone } from "../types/ui";
 
 type MLPipelineProps = {
@@ -99,6 +99,9 @@ const formatCoverage = (pct: number | null | undefined, nonNull: number | null |
   }
   return formatPercent(pct);
 };
+
+const logEvidenceNote = (evidence: MlDiagnosticEvidence | null | undefined) =>
+  `Historical log diagnostic | ${formatDateTime(evidence?.timestamp)} | ${evidence?.source ?? "Source unknown"} | Run association unverified; not current readiness`;
 
 function SummaryCard({
   title,
@@ -305,6 +308,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
     data?.enrichment?.candidate_refresh_done && typeof data.enrichment.candidate_refresh_done === "object"
       ? data.enrichment.candidate_refresh_done
       : null;
+  const overlapSample = data?.overlap?.latest_sample;
   const recentEventRows = (data?.recent_events ?? []).map((event) => ({
     dateTime: formatDateTime(event.timestamp),
     script: event.token ?? "ML",
@@ -444,7 +448,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                 <DetailRow
                   label="Artifact freshness"
                   value={predictionFreshness(data?.freshness)}
-                  note={`Captured ${formatDateTime(data?.freshness?.artifact_timestamp)} | Source ${data?.freshness?.timestamp_source ?? "unknown"} | Age ${data?.freshness?.age_seconds ?? "unknown"} seconds | Maximum age ${data?.freshness?.max_age_seconds ?? "unknown"} seconds`}
+                  note={`Captured ${formatDateTime(data?.freshness?.artifact_timestamp)} | Source ${data?.freshness?.source ?? "unknown"} / ${data?.freshness?.timestamp_source ?? "unknown"} | Age ${data?.freshness?.age_seconds ?? "unknown"} seconds | Maximum age ${data?.freshness?.max_age_seconds ?? "unknown"} seconds`}
                 />
                 <DetailRow
                   label="Last verified prediction execution"
@@ -457,9 +461,9 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                   note={`Expected session ${formatRunDate(data?.freshness?.expected_session)}; checked ${formatDateTime(data?.freshness?.observed_at)}`}
                 />
                 <DetailRow
-                  label="Latest model"
+                  label="Prediction artifact model"
                   value={truncateMiddle(data?.freshness?.model_path)}
-                  note={`Predictions model ${truncateMiddle(data?.freshness?.pred_model_path)}`}
+                  note="Model metadata from the dated prediction artifact; current model compatibility is not verified by this record."
                 />
                 <DetailRow
                   label="Feature set"
@@ -474,29 +478,24 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                   note={truncateMiddle(data?.freshness?.pred_features_signature, 34)}
                 />
                 <DetailRow
-                  label="Overlap"
+                  label="Historical overlap"
                   value={`${formatNumber(data?.overlap?.overlap ?? null)} of ${formatNumber(
                     data?.overlap?.candidates ?? null
                   )}`}
-                  note={`Pred symbols ${formatNumber(data?.overlap?.prediction_symbols ?? null)} · ${
-                    data?.overlap?.score_col ?? "n/a"
-                  }`}
+                  note={`${logEvidenceNote(data?.overlap?.evidence)} | Pred symbols ${formatNumber(data?.overlap?.prediction_symbols ?? null)} | ${data?.overlap?.score_col ?? "n/a"}`}
                 />
                 <DetailRow
-                  label="Refresh result"
-                  value={
-                    candidateRefreshDone && "rc" in candidateRefreshDone
-                      ? String(candidateRefreshDone.rc)
-                      : "No recent refresh"
-                  }
-                  note={
-                    data?.overlap?.sample_reason
-                      ? `Sample reason ${data.overlap.sample_reason} · missing ${
-                          data.overlap.missing_symbols?.slice(0, 3).join(", ") || "none"
-                        }`
-                      : `Freshness reason ${data?.freshness?.reason ?? "n/a"}`
-                  }
+                  label="Historical refresh return code"
+                  value={formatMlReturnCode(candidateRefreshDone?.rc)}
+                  note={`${logEvidenceNote(candidateRefreshDone?.evidence)} | Reported predictions source ${candidateRefreshDone?.predictions_source ?? "Unknown"}`}
                 />
+                {overlapSample ? (
+                  <DetailRow
+                    label="Historical missing-symbol sample"
+                    value={overlapSample.missing_symbols?.slice(0, 3).join(", ") || "Unknown"}
+                    note={`${logEvidenceNote(overlapSample.evidence)} | Reason ${overlapSample.reason ?? "Unknown"}. This sample is not bound to the overlap or refresh above.`}
+                  />
+                ) : null}
               </div>
             </SectionCard>
 
