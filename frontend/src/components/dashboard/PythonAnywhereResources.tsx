@@ -99,7 +99,7 @@ export default function PythonAnywhereResources({
               <div className="mt-2 space-y-1 text-[10px] text-sky-100/80">
                 <p>{status}{value !== null && value > 100 ? " / Over quota in this snapshot" : ""}</p>
                 <p>Used / quota: {formatAmount(resource.used)} / {formatAmount(resource.quota ?? resource.limit)} {resource.unit ?? ""}</p>
-                <p>Source: {resource.source || "unknown"}</p>
+                <p className="break-all">Source: {resource.source || "unknown"}</p>
                 <p>Captured: {resource.captured_at || "unknown"}</p>
               </div>
             </div>
