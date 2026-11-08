@@ -7588,7 +7588,7 @@ def _execute_trailing_from_db(fetch_limit: int) -> tuple[list[dict[str, Any]], s
     try:
         rows = _db_fetch_all_strict(
             """
-            WITH trailing AS (
+            WITH trailing_observations AS (
                 SELECT DISTINCT ON (COALESCE(NULLIF(order_id, ''),
                     symbol || ':' || COALESCE(event_time::text, ''))) *
                 FROM order_events
@@ -7610,7 +7610,7 @@ def _execute_trailing_from_db(fetch_limit: int) -> tuple[list[dict[str, Any]], s
                 COALESCE(latest.event_time, t.event_time) AS event_time,
                 t.raw, CASE WHEN latest.event_id IS NOT NULL THEN latest.raw ELSE t.raw END AS lifecycle_raw,
                 t.event_time AS terms_observed_at
-            FROM trailing t
+            FROM trailing_observations t
             LEFT JOIN LATERAL (
                 SELECT event_id, status, event_type, event_time, raw
                 FROM order_events e
