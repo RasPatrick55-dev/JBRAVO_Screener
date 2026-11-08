@@ -47,7 +47,8 @@ describe("strategy-wide scorecard evidence", () => {
     expect(verified.closed_signals).toBe(3);expect(verified.win_rate_pct).toBeCloseTo(100/3);expect(verified.expectancy).toBe(0);
     expect(verified.costs.total).toBe(18);expect(verified.uncertainty.low).toBe(-40);
     const missing=output.rows.find(row=>row.evidence_status==="UNAVAILABLE")!;expect(missing.closed_signals).toBeNull();expect(missing.strategy_version).toBe("");
-    const markup=html(generatedFixture);for(const text of ["33.33%","95% descriptive interval","version unknown","Strategy-wide performance unavailable","completed archive unavailable","Archive as of: 2026-11-06 (2 calendar days old)","Latest attempt: not evaluated"]) expect(markup).toContain(text);
+    const markup=html(generatedFixture);for(const text of ["33.33%","95% descriptive interval","version unknown","Strategy-wide performance unavailable","completed archive unavailable","Archive as of: 2026-11-06 (2 calendar days old)","Latest attempt: not evaluated","Warning: few signal week clusters. Uncertainty may be unstable."]) expect(markup).toContain(text);
+    for(const text of ["Capital: $100,000.00; allocation: 5%; max positions: 4; top N: 3", "Modeled fee / fill: $1.00; slippage: 5.00 bps", "Coverage: complete; evaluated: 5; excluded: 2; discovered: --"]) expect(markup).toContain(text);
   });  it("retains missing enabled strategies with unknown version and dates rather than fabricating an episode", () => {
     const data=payload();data.rows=[{...row(),evidence_status:"UNAVAILABLE",strategy_version:null,definition_sha256:null,episode_id:null,as_of:null,episode:null}];
     const output=view(data);expect(output.error).toBeNull();expect(output.rows[0].closed_signals).toBeNull();

@@ -17,6 +17,8 @@ function normalizeScorecardRow(value: unknown) {
     throw new Error("Strategy scorecard evidence is missing its definition or episode identity.");
   }
   const costs = record(row.costs), uncertainty = record(row.uncertainty), proof = record(row.evidence), episode = record(row.episode), freshness = record(row.freshness);
+  const portfolio = record(episode.portfolio), costCase = record(episode.cost_case), coverage = record(episode.coverage);
+  const allocation = evidenceNumber(portfolio.alloc_pct);
   const number = (field: string) => usable ? evidenceNumber(row[field]) : null;
   const count = (field: string) => usable ? evidenceCount(row[field]) : null;
   const closed = count("closed_signals");
@@ -39,6 +41,7 @@ function normalizeScorecardRow(value: unknown) {
     costs: { basis: evidenceText(costs.basis), fees: usable ? evidenceNumber(costs.fees) : null,
       slippage: usable ? evidenceNumber(costs.slippage) : null, total: usable ? evidenceNumber(costs.total) : null },
     uncertainty: { method: evidenceText(uncertainty.method), status: usable ? evidenceText(uncertainty.status) : "UNAVAILABLE",
+      warning: usable ? evidenceText(uncertainty.warning) : "",
       level: intervalValid ? level : null, low: intervalValid ? intervalLow : null, high: intervalValid ? intervalHigh : null,
       signal_weeks: usable ? evidenceCount(uncertainty.signal_weeks) : null, samples: usable ? evidenceCount(uncertainty.samples) : null },
     evidence: { archive_count: evidenceCount(proof.archive_count), distinct_signals: evidenceCount(proof.distinct_signals),
@@ -46,7 +49,12 @@ function normalizeScorecardRow(value: unknown) {
       result_sha256: evidenceText(proof.result_sha256), scan_run_id: evidenceText(proof.scan_run_id), manifest_sha256: evidenceText(proof.manifest_sha256) },
     episode: { test_start: evidenceText(episode.test_start), as_of: evidenceText(episode.as_of),
       universe_kind: evidenceText(episode.universe_kind), cost_case: evidenceText(record(episode.cost_case).id),
-      declared_symbols: evidenceCount(episode.declared_symbols) },
+      declared_symbols: evidenceCount(episode.declared_symbols), initial_cash: evidenceNumber(portfolio.initial_cash),
+      allocation_pct: allocation !== null && allocation >= 0 && allocation <= 1 ? allocation * 100 : null,
+      max_positions: evidenceCount(portfolio.max_positions), top_n: evidenceCount(portfolio.top_n),
+      fee_per_fill: evidenceNumber(costCase.fee_per_fill), slippage_bps: evidenceNumber(costCase.slippage_bps),
+      coverage_status: evidenceText(coverage.status), evaluated_count: evidenceCount(coverage.evaluated_count),
+      excluded_count: evidenceCount(coverage.excluded_count), discovered_count: evidenceCount(coverage.discovered_count) },
     freshness: { evidence_as_of: evidenceText(freshness.evidence_as_of), source_age_calendar_days: evidenceCount(freshness.source_age_calendar_days),
       latest_attempt_status: evidenceText(freshness.latest_attempt_status) },
     limitations: strings(row.limitations), reason: evidenceText(row.reason) || evidenceText(row.failure_code),

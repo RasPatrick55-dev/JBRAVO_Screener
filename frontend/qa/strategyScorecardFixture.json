@@ -25,6 +25,7 @@
     "Closed-position P&L includes modeled fees/slippage and excludes cash dividends.",
     "Retrospective universe and historical availability assumptions remain unqualified.",
     "Week-cluster intervals describe this sample; they do not establish future performance.",
+    "Few signal-week clusters give unstable intervals; grouping does not remove cross-week holding or regime dependence.",
     "Latest completed archives are historical evidence; newer scan attempts are not evaluated here."
   ],
   "metric_basis": "STRATEGY_RESEARCH_SIMULATION",
@@ -86,7 +87,8 @@
         "method": "SIGNAL_WEEK_CLUSTER_BOOTSTRAP",
         "samples": 0,
         "signal_weeks": null,
-        "status": "UNAVAILABLE"
+        "status": "UNAVAILABLE",
+        "warning": null
       },
       "unfilled_signals": null,
       "win_rate_pct": null,
@@ -177,7 +179,8 @@
         "method": "SIGNAL_WEEK_CLUSTER_BOOTSTRAP",
         "samples": 400,
         "signal_weeks": 3,
-        "status": "DESCRIPTIVE_NOT_VALIDATION"
+        "status": "DESCRIPTIVE_NOT_VALIDATION",
+        "warning": "FEW_SIGNAL_WEEK_CLUSTERS"
       },
       "unfilled_signals": 1,
       "win_rate_pct": 33.333333333333336,

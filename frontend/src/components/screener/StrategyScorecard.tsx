@@ -15,6 +15,9 @@ function ScorecardEvidence({ row }: { row: StrategyScorecardRow }) {
       <p>Window: {row.episode.test_start || "unknown"} to {row.episode.as_of || row.as_of || "unknown"}</p>
       <p>Universe: {evidenceLabel(row.episode.universe_kind)}; cost case: {evidenceLabel(row.episode.cost_case)}</p>
       <p>Declared symbols: {formatNumber(row.episode.declared_symbols)}</p>
+      <p>Capital: {formatCurrency(row.episode.initial_cash)}; allocation: {formatMetricWinRate(row.episode.allocation_pct)}; max positions: {formatNumber(row.episode.max_positions)}; top N: {formatNumber(row.episode.top_n)}</p>
+      <p>Modeled fee / fill: {formatCurrency(row.episode.fee_per_fill)}; slippage: {formatRatio(row.episode.slippage_bps)} bps</p>
+      <p>Coverage: {evidenceLabel(row.episode.coverage_status)}; evaluated: {formatNumber(row.episode.evaluated_count)}; excluded: {formatNumber(row.episode.excluded_count)}; discovered: {formatNumber(row.episode.discovered_count)}</p>
       <p>Scope: {evidenceLabel(row.scope)}</p>
       <p>Archives: {formatNumber(row.evidence.archive_count)}; distinct signals: {formatNumber(row.evidence.distinct_signals)}; duplicate observations: {formatNumber(row.evidence.duplicate_observations)}</p>
       <p>Archive ID: {row.evidence.archive_id || "unknown"}</p><p>Scan: {row.evidence.scan_run_id || "unknown"}</p>
@@ -96,6 +99,7 @@ export function StrategyScorecardContent({ result, onRetry }: { result: Scorecar
                 <span className="mt-1 block text-[10px] text-secondary">{row.uncertainty.level === null ? evidenceLabel(row.uncertainty.status) : `${formatMetricWinRate(row.uncertainty.level * 100)} descriptive interval`}</span>
                 <span className="mt-1 block text-[10px] text-secondary">{evidenceLabel(row.uncertainty.method)}</span>
                 <span className="mt-1 block text-[10px] text-secondary">Signal weeks: {formatNumber(row.uncertainty.signal_weeks)}</span>
+                {row.uncertainty.warning ? <span className="mt-1 block text-[10px] font-semibold text-secondary">Warning: {evidenceLabel(row.uncertainty.warning)}. Uncertainty may be unstable.</span> : null}
               </td>
             </tr>)}
           </tbody>

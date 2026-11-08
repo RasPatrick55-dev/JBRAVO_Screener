@@ -28,7 +28,7 @@ Current-signal, strategy, version, report and ledger identities are retained. Th
 
 Strategy Scorecard consumes GET `/api/strategies/scorecard` with a 60-second polling interval and 35-second request deadline. Its transport evidence has a 120-second maximum age so the normal bounded refresh does not expire at the instant the one-minute poll begins; the shared hook retains its previous defaults for every other consumer. It presents only `VERIFIED` row statistics. Unknown, conflicting or unsupported evidence statuses keep financial metrics and sample sizes unknown. A current `UNAVAILABLE` response can retain validated strategy identity/reason rows without displaying performance. A transport-stale response does not retain numerical rows.
 
-Each strategy/version/definition/episode is a distinct row. Exact completed count, wins/losses/breakeven, net expectancy, average win/loss, payoff ratio, profit factor, modeled costs and the descriptive signal-week bootstrap interval are separately labeled. No frontend aggregation is performed. The archive date and age are separate from latest-attempt status, which is not inferred from a successful HTTP fetch. Source coverage bounds and rejected archives are visible.
+Each strategy/version/definition/episode is a distinct row. Exact completed count, wins/losses/breakeven, net expectancy, average win/loss, payoff ratio, profit factor, modeled costs and the descriptive signal-week bootstrap interval are separately labeled. No frontend aggregation is performed. The archive date and age are separate from latest-attempt status, which is not inferred from a successful HTTP fetch. Source coverage bounds and rejected archives are visible. Evidence details also retain initial capital, allocation, position limits, fee/fill, slippage bps and evaluated/excluded/discovered coverage counts. Sparse-cluster warnings remain visible beside the descriptive interval. The backend cache TTL is supplied separately and does not imply a new scan attempt.
 
 ## Fixtures and checks
 
@@ -51,3 +51,5 @@ Inspected both Backtest and Scorecard at 1180 x 757 and 390 x 844, in light and 
 - Temporary preview tab closed, browser viewport reset, and local server stopped. No saved production theme preference changed.
 
 Local review screenshots are in the adjacent `strategy-scorecard-ui-evidence` folder, including `backtest-{light,dark}-{1180,390}.png`, `scorecard-{light,dark}-{1180,390}.png`, `scorecard-unavailable-light-390.png`, and `scorecard-long-evidence-light-390.png`. Scorecard screenshots are synthetic presentation evidence only.
+
+The supplemental capital-details screenshot had a browser capture scaling artifact and is not counted as visual evidence. The added capital/cost/coverage mapping was verified by the exact backend fixture render and live DOM, with no document overflow.
