@@ -4,17 +4,19 @@ import BacktestResultsCard from "./BacktestResultsCard";
 import LogsBoard from "./LogsBoard";
 import MetricsResultsCard from "./MetricsResultsCard";
 import ScreenerPicksCard from "./ScreenerPicksCard";
+import StrategyScorecard from "./StrategyScorecard";
 
 type ScreenerTabProps = {
   onSyncStateChange?: (state: LiveDataSyncState) => void;
 };
 
-type ScreenerSectionKey = "picks" | "backtest" | "metrics" | "logs";
+type ScreenerSectionKey = "picks" | "backtest" | "metrics" | "scorecard" | "logs";
 
 const initialSectionState: Record<ScreenerSectionKey, LiveDataSyncState> = {
   picks: "loading",
   backtest: "loading",
   metrics: "loading",
+  scorecard: "loading",
   logs: "loading",
 };
 
@@ -49,6 +51,7 @@ export default function ScreenerTab({ onSyncStateChange }: ScreenerTabProps) {
       <ScreenerPicksCard onSyncStateChange={(state) => updateSectionState("picks", state)} />
       <BacktestResultsCard onSyncStateChange={(state) => updateSectionState("backtest", state)} />
       <MetricsResultsCard onSyncStateChange={(state) => updateSectionState("metrics", state)} />
+      <StrategyScorecard onSyncStateChange={(state) => updateSectionState("scorecard", state)} />
       <LogsBoard onSyncStateChange={(state) => updateSectionState("logs", state)} />
     </section>
   );

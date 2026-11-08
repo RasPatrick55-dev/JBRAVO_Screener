@@ -1,4 +1,4 @@
-import type { BacktestRow, LogLevel, MetricsRow, ScreenerLogRow, ScreenerPickRow } from "./types";
+import type { LogLevel, MetricsRow, ScreenerLogRow, ScreenerPickRow } from "./types";
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -185,23 +185,6 @@ export const picksMatchQuery = (row: ScreenerPickRow, query: string): boolean =>
       row.price,
       row.entry_price,
       row.sma_ema_pct,
-    ],
-    query
-  );
-};
-
-export const backtestMatchQuery = (row: BacktestRow, query: string): boolean => {
-  return includesQuery(
-    [
-      row.symbol,
-      row.window,
-      row.trades,
-      row.win_rate_pct,
-      row.avg_return_pct,
-      row.pl_ratio,
-      row.max_dd_pct,
-      row.avg_hold_days,
-      row.total_pl_usd,
     ],
     query
   );

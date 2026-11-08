@@ -111,7 +111,7 @@ describe("actual Metrics request-adapter-state-render flow",()=>{
     const html=await renderLoaded(payload());
     expect(html).toContain("All strategies (per-setup results)");
     expect(html).toContain("SYN");expect(html).toContain("FIX");
-    expect(html).toContain("Pullback/Reclaim v2");expect(html).toContain("bull flag companion v1 v1");
+    expect(html).toContain("Pullback/Reclaim v2");expect(html).toContain("bull flag companion v1");
     expect(html).toContain("$12.34");expect(html).toContain("$6.17");
     expect(html).not.toContain("$18.51");expect(html).not.toContain("No Screener picks");
     expect(html).not.toContain('role="alert"');expect(html).toContain("jbravo-panel-emerald");

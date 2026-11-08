@@ -1,5 +1,5 @@
 export type ScreenerPicksFilter = "all" | "top10" | "passed" | "errors";
-export type BacktestWindow = "3M" | "6M" | "1Y" | "ALL";
+
 export type MetricsFilter = "all" | "with_history" | "no_history";
 export type LogsStage = "screener" | "backtest" | "metrics";
 export type LogsChipFilter = "all" | "errors" | "warnings" | "today";
@@ -38,24 +38,29 @@ export interface ScreenerPicksResponse {
 
 export interface BacktestRow {
   symbol: string;
-  window: BacktestWindow | string;
-  trades: number | null;
+  strategy_id: string;
+  strategy_version: string;
+  signal_id: string;
+  current_signal_session: string;
+  backtest_result_id: string;
+  definition_sha256: string;
+  closed_signal_ledger_sha256: string;
+  closed_signals: number | null;
+  wins: number | null;
+  losses: number | null;
+  breakeven: number | null;
   win_rate_pct: number | null;
-  avg_return_pct: number | null;
-  pl_ratio: number | null;
-  max_dd_pct: number | null;
-  avg_hold_days: number | null;
-  total_pl_usd: number | null;
+  net_pnl: number | null;
+  expectancy: number | null;
+  profit_factor: number | null;
+  profit_factor_status: string;
+  max_drawdown_cash: number | null;
+  fees: number | null;
+  slippage: number | null;
+  average_hold_calendar_days: number | null;
+  sample_status: string;
+  current_proposal_state: string;
 }
-
-export interface BacktestResponse {
-  ok?: boolean;
-  run_ts_utc?: string | null;
-  window?: BacktestWindow | string;
-  source?: string | null;
-  rows?: BacktestRow[];
-}
-
 export type GateValue = "PASS" | "FAIL";
 export type BarsCompleteValue = "YES" | "NO";
 export type ConfidenceValue = "Low" | "Medium" | "High";

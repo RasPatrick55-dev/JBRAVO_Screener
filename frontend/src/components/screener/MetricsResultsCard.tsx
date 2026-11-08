@@ -181,7 +181,7 @@ export default function MetricsResultsCard({ onSyncStateChange }: MetricsResults
           <caption className="sr-only">Historical performance from each pick's exact strategy backtest.</caption>
           <thead className="sticky top-0 bg-slate-100 dark:bg-slate-900">
             <tr className="text-xs text-secondary">
-              {["Symbol", "Closed trades", "Win rate", "Net P&L", "Expectancy", "Profit factor", "Drawdown (USD)", "History"].map(name =>
+              {["Symbol / strategy", "Closed trades", "Win rate", "Net P&L", "Expectancy", "Profit factor", "Drawdown (USD)", "History"].map(name =>
                 <th key={name} scope="col" className="px-2 py-2 text-left">{name}</th>)}
             </tr>
           </thead>
@@ -191,7 +191,7 @@ export default function MetricsResultsCard({ onSyncStateChange }: MetricsResults
               {search || selectedFilter !== "all" ? "No matching metrics." : "No Screener picks in this batch."}
             </td></tr> : null}
             {!isLoading && displayedRows.map(row => <tr key={row.signal_id} className="border-t border-slate-200/70 text-xs text-primary dark:border-slate-700/70 sm:text-sm">
-              <th scope="row" className="px-2 py-2.5 text-left" title={strategyLabel(row.strategy_id, row.strategy_version)}>{row.symbol}</th>
+              <th scope="row" className="px-2 py-2.5 text-left" title={strategyLabel(row.strategy_id, row.strategy_version)}>{row.symbol}<span className="mt-1 block max-w-[240px] break-words text-[11px] font-normal text-secondary">{strategyLabel(row.strategy_id, row.strategy_version)}</span></th>
               <td className="px-2 py-2.5">{formatNumber(row.trades)}</td>
               <td className="px-2 py-2.5">{formatMetricWinRate(row.win_rate_pct)}</td>
               <td className="px-2 py-2.5">{formatCurrency(row.net_pnl)}</td>
