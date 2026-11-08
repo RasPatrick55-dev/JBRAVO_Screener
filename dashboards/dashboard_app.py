@@ -6293,43 +6293,210 @@ def api_execute_overview():
         result_pl_source=summary["result_pl_source"], evidence_kind="operational_execution_snapshot"))
 
 
+def _execute_fill_activity_fact(raw: Any) -> tuple[str, datetime, str, Decimal, Decimal]:
+    """Validate one observed execution; cumulative/order quantities are not fills."""
+    if not isinstance(raw, Mapping) or raw.get("activity_type") != "FILL":
+        raise ValueError("invalid_fill_activity")
+    identifier = raw.get("id")
+    if not isinstance(identifier, str) or not identifier.strip() or len(identifier) > 256:
+        raise ValueError("invalid_fill_activity_id")
+    if raw.get("type") not in (None, "fill", "partial_fill"):
+        raise ValueError("invalid_fill_activity_type")
+    side = raw.get("side")
+    if side not in ("buy", "sell"):
+        raise ValueError("invalid_fill_activity_side")
+    stamp = raw.get("transaction_time")
+    if not isinstance(stamp, str) or "T" not in stamp:
+        raise ValueError("invalid_fill_activity_time")
+    try:
+        instant = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if instant.tzinfo is None or instant.utcoffset() is None:
+            raise ValueError("naive_fill_time")
+        instant = instant.astimezone(timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("invalid_fill_activity_time") from None
+    numbers: list[Decimal] = []
+    for field in ("qty", "price"):
+        value = raw.get(field)
+        if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+            raise ValueError("invalid_fill_activity_economics")
+        try:
+            number = Decimal(str(value))
+            if not number.is_finite() or number <= 0:
+                raise ValueError("nonpositive_fill_value")
+            numbers.append(number)
+        except (ArithmeticError, TypeError, ValueError):
+            raise ValueError("invalid_fill_activity_economics") from None
+    return identifier, instant, side, numbers[0], numbers[1]
+
+
+def _execute_buy_fill_activity_summary(
+    *,
+    since: datetime,
+    until: datetime,
+    read_page: Callable[..., tuple[Any, str]],
+    page_size: int = 100,
+    max_pages: int = 10,
+    max_seconds: float = 8.0,
+    clock: Callable[[], float] | None = None,
+) -> dict[str, Any]:
+    """Bounded read-only FILL pagination; only an empty page proves exhaustion.
+
+    Provider time-filter inclusivity is unspecified. Pad the query by one second
+    and apply [since, until) to execution transaction_time locally. This is an
+    observation of currently reported activities, not settlement finality.
+    """
+    page_size = max(1, min(100, int(page_size)))
+    max_pages = max(1, min(20, int(max_pages)))
+    timer = clock or time.monotonic
+    deadline = timer() + max_seconds
+    result = dict(
+        ok=False,
+        status="unavailable",
+        coverage="incomplete",
+        fill_count=None,
+        total_value=None,
+        orders_filled=None,
+        observed_fill_count=0,
+        count_unit="buy_fill_activity_events",
+        value_unit="USD_buy_fill_notional",
+        coverage_scope="observed_broker_fill_activities",
+        window_basis="transaction_time",
+        window_boundary="since_inclusive_until_exclusive",
+        accounting_final=False,
+        source_endpoint="/v2/account/activities/FILL",
+        pages_read=0,
+        duplicate_activities=0,
+        excluded_outside_window=0,
+        page_size=page_size,
+        max_pages=max_pages,
+    )
+    seen: dict[str, tuple[datetime, str, Decimal, Decimal]] = {}
+    cursors: set[str] = set()
+    cursor = None
+    total = Decimal(0)
+
+    def incomplete(reason: str) -> dict[str, Any]:
+        return dict(
+            result, reason=reason, status="partial" if result["pages_read"] else "unavailable"
+        )
+
+    query = dict(
+        after=(since - timedelta(seconds=1)).isoformat(),
+        until=(until + timedelta(seconds=1)).isoformat(),
+        direction="asc",
+        page_size=page_size,
+    )
+    for _ in range(max_pages):
+        remaining = deadline - timer()
+        if remaining <= 0:
+            return incomplete("fill_activity_deadline")
+        params = dict(query)
+        if cursor is not None:
+            params["page_token"] = cursor
+        try:
+            payload, detail = read_page(
+                "/v2/account/activities/FILL", params=params, timeout=min(3.0, remaining)
+            )
+        except Exception:
+            return incomplete("fill_activity_read_failed")
+        if timer() > deadline:
+            return incomplete("fill_activity_deadline")
+        if detail != "ok":
+            return incomplete("fill_activity_read_failed")
+        if not isinstance(payload, list) or len(payload) > page_size:
+            return incomplete("invalid_fill_activity_page")
+        result["pages_read"] += 1
+        if not payload:
+            value = float(total)
+            if not math.isfinite(value) or (total > 0 and value == 0):
+                return incomplete("invalid_fill_activity_notional")
+            return dict(
+                result,
+                ok=True,
+                status="ready" if result["observed_fill_count"] else "empty",
+                coverage="requested_24h_fill_activity_window",
+                fill_count=result["observed_fill_count"],
+                total_value=value,
+            )
+        new_ids = 0
+        last_id = None
+        for raw in payload:
+            try:
+                identifier, instant, side, qty, price = _execute_fill_activity_fact(raw)
+            except ValueError as error:
+                return incomplete(str(error))
+            fact = (instant, side, qty, price)
+            last_id = identifier
+            if identifier in seen:
+                if seen[identifier] != fact:
+                    return incomplete("conflicting_fill_activity_id")
+                result["duplicate_activities"] += 1
+                continue
+            seen[identifier] = fact
+            new_ids += 1
+            if not since <= instant < until:
+                result["excluded_outside_window"] += 1
+                continue
+            if side == "buy":
+                try:
+                    total += qty * price
+                    if not total.is_finite():
+                        return incomplete("invalid_fill_activity_notional")
+                except ArithmeticError:
+                    return incomplete("invalid_fill_activity_notional")
+                result["observed_fill_count"] += 1
+        # A short page is not a terminal signal. Alpaca uses the last activity
+        # ID as an exclusive cursor; headers/next_page_token are not its contract.
+        if not new_ids or last_id == cursor or last_id in cursors:
+            return incomplete("fill_activity_pagination_not_advancing")
+        cursor = last_id
+        cursors.add(cursor)
+    return incomplete("fill_activity_page_limit")
+
+
 @server.route("/api/execute/orders-summary")
 def api_execute_orders_summary():
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=24)
     client, context = _dashboard_broker_context()
-    base = dict(source="alpaca", account_scope="configured_paper_broker", broker_context=context,
-                observed_at=now.isoformat(), since_utc=since.isoformat(), until_utc=now.isoformat())
+    base = dict(
+        source="alpaca",
+        account_scope="configured_paper_broker",
+        broker_context=context,
+        observed_at=now.isoformat(),
+        since_utc=since.isoformat(),
+        until_utc=now.isoformat(),
+    )
+    unavailable = dict(
+        ok=False,
+        status="unavailable",
+        coverage="incomplete",
+        fill_count=None,
+        orders_filled=None,
+        total_value=None,
+        count_unit="buy_fill_activity_events",
+        value_unit="USD_buy_fill_notional",
+        source_endpoint="/v2/account/activities/FILL",
+        coverage_scope="observed_broker_fill_activities",
+        window_basis="transaction_time",
+        window_boundary="since_inclusive_until_exclusive",
+        accounting_final=False,
+    )
     if client is None:
-        return _json_no_store(dict(base, ok=False, status="unavailable", orders_filled=None, total_value=None))
+        return _json_no_store(dict(base, **unavailable, reason=context))
     try:
-        query = GetOrdersRequest(status="closed", after=since, until=now, direction="desc", limit=500)
-        orders = source_contracts.bounded_read(lambda: client.get_orders(filter=query))
-        if not isinstance(orders, (list, tuple)):
-            raise ValueError("missing_orders_result")
-        values, count, incomplete = [], 0, False
-        for order in orders:
-            filled_at = getattr(order, "filled_at", None)
-            if filled_at is None or filled_at < since:
-                continue
-            side = getattr(order, "side", None)
-            side = str(getattr(side, "value", side) or "").lower()
-            if side != "buy":
-                continue
-            count += 1
-            qty = source_contracts.number(getattr(order, "filled_qty", None))
-            price = source_contracts.number(getattr(order, "filled_avg_price", None))
-            if qty is None or price is None or qty <= 0 or price <= 0:
-                incomplete = True
-            else:
-                values.append(qty * price)
-        saturated = len(orders) >= 500
-        return _json_no_store(dict(base, ok=True, status="partial" if incomplete or saturated else "ready" if count else "empty",
-            orders_filled=None if saturated else count, observed_orders_filled=count,
-            total_value=None if incomplete or saturated else sum(values),
-            coverage="at_least_500_orders_incomplete" if saturated else "requested_24h_window", value_unit="USD_buy_fill_notional"))
+        # Reuse the canonical paper context and credentialed GET helper. The
+        # shared bounded reader enforces a response deadline even on a slow peer.
+        summary = source_contracts.bounded_read(
+            lambda: _execute_buy_fill_activity_summary(
+                since=since, until=now, read_page=_alpaca_rest_get_json
+            ),
+            seconds=8.5,
+        )
+        return _json_no_store(dict(base, **summary))
     except Exception:
-        return _json_no_store(dict(base, ok=False, status="unavailable", orders_filled=None, total_value=None))
+        return _json_no_store(dict(base, **unavailable, reason="fill_activity_read_failed"))
 
 
 _EXECUTE_STATUS_SCOPES = {"all", "open", "closed"}

@@ -1211,7 +1211,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     executeTaskSource.receivedAt,
     executeOrdersSummary,
     executeOrdersSummary?.source,
-    executeOrdersSummary?.orders_filled,
+    executeOrdersSummary?.fill_count,
     executeOrdersSummary?.total_value,
     healthSnapshot?.last_run_utc,
     healthSnapshot?.pipeline_rc,

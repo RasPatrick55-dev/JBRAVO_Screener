@@ -20,8 +20,11 @@ import type { MlStage } from "../src/components/ml/useMlOverview";
 import { StageTile } from "../src/screens/MLPipeline";
 
 const fillSummary: ExecuteOrdersSummaryResponse = {
-  ok: true, source: "alpaca", orders_filled: 0, total_value: 0,
-  value_unit: "USD_buy_fill_notional", coverage: "requested_24h_window",
+  ok: true, status: "empty", source: "alpaca", fill_count: 0, total_value: 0,
+  source_endpoint: "/v2/account/activities/FILL", account_scope: "configured_paper_broker",
+  count_unit: "buy_fill_activity_events", value_unit: "USD_buy_fill_notional", coverage: "requested_24h_fill_activity_window",
+  coverage_scope: "observed_broker_fill_activities", window_basis: "transaction_time",
+  window_boundary: "since_inclusive_until_exclusive", accounting_final: false,
   since_utc: "2026-02-03T12:00:00Z", until_utc: "2026-02-04T12:00:00Z",
 };
 
@@ -34,21 +37,47 @@ describe("trailing 24-hour buy fill reporting", () => {
     expect(source).not.toContain("const ordersPlaced = typeof ordersSubmitted");
     const html = renderToStaticMarkup(<ExecuteTradesStatusCard lastRun={{date:"",start:"",end:"",duration:""}}
       ordersPlaced={0} totalValue={0} successRate={NaN} isCycleComplete={false} />);
-    expect(html).toContain("Buy fills (24h)");
+    expect(html).toContain("Buy fill executions (24h)");
     expect(html).toContain("Buy notional (USD)");
+    expect(html).toContain("Observed broker executions; late-reported fills may appear on refresh.");
     expect(html).toContain("$0.00");
   });
   it.each([
     null, { ...fillSummary, ok: false }, { ...fillSummary, source: "logs" },
     { ...fillSummary, coverage: "at_least_500_orders_incomplete" },
+    { ...fillSummary, coverage: "requested_24h_window" },
+    { ...fillSummary, coverage: "incomplete", observed_fill_count: 13 },
+    { ...fillSummary, status: "partial" }, { ...fillSummary, status: "unavailable" },
+    { ...fillSummary, status: null }, { ...fillSummary, status: "ready" },
+    { ...fillSummary, status: "empty", fill_count: 1 },
+    { ...fillSummary, source_endpoint: "/v2/orders" },
+    { ...fillSummary, window_basis: "submitted_at" },
+    { ...fillSummary, window_boundary: null }, { ...fillSummary, coverage_scope: null },
+    { ...fillSummary, account_scope: "unknown" },
+    { ...fillSummary, count_unit: "completed_buy_orders" }, { ...fillSummary, count_unit: null },
     { ...fillSummary, value_unit: "USD_all_orders" },
     { ...fillSummary, since_utc: null }, { ...fillSummary, until_utc: "2026-02-05T12:00:00Z" },
   ])("holds count and value when broker window or scope is not verified: %j", summary => {
     const result = buyFillSummary(summary);
     expect(result.count).toBeNaN(); expect(result.value).toBeNaN();
   });
-  it("does not fabricate notional when fill value is unavailable", () => {
-    expect(buyFillSummary({ ...fillSummary, orders_filled: 1, total_value: null })).toEqual({ count: 1, value: NaN });
+  it("holds both totals when a fully validated count or notional is unavailable", () => {
+    expect(buyFillSummary({ ...fillSummary, fill_count: 1, total_value: null })).toEqual({ count: NaN, value: NaN });
+    expect(buyFillSummary({ ...fillSummary, fill_count: null, total_value: 107 })).toEqual({ count: NaN, value: NaN });
+  });
+  it("shows fill activity executions, including partials, rather than a completed-order count", () => {
+    const executions = { ...fillSummary, status: "ready", fill_count: 3, orders_filled: 1, total_value: 107 };
+    const result = buyFillSummary(executions);
+    expect(result).toEqual({ count: 3, value: 107 });
+    const html = renderToStaticMarkup(<ExecuteTradesStatusCard lastRun={{date:"",start:"",end:"",duration:""}}
+      ordersPlaced={result.count} totalValue={result.value} successRate={NaN} isCycleComplete={false} />);
+    expect(html).toContain("Buy fill executions (24h)"); expect(html).toContain(">3<"); expect(html).toContain("$107.00");
+  });
+  it("never uses the old order count or an observed incomplete lower bound as the headline", () => {
+    const legacy = { ...fillSummary, fill_count: undefined, orders_filled: 7 };
+    expect(buyFillSummary(legacy)).toEqual({ count: NaN, value: NaN });
+    expect(buyFillSummary({ ...fillSummary, ok:false, status:"partial", coverage:"incomplete", fill_count:null, observed_fill_count:13, total_value:null }))
+      .toEqual({ count: NaN, value: NaN });
   });
 });
 

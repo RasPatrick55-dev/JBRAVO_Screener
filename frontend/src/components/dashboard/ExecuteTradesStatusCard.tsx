@@ -162,8 +162,9 @@ export default function ExecuteTradesStatusCard({
 
       <div className="mt-4 rounded-xl border border-amber-400/40 bg-gradient-to-br from-emerald-500/20 via-lime-400/20 to-amber-400/30 p-2.5 shadow-[0_0_18px_-12px_rgba(251,191,36,0.5)] sm:p-3">
         <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-amber-200">
-          Buy fills (24h)
+          Buy fill executions (24h)
         </div>
+        <p className="mt-1 text-[10px] text-amber-200/80">Observed broker executions; late-reported fills may appear on refresh.</p>
         <div className="mt-2 grid grid-cols-2 gap-3">
           <div className="rounded-lg border border-amber-300/50 bg-slate-950/60 p-2 sm:p-2.5">
             <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-amber-200/80">
