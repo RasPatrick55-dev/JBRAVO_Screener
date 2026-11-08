@@ -1,3 +1,4 @@
+import { formatRunDate, formatMlTimestamp as formatDateTime, formatMlInstantDate as formatShortDate } from "../ml/displayValues";
 import CardShell from "./CardShell";
 import StatusBadge from "../badges/StatusBadge";
 import { useMlOverview } from "../ml/useMlOverview";
@@ -20,36 +21,6 @@ const stageDotTone: Record<StatusTone, string> = {
   neutral: "bg-slate-500",
 };
 
-const formatDateTime = (value: string | null | undefined) => {
-  if (!value) {
-    return "No data";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-};
-
-const formatShortDate = (value: string | null | undefined) => {
-  if (!value) {
-    return "No data";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
-};
-
 const formatCoverage = (pct: number | null | undefined, nonNull: number | null | undefined, total: number | null | undefined) => {
   if (typeof nonNull === "number" && typeof total === "number" && total > 0) {
     return `${nonNull}/${total}`;
@@ -63,7 +34,7 @@ const formatCoverage = (pct: number | null | undefined, nonNull: number | null |
 const formatAction = (value: string | null | undefined) => {
   const text = String(value || "").trim();
   if (!text) {
-    return "None";
+    return "Unknown";
   }
   return text.replace(/_/g, " ");
 };
@@ -97,18 +68,18 @@ export default function MLDailyImprovements({ onOpenPipeline }: MLDailyImproveme
     {
       label: "Champion",
       value:
-        champion?.present
-          ? `${formatAction(champion.calibration ?? "none")} / ${formatShortDate(champion.run_date)}`
+        champion?.present === true
+          ? `${formatAction(champion.calibration)} / ${formatRunDate(champion.run_date)}`
           : "No data",
       detail: champion?.feature_set ? `Feature set ${champion.feature_set}` : "Champion not available",
     },
     {
       label: "Action",
-      value: formatAction(monitor?.recommended_action ?? "none"),
+      value: formatAction(monitor?.recommended_action),
       detail:
-        data?.monitor?.guard_decision && data.monitor.guard_decision !== "allow"
+        data?.monitor?.guard_decision
           ? `Guard ${data.monitor.guard_decision}`
-          : "No remediation requested",
+          : monitor?.recommended_action === "none" ? "No remediation requested" : "Guard decision unknown",
     },
   ];
 
