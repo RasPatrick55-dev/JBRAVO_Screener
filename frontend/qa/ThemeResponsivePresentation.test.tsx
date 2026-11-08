@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import MonitoringPositionsCard from "../src/components/dashboard/MonitoringPositionsCard";
+import PythonAnywhereResources from "../src/components/dashboard/PythonAnywhereResources";
 import AccountOverview from "../src/screens/AccountOverview";
 import DashboardHealth from "../src/screens/DashboardHealth";
 import ExecuteTrades from "../src/screens/ExecuteTrades";
@@ -12,6 +13,11 @@ import TradesOverview from "../src/screens/TradesOverview";
 
 const css = readFileSync("src/styles/tailwind.css", "utf8");
 describe("dashboard theme and responsive presentation", () => {
+  it("wraps full provider provenance URLs without hiding their source", () => {
+    const source = "https://www.pythonanywhere.com/api/v0/user/RasPatrick/files/path/home/RasPatrick/jbravo_screener/reports/usage/snapshot.json";
+    const html = renderToStaticMarkup(<PythonAnywhereResources resources={[{ label: "File Storage", value: 66, source }]} />);
+    expect(html).toContain(`<p class="break-all">Source: ${source}</p>`);
+  });
   it.each([DashboardHealth, AccountOverview, TradesOverview, PositionsMonitoring, ExecuteTrades, ScreenerOverview, MLPipeline])(
     "%s inherits the document theme without a nested dark wrapper", (Screen) => {
       const html = renderToStaticMarkup(<Screen />);
