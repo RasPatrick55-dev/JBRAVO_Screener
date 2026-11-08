@@ -1,5 +1,5 @@
 import type { SourceResult } from "../ui/sourceState";
-import { evidenceCount, evidenceNumber, evidenceText, isDigest, isRecord, isStrategyId, isVersion } from "./strategyEvidence";
+import { evidenceCount, evidenceInstant, evidenceNumber, evidenceText, isDigest, isRecord, isStrategyId, isVersion } from "./strategyEvidence";
 
 export const STRATEGY_SCORECARD_PATH = "/api/strategies/scorecard";
 export type StrategyScorecardRow = ReturnType<typeof normalizeScorecardRow>;
@@ -65,10 +65,16 @@ export type ScorecardSource = Pick<SourceResult, "kind" | "payload"> & Partial<P
 export function strategyScorecardPresentation(result: ScorecardSource) {
   let rows: StrategyScorecardRow[] = [], error: string | null = null;
   const payload = result.payload;
-  const metadataOnly = result.kind === "unavailable" && result.freshness !== "stale" && payload?.status === "UNAVAILABLE"
-    && payload.source === "postgres" && payload.metric_basis === "STRATEGY_RESEARCH_SIMULATION" && Array.isArray(payload.rows);
-  if (result.kind !== "loading") {
-    if (!["ready", "empty", "partial"].includes(result.kind) && !metadataOnly) error = `Strategy scorecard ${result.kind}; current evidence is not established.`;
+  const initialRefresh = result.kind === "unavailable" && result.freshness !== "stale" && payload?.ok === false
+    && payload.status === "UNAVAILABLE" && payload.failure_code === "refresh_in_progress" && Array.isArray(payload.rows) && !payload.rows.length;
+  const retainedRefresh = payload?.stale === true && payload.refresh_in_progress === true && payload.status === "PARTIAL"
+    && payload.source === "postgres" && payload.metric_basis === "STRATEGY_RESEARCH_SIMULATION" && Array.isArray(payload.rows)
+    && ["ready", "partial", "empty", "stale", "unavailable"].includes(result.kind);
+  const metadataOnly = (result.kind === "unavailable" && result.freshness !== "stale" && payload?.status === "UNAVAILABLE"
+    && payload.source === "postgres" && payload.metric_basis === "STRATEGY_RESEARCH_SIMULATION" && Array.isArray(payload.rows))
+    || (retainedRefresh && payload?.ok !== true);
+  if (result.kind !== "loading" && !initialRefresh) {
+    if ((!["ready", "empty", "partial"].includes(result.kind) || payload?.stale === true) && !metadataOnly && !retainedRefresh) error = `Strategy scorecard ${payload?.stale === true ? "stale" : result.kind}; current evidence is not established.`;
     else if (!payload || (!metadataOnly && payload.ok !== true) || payload.metric_basis !== "STRATEGY_RESEARCH_SIMULATION" || !Array.isArray(payload.rows)
       || (!metadataOnly
       && !["COMPLETE", "PARTIAL", "EMPTY"].includes(evidenceText(payload.status)))) error = "Strategy-wide evidence is unavailable.";
@@ -77,18 +83,24 @@ export function strategyScorecardPresentation(result: ScorecardSource) {
         rows = payload.rows.map(raw => normalizeScorecardRow(metadataOnly && isRecord(raw)
           ? { ...raw, evidence_status: raw.evidence_status === "CONFLICT" ? "CONFLICT" : "UNAVAILABLE" } : raw));
         if (new Set(rows.map(row => row.key)).size !== rows.length) throw new Error("Duplicate strategy episodes cannot be presented as independent evidence.");
+        if (record(payload.coverage).selection === "LATEST_COMPLETED_ARCHIVE_PER_CONFIGURED_STRATEGY"
+          && new Set(rows.map(row => row.strategy_id)).size !== rows.length) throw new Error("Duplicate configured strategy snapshots are unavailable.");
         if (metadataOnly) error = "Strategy-wide performance is unavailable. Strategy identities and missing-evidence reasons are shown below.";
       } catch (cause) { rows = []; error = cause instanceof Error ? cause.message : "Strategy-wide evidence is unavailable."; }
     }
   }
-  const available = (!error || metadataOnly) && result.kind !== "loading";
+  const available = (!error || metadataOnly) && result.kind !== "loading" && !initialRefresh;
   const coverage = available ? record(payload?.coverage) : {};
-  return { rows, error, status: available ? evidenceText(payload?.status) : result.kind.toUpperCase(),
+  const seconds = (value: unknown) => {const parsed = evidenceNumber(value); return parsed !== null && parsed >= 0 ? parsed : null;};
+  return { rows, error, initialRefresh, retainedRefresh, status: available ? evidenceText(payload?.status) : result.kind.toUpperCase(),
     limitations: available ? strings(payload?.limitations) : [],
     actualPaperReason: available ? evidenceText(record(payload?.actual_paper).reason) : "",
+    response: { generated_at: available ? evidenceInstant(payload?.generated_at) : "",
+      cache_age_seconds: available ? seconds(payload?.cache_age_seconds) : null,
+      cache_ttl_seconds: available ? seconds(payload?.cache_ttl_seconds) : null },
     coverage: { selection: evidenceText(coverage.selection), truncated: coverage.truncated === true,
       max_groups: evidenceCount(coverage.max_groups), rejected_archives: evidenceCount(coverage.rejected_archives),
       verified_groups: evidenceCount(coverage.verified_groups), unavailable_groups: evidenceCount(coverage.unavailable_groups),
       reasons: strings(coverage.reasons) },
-    sync: result.kind === "loading" ? "loading" : error ? "error" : "ready" } as const;
+    sync: result.kind === "loading" || initialRefresh || retainedRefresh ? "loading" : error ? "error" : "ready" } as const;
 }

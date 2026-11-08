@@ -13,6 +13,14 @@ export function evidenceCount(value: unknown): number | null {
 }
 
 export const evidenceText = (value: unknown): string => typeof value === "string" ? value.trim() : "";
+export function evidenceInstant(value: unknown): string {
+  const text = evidenceText(value);
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(text)) return "";
+  const calendarDay = new Date(`${text.slice(0, 10)}T00:00:00Z`);
+  const instant = new Date(text);
+  return Number.isFinite(calendarDay.getTime()) && calendarDay.toISOString().slice(0, 10) === text.slice(0, 10)
+    && Number.isFinite(instant.getTime()) ? instant.toISOString() : "";
+}
 export const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 export const isDigest = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 export const isStrategyId = (value: unknown): value is string => typeof value === "string" && /^[a-z][a-z0-9_]{0,127}$/.test(value);

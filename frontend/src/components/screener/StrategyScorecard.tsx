@@ -4,7 +4,9 @@ import { useSource } from "../ui/sourceState";
 import { strategyLabel, formatMetricWinRate } from "./metricsRows";
 import { evidenceLabel, evidenceTone, formatRatio } from "./strategyEvidence";
 import { strategyScorecardPresentation, STRATEGY_SCORECARD_PATH, type StrategyScorecardRow, type ScorecardSource } from "./strategyScorecardRows";
-import { formatCurrency, formatNumber, formatSignedCurrency } from "./utils";
+import { formatCurrency, formatNumber, formatSignedCurrency, formatUtcDateTime } from "./utils";
+
+const formatSeconds = (value: number | null) => value === null ? "unknown" : `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 }).format(value)}s`;
 
 function ScorecardEvidence({ row }: { row: StrategyScorecardRow }) {
   return <details className="mt-1 text-[11px] font-normal text-secondary">
@@ -31,18 +33,19 @@ function ScorecardEvidence({ row }: { row: StrategyScorecardRow }) {
 }
 
 export function StrategyScorecardContent({ result, onRetry }: { result: ScorecardSource; onRetry?: () => void }) {
-  const { rows, error, status, limitations, actualPaperReason, coverage } = strategyScorecardPresentation(result);
-  const loading = result.kind === "loading";
+  const { rows, error, status, limitations, actualPaperReason, coverage, response, initialRefresh, retainedRefresh } = strategyScorecardPresentation(result);
+  const loading = result.kind === "loading" || initialRefresh;
   return <section className="min-w-0 rounded-2xl p-3 shadow-card jbravo-panel jbravo-panel-emerald sm:p-md" aria-label="Strategy scorecard">
     <header className="flex flex-wrap items-start justify-between gap-3">
       <h2 className="font-arimo text-xs font-semibold uppercase tracking-[0.08em] text-primary sm:text-sm">Strategy Scorecard</h2>
       <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase ring-1 ring-inset ${error ? "jbravo-status-error" : "text-secondary"}`}>
-        {loading ? "LOADING" : error ? "UNAVAILABLE" : status === "PARTIAL" ? "PARTIAL EVIDENCE" : "SIMULATED EVIDENCE"}
+        {initialRefresh ? "REFRESHING" : retainedRefresh ? "RETAINED EVIDENCE" : loading ? "LOADING" : error ? "UNAVAILABLE" : status === "PARTIAL" ? "PARTIAL EVIDENCE" : "SIMULATED EVIDENCE"}
       </span>
     </header>
-    <p className="mt-2 text-xs text-secondary">One row per strategy version and compatible episode. Completed signals are deduplicated within each episode. Separate rows may overlap and must not be summed or averaged.</p>
+    <p className="mt-2 text-xs text-secondary">Latest archived snapshot for each configured strategy. The displayed version and definition are historical evidence, not verified current deployment. Separate rows may overlap and must not be summed or averaged.</p>
     <p className="mt-1 text-xs text-secondary">Declared simulated portfolio signals only. This is not every qualifying opportunity, proof of a target win rate, or permission to trade.</p>
     <p className="mt-1 text-[11px] text-secondary">Closed-signal P&amp;L excludes cash dividends and open-position marks. Intervals describe USD expectancy, not win-rate certainty.</p>
+    {retainedRefresh ? <p role="status" className="mt-2 text-xs font-semibold text-secondary">Retained cached evidence. The source reported a refresh in progress; refresh completion is unverified.</p> : null}
     <div className="mt-3 rounded-xl p-3 jbravo-panel-inner jbravo-panel-inner-emerald">
       <p className="text-xs font-semibold text-primary">Actual paper performance: unavailable</p>
       <p className="mt-1 text-[11px] text-secondary">{actualPaperReason || "Complete actual paper cost accounting is not supplied by this research source."} Modeled costs below are separate from actual costs.</p>
@@ -54,6 +57,7 @@ export function StrategyScorecardContent({ result, onRetry }: { result: Scorecar
       {coverage.truncated ? ` Limited to ${formatNumber(coverage.max_groups)} groups; more history is not shown.` : ""}
       {coverage.rejected_archives !== null && coverage.rejected_archives > 0 ? ` Rejected archives: ${formatNumber(coverage.rejected_archives)}. ${coverage.reasons.map(evidenceLabel).join("; ")}.` : ""}
     </p> : null}
+    {!loading && coverage.selection ? <p className="mt-1 text-[11px] text-secondary">Response generated: {response.generated_at ? `${formatUtcDateTime(response.generated_at)} UTC` : "unknown"}; reported cache age / TTL: {formatSeconds(response.cache_age_seconds)} / {formatSeconds(response.cache_ttl_seconds)}. A page fetch may reuse this response; it does not mean the archive was checked again.</p> : null}
     {!loading && limitations.length ? <details className="mt-2 text-[11px] text-secondary"><summary className="cursor-pointer">Research limitations</summary><ul className="mt-1 space-y-1">{limitations.map((text, index) => <li key={index}>{text}</li>)}</ul></details> : null}
     <div className="mt-2 overflow-x-auto sm:mt-3" role="region" aria-label="Scrollable strategy scorecard" tabIndex={0}>
       <div className="max-h-[420px] min-w-[1200px] overflow-auto rounded-xl jbravo-panel-inner jbravo-panel-inner-emerald sm:max-h-[480px]">
@@ -66,7 +70,7 @@ export function StrategyScorecardContent({ result, onRetry }: { result: Scorecar
             </tr>
           </thead>
           <tbody>
-            {loading ? <tr><td colSpan={9} className="px-3 py-8 text-center text-sm text-secondary">Loading strategy-wide evidence...</td></tr> : null}
+            {loading ? <tr><td colSpan={9} className="px-3 py-8 text-center text-sm text-secondary">{initialRefresh ? "Evidence refresh in progress. No snapshot is available yet." : "Loading strategy-wide evidence..."}</td></tr> : null}
             {!loading && !error && !rows.length ? <tr><td colSpan={9} className="px-3 py-8 text-center text-sm text-secondary">No strategy episodes are available. This is not a zero-performance result.</td></tr> : null}
             {rows.map(row => <tr key={row.key} className="border-b border-slate-200/70 text-xs transition-colors hover:bg-sky-100/35 dark:border-slate-700/70 dark:hover:bg-slate-800/45 sm:text-sm">
               <th scope="row" className="px-2 py-2.5 text-left font-semibold text-primary">

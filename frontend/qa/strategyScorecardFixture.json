@@ -12,7 +12,7 @@
     "max_groups": 24,
     "reasons": [],
     "rejected_archives": 0,
-    "selection": "LATEST_ARCHIVE_PER_STRATEGY_VERSION_DEFINITION_EPISODE",
+    "selection": "LATEST_COMPLETED_ARCHIVE_PER_CONFIGURED_STRATEGY",
     "truncated": false,
     "unavailable_groups": 1,
     "verified_groups": 1

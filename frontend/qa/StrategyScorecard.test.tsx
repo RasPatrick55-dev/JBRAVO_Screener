@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StrategyScorecardContent } from "../src/components/screener/StrategyScorecard";
 import { strategyScorecardPresentation, STRATEGY_SCORECARD_PATH, type ScorecardSource } from "../src/components/screener/strategyScorecardRows";
-import { watchSource, type SourceKind, type SourceResult } from "../src/components/ui/sourceState";
+import { sourceKind, watchSource, type SourceKind, type SourceResult } from "../src/components/ui/sourceState";
 import generatedFixture from "./strategyScorecardFixture.json";
 
 // Synthetic API-contract example. These values are not the user's strategy results.
@@ -21,13 +21,64 @@ function row(): Record<string, any> {
 function payload(): Record<string, any> {
   return {ok:true,status:"COMPLETE",source:"postgres",metric_basis:"STRATEGY_RESEARCH_SIMULATION",rows:[row()],rows_final:1,
     limitations:["Synthetic research test only."],actual_paper:{status:"UNAVAILABLE",net_metrics_available:false,reason:"Actual costs have not been fully reconciled."},
-    coverage:{selection:"LATEST_ARCHIVE_PER_STRATEGY_VERSION_DEFINITION_EPISODE",max_groups:24,truncated:false,rejected_archives:0,reasons:[],verified_groups:1,unavailable_groups:0},
+    coverage:{selection:"LATEST_COMPLETED_ARCHIVE_PER_CONFIGURED_STRATEGY",max_groups:24,truncated:false,rejected_archives:0,reasons:[],verified_groups:1,unavailable_groups:0},
     research_qualified:false,order_submission_authorized:false};
 }
 const view = (data: Record<string, unknown> | null, kind: SourceKind = "ready", freshness?: ScorecardSource["freshness"]) => strategyScorecardPresentation({payload:data,kind,freshness});
 const html = (data: Record<string, unknown> | null, kind: SourceKind = "ready", freshness?: ScorecardSource["freshness"]) => renderToStaticMarkup(<StrategyScorecardContent result={{payload:data,kind,freshness}}/>);
 
 describe("strategy-wide scorecard evidence", () => {
+  it("describes the latest configured-strategy snapshots and separates response caching from historical evidence", () => {
+    expect(generatedFixture.coverage.selection).toBe("LATEST_COMPLETED_ARCHIVE_PER_CONFIGURED_STRATEGY");
+    const markup=html(generatedFixture);
+    for(const text of ["Latest archived snapshot for each configured strategy", "historical evidence, not verified current deployment", "Response generated: 11/08/2026 00:00:00 UTC", "reported cache age / TTL: 0s / 900s", "does not mean the archive was checked again"]) expect(markup).toContain(text);
+    expect(markup).not.toContain("One row per strategy version");
+  });
+  it("retains the original generated time when a new page fetch returns an older cached response", () => {
+    const data={...generatedFixture,cache_age_seconds:120.375};
+    const output=view(data);expect(output.response.generated_at).toBe("2026-11-08T00:00:00.000Z");
+    expect(output.response.cache_age_seconds).toBe(120.375);expect(html(data)).toContain("120.375s / 900s");
+    expect(html(data)).toContain("Archive as of: 2026-11-06 (2 calendar days old)");
+  });
+  it.each([
+    {generated_at:null,cache_age_seconds:null,cache_ttl_seconds:null},
+    {generated_at:"2026-11-08T00:00:00",cache_age_seconds:true,cache_ttl_seconds:false},
+    {generated_at:"2026-02-30T00:00:00Z",cache_age_seconds:-1,cache_ttl_seconds:Infinity},
+    {generated_at:"bad",cache_age_seconds:" ",cache_ttl_seconds:[]},
+  ])("keeps invalid or missing response/cache metadata unknown: %j", patch => {
+    const data={...generatedFixture,...patch},output=view(data);
+    expect(output.response).toEqual({generated_at:"",cache_age_seconds:null,cache_ttl_seconds:null});
+    expect(html(data)).toContain("Response generated: unknown; reported cache age / TTL: unknown / unknown");
+    expect(html(data)).not.toContain("1970");
+  });
+  it("renders the initial api_payload refresh-without-cache shape as pending, not completed empty", () => {
+    const data={ok:false,status:"UNAVAILABLE",rows:[],rows_final:0,failure_code:"refresh_in_progress",cache_age_seconds:null,research_qualified:false,order_submission_authorized:false};
+    const output=view(data,sourceKind(data),"current"),markup=html(data,sourceKind(data),"current");
+    expect(output.initialRefresh).toBe(true);expect(output.sync).toBe("loading");expect(output.error).toBeNull();
+    expect(markup).toContain("REFRESHING");expect(markup).toContain("Evidence refresh in progress. No snapshot is available yet.");
+    expect(markup).not.toContain("No strategy episodes are available");expect(markup).not.toContain("$0.00");
+    expect(view(data,"unavailable","stale").initialRefresh).toBe(false);
+  });
+  it("labels the api_payload expired-cache refresh shape as retained with its original generation time", () => {
+    const data={...generatedFixture,status:"PARTIAL",cache_age_seconds:901.25,refresh_in_progress:true,stale:true};
+    expect(sourceKind(data)).toBe("stale");
+    const output=view(data,sourceKind(data),"stale"),markup=html(data,sourceKind(data),"stale");
+    expect(output.retainedRefresh).toBe(true);expect(output.sync).toBe("loading");expect(output.rows).toHaveLength(2);
+    expect(markup).toContain("RETAINED EVIDENCE");expect(markup).toContain("The source reported a refresh in progress; refresh completion is unverified");
+    expect(markup).toContain("Response generated: 11/08/2026 00:00:00 UTC");expect(markup).toContain("901.25s / 900s");expect(markup).toContain("33.33%");
+    expect(html(data,"ready","current")).toContain("RETAINED EVIDENCE");
+  });
+  it("does not relabel a backend-stale response as fresh just because HTTP succeeded", () => {
+    const data={...generatedFixture,stale:true};
+    const output=view(data,"ready","current");expect(output.rows).toHaveLength(0);expect(output.error).toContain("stale");
+    expect(html(data,"ready","current")).not.toContain("33.33%");
+  });
+  it("retains metadata only when the expired cached response was already unavailable", () => {
+    const data={...generatedFixture,ok:false,status:"PARTIAL",cache_age_seconds:61,cache_ttl_seconds:60,stale:true,refresh_in_progress:true,
+      rows:generatedFixture.rows.filter(row=>row.evidence_status==="UNAVAILABLE")};
+    const output=view(data,sourceKind(data),"stale");expect(output.retainedRefresh).toBe(true);expect(output.rows[0].closed_signals).toBeNull();
+    expect(html(data,sourceKind(data),"stale")).toContain("RETAINED EVIDENCE");expect(html(data,sourceKind(data),"stale")).not.toContain("33.33%");
+  });
   it("allows the bounded one-minute refresh without expiring at the instant polling starts", async () => {
     vi.useFakeTimers();const events:SourceResult[]=[];let complete!: (value:Response)=>void;
     const pending=new Promise<Response>(resolve=>{complete=resolve;});
@@ -49,7 +100,8 @@ describe("strategy-wide scorecard evidence", () => {
     const missing=output.rows.find(row=>row.evidence_status==="UNAVAILABLE")!;expect(missing.closed_signals).toBeNull();expect(missing.strategy_version).toBe("");
     const markup=html(generatedFixture);for(const text of ["33.33%","95% descriptive interval","version unknown","Strategy-wide performance unavailable","completed archive unavailable","Archive as of: 2026-11-06 (2 calendar days old)","Latest attempt: not evaluated","Warning: few signal week clusters. Uncertainty may be unstable."]) expect(markup).toContain(text);
     for(const text of ["Capital: $100,000.00; allocation: 5%; max positions: 4; top N: 3", "Modeled fee / fill: $1.00; slippage: 5.00 bps", "Coverage: complete; evaluated: 5; excluded: 2; discovered: --"]) expect(markup).toContain(text);
-  });  it("retains missing enabled strategies with unknown version and dates rather than fabricating an episode", () => {
+  });
+  it("retains missing enabled strategies with unknown version and dates rather than fabricating an episode", () => {
     const data=payload();data.rows=[{...row(),evidence_status:"UNAVAILABLE",strategy_version:null,definition_sha256:null,episode_id:null,as_of:null,episode:null}];
     const output=view(data);expect(output.error).toBeNull();expect(output.rows[0].closed_signals).toBeNull();
     const markup=html(data);expect(markup).toContain("version unknown");expect(markup).toContain("Archive as of: unknown");expect(markup).toContain("Latest attempt: unknown");
@@ -66,8 +118,8 @@ describe("strategy-wide scorecard evidence", () => {
     expect(view(payload()).rows[0].evidence.duplicate_observations).toBe(3);
   });
   it("does not average, sum, or merge overlapping episodes, versions or strategy definitions", () => {
-    const data=payload(); data.rows.push({...row(),episode_id:"c".repeat(64),win_rate_pct:0.5,expectancy_net_per_signal:-35});
-    data.rows.push({...row(),strategy_version:"2",definition_sha256:"d".repeat(64),win_rate_pct:30});
+    const data=payload(); data.rows.push({...row(),strategy_id:"second_strategy_v1",episode_id:"c".repeat(64),win_rate_pct:0.5,expectancy_net_per_signal:-35});
+    data.rows.push({...row(),strategy_id:"third_strategy_v2",strategy_version:"2",definition_sha256:"d".repeat(64),win_rate_pct:30});
     const output=view(data); expect(output.rows).toHaveLength(3); expect(output.rows.map(r=>r.win_rate_pct)).toEqual([50,0.5,30]);
     const markup=html(data); expect(markup).toContain("must not be summed or averaged"); expect(markup).toContain("0.5%");
     expect(markup).not.toContain("26.83%");
@@ -75,6 +127,10 @@ describe("strategy-wide scorecard evidence", () => {
   it("rejects duplicate episode identities rather than rendering repeat statistics", () => {
     const data=payload(); data.rows.push(row()); const output=view(data);
     expect(output.error).toContain("Duplicate strategy episodes"); expect(output.rows).toHaveLength(0);
+  });
+  it("rejects multiple historical episodes for the same configured strategy under the latest-only contract", () => {
+    const data=payload();data.rows.push({...row(),episode_id:"c".repeat(64)});
+    expect(view(data).error).toContain("Duplicate configured strategy snapshots");expect(view(data).rows).toHaveLength(0);
   });
   it.each(["UNAVAILABLE","CONFLICT","PARTIAL","UNRECOGNIZED"])("suppresses numerical performance on %s rows even if stale numeric values leak in", evidence_status => {
     const data=payload(); data.rows[0].evidence_status=evidence_status; data.status="PARTIAL";
