@@ -6,6 +6,7 @@ import DashboardHealth, { buildLogEntries } from "../src/screens/DashboardHealth
 import LatestLogsTable from "../src/components/dashboard/LatestLogsTable";
 import PipelineStatusCard from "../src/components/dashboard/PipelineStatusCard";
 import { watchSource, type SourceResult } from "../src/components/ui/sourceState";
+import * as sourceState from "../src/components/ui/sourceState";
 
 const response = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), { status });
 const source = { source: "strategy_monitor_boot.py", text: 'Nov 8 19:43:42 {"finished_at":"2026-11-08T19:43:42.729306+00:00"}',
@@ -13,7 +14,7 @@ const source = { source: "strategy_monitor_boot.py", text: 'Nov 8 19:43:42 {"fin
   observed_at: "2026-11-08T19:44:00Z", latest_event_at: "2026-11-08T19:43:42.729306+00:00" };
 const good = () => response({ ok: true, source: "pythonanywhere", sources: [source] });
 const settle = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("provider-only log evidence lifecycle", () => {
   it("starts loading, tolerates a slow provider, and never requests local files", async () => {
@@ -73,6 +74,18 @@ describe("provider-only log evidence lifecycle", () => {
 });
 
 describe("honest initial dashboard state", () => {
+  it.each(["logs/task.log", "pythonanywhere", undefined])("does not infer process completion from an unbound legacy task envelope: %s", source => {
+    const timestamp = new Date(Date.now() - 1000).toISOString();
+    vi.spyOn(sourceState, "useSource").mockImplementation(path => ({
+      kind: "ready", validity: "ready", freshness: "current", receivedAt: timestamp,
+      payload: path === "/api/pipeline/task" || path === "/api/execute/task"
+        ? { ok: true, source, rc: 0, status: "COMPLETED", started_utc: timestamp, finished_utc: timestamp,
+          stage_rcs: { screener: 0, backtest: 0, metrics: 0 } } : null,
+    }));
+    const html = renderToStaticMarkup(<DashboardHealth />);
+    expect(html).not.toContain(">COMPLETED<"); expect(html).not.toContain(">COMPLETE<");
+    expect(html).toContain("UNAVAILABLE");
+  });
   it("does not report overdue, pending stages, or no activity before reads complete", () => {
     const html = renderToStaticMarkup(<DashboardHealth />);
     expect(html).toContain("LOADING"); expect(html).toContain("Loading PythonAnywhere task logs");

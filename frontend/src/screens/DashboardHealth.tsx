@@ -705,33 +705,21 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   const processStatusCards = useMemo<ProcessStatusCardsProps>(() => {
     const currentPipeline = isCurrentReceipt(pipelineTaskRun);
     const currentExecutor = isCurrentReceipt(executeTaskRun);
-    const pipelineState = receiptStatus(pipelineTaskRun);
-    const executorState = receiptStatus(executeTaskRun);
-    const pipelineStart = pipelineTaskRun?.started_utc ?? null;
-    const pipelineEnd = pipelineTaskRun?.finished_utc ?? null;
-    const pipelineDuration = pipelineTaskRun?.duration_seconds != null
+    const pipelineState = receiptStatus(pipelineTaskRun) ?? "UNAVAILABLE";
+    const executorState = receiptStatus(executeTaskRun) ?? "UNAVAILABLE";
+    const pipelineStart = currentPipeline ? pipelineTaskRun?.started_utc ?? null : null;
+    const pipelineEnd = currentPipeline ? pipelineTaskRun?.finished_utc ?? null : null;
+    const pipelineDuration = currentPipeline && pipelineTaskRun?.duration_seconds != null
       ? formatDurationSeconds(pipelineTaskRun.duration_seconds)
       : formatDuration(pipelineStart, pipelineEnd);
-    const pipelineEndDate = pipelineEnd ? new Date(pipelineEnd) : null;
-    const pipelineRecent =
-      pipelineEndDate && !Number.isNaN(pipelineEndDate.getTime())
-        ? Date.now() - pipelineEndDate.getTime() <= 24 * 60 * 60 * 1000
-        : false;
-    const pipelineRc = pipelineTaskRun?.rc;
-    const pipelineLive = pipelineState ? pipelineState === "COMPLETED" : pipelineRecent && pipelineRc === 0;
-    const executeStart = currentExecutor ? executeTaskRun?.started_utc ?? null : executeTaskRun?.started_utc ?? executeSnapshot?.last_execution ?? null;
-    const executeEnd =
-      currentExecutor ? executeTaskRun?.finished_utc ?? null : executeTaskRun?.finished_utc ?? executeSnapshot?.ny_now ?? executeSnapshot?.last_execution ?? null;
+    const pipelineLive = pipelineState === "COMPLETED";
+    const executeStart = currentExecutor ? executeTaskRun?.started_utc ?? null : null;
+    const executeEnd = currentExecutor ? executeTaskRun?.finished_utc ?? null : null;
     const executeDuration =
-      executeTaskRun?.duration_seconds !== null && executeTaskRun?.duration_seconds !== undefined
+      currentExecutor && executeTaskRun?.duration_seconds !== null && executeTaskRun?.duration_seconds !== undefined
         ? formatDurationSeconds(executeTaskRun.duration_seconds)
         : formatDuration(executeStart, executeEnd);
-    const executeEndDate = executeEnd ? new Date(executeEnd) : null;
-    const executeRecent =
-      executeEndDate && !Number.isNaN(executeEndDate.getTime())
-        ? Date.now() - executeEndDate.getTime() <= 24 * 60 * 60 * 1000
-        : false;
-    const executeCycleComplete = executorState ? executorState === "COMPLETED" : executeRecent && executeTaskRun?.rc === 0;
+    const executeCycleComplete = executorState === "COMPLETED";
 
     const ordersSubmitted = executeSnapshot?.orders_submitted;
     const ordersFilled = executeSnapshot?.orders_filled;
@@ -755,9 +743,9 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
           duration: pipelineDuration,
         },
         subprocess: {
-          screener: statusFromPipelineRc(pipelineTaskRun?.stage_rcs?.screener ?? null),
-          backTester: statusFromPipelineRc(pipelineTaskRun?.stage_rcs?.backtest ?? null),
-          metrics: statusFromPipelineRc(pipelineTaskRun?.stage_rcs?.metrics ?? null),
+          screener: statusFromPipelineRc(currentPipeline && pipelineTaskRun?.ok === true ? pipelineTaskRun.stage_rcs?.screener ?? null : null),
+          backTester: statusFromPipelineRc(currentPipeline && pipelineTaskRun?.ok === true ? pipelineTaskRun.stage_rcs?.backtest ?? null : null),
+          metrics: statusFromPipelineRc(currentPipeline && pipelineTaskRun?.ok === true ? pipelineTaskRun.stage_rcs?.metrics ?? null : null),
         },
         isLive: pipelineLive,
         status: pipelineState,
