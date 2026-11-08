@@ -280,9 +280,11 @@ def test_database_fallback_preserves_recorded_status_and_lineage(trailing):
     ns = helpers(
         *STATUS_HELPERS,
         reader,
+        "_execute_iso_utc",
         "_execute_side_label",
         "_execute_type_label",
         _db_fetch_all=Mock(return_value=records),
+        _db_fetch_all_strict=Mock(return_value=records),
         _coerce_json_mapping=lambda value: value,
         _execute_trail_text=lambda raw: "3%",
         _execute_stop_price_from_raw=lambda raw: None,

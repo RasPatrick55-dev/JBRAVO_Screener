@@ -1,7 +1,10 @@
+import { eventFreshness, LogSourceReceipt, type LogReceipt } from "./logEvidence";
 import { useMemo, useState } from "react";
 import type { LogEntry } from "../../types/ui";
 
 interface LatestLogsRow {
+  provenanceLabel?: string;
+  eventTimestamp?: string | null;
   dateTime: string;
   script: string;
   text: string;
@@ -10,6 +13,7 @@ interface LatestLogsRow {
 
 interface LatestLogsTableProps {
   title?: string;
+  receipts?: LogReceipt[];
   rows: LatestLogsRow[];
   enableFilter?: boolean;
 }
@@ -17,6 +21,7 @@ interface LatestLogsTableProps {
 export default function LatestLogsTable({
   title = "Latest Logs",
   rows,
+  receipts = [],
   enableFilter = true,
 }: LatestLogsTableProps) {
   const levelTone: Record<NonNullable<LatestLogsRow["level"]>, string> = {
@@ -58,7 +63,7 @@ export default function LatestLogsTable({
             </div>
             <div className="flex flex-col">
               <h3 className="text-[15px] font-bold leading-[22px] text-white">{title}</h3>
-              <span className="text-[11px] text-slate-200/70">Recent system events</span>
+              <span className="text-[11px] text-slate-200/70">Task output · simulations and operations · not broker fills</span>
             </div>
           </div>
           {enableFilter ? (
@@ -80,6 +85,7 @@ export default function LatestLogsTable({
         </div>
       </div>
 
+      {receipts.map((receipt, index) => <LogSourceReceipt key={index} receipt={receipt} />)}
       <div className="mt-4 max-h-[360px] overflow-x-hidden overflow-y-auto rounded-xl border border-slate-500/30 bg-slate-950/60 p-2.5 shadow-[0_0_18px_-12px_rgba(148,163,184,0.35)] sm:p-3">
         <table className="w-full table-fixed font-cousine text-sm text-slate-200">
           <thead className="hidden text-left text-[11px] font-bold uppercase tracking-[0.08em] text-slate-200/70 sm:table-header-group">
@@ -101,6 +107,7 @@ export default function LatestLogsTable({
                       Date &amp; Time
                     </span>
                     {row.dateTime}
+                    {row.eventTimestamp !== undefined ? <span className="block text-[10px]">{eventFreshness(row.eventTimestamp)}</span> : null}
                   </td>
                   <td className="block pb-3 text-[12px] text-slate-300 sm:table-cell sm:py-2 sm:pr-4 sm:align-top">
                     <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 sm:hidden">
@@ -114,6 +121,7 @@ export default function LatestLogsTable({
                     <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 sm:hidden">
                       Log Text
                     </span>
+                    <span className="block text-[10px] text-amber-200">{row.provenanceLabel ?? "Unclassified · not broker evidence"}</span>
                     <div className="flex flex-wrap items-start gap-2">
                       {row.level ? (
                         <span

@@ -43,6 +43,8 @@ export interface SystemStatusItem {
 }
 
 export interface LogEntry {
+  provenanceLabel?: string;
+  eventTimestamp?: string | null;
   time: string;
   level: "INFO" | "WARN" | "ERROR" | "SUCCESS";
   message: string;

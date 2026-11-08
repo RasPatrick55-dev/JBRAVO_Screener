@@ -5842,7 +5842,9 @@ def api_pythonanywhere_tasks():
 
 @server.route("/api/pythonanywhere/logs")
 def api_pythonanywhere_logs():
-    sources = _pythonanywhere_log_sources()
+    from dashboards.log_reporting import annotate_log_text
+    sources = [dict(item, **annotate_log_text(item["text"], item["source"]))
+               for item in _pythonanywhere_log_sources()]
     return jsonify({"ok": bool(sources), "sources": sources, "source": "pythonanywhere"})
 
 
@@ -7583,51 +7585,57 @@ def _execute_filter_order_rows(
 
 
 def _execute_trailing_from_db(fetch_limit: int) -> tuple[list[dict[str, Any]], str]:
-    rows = _db_fetch_all(
-        """
-        SELECT DISTINCT ON (
-            COALESCE(
-                NULLIF(order_id, ''),
-                symbol || ':' || COALESCE(event_time::text, '')
+    try:
+        rows = _db_fetch_all_strict(
+            """
+            WITH trailing AS (
+                SELECT DISTINCT ON (COALESCE(NULLIF(order_id, ''),
+                    symbol || ':' || COALESCE(event_time::text, ''))) *
+                FROM order_events
+                WHERE event_type ILIKE 'TRAIL%%'
+                    OR lower(COALESCE(raw->>'type', raw->>'order_type', ''))
+                        IN ('trailing_stop', 'ordertype.trailing_stop')
+                    OR COALESCE(raw, '{}'::jsonb)->>'trail_percent' IS NOT NULL
+                    OR COALESCE(raw, '{}'::jsonb)->>'trail_pct' IS NOT NULL
+                    OR COALESCE(raw, '{}'::jsonb)->>'trailPercent' IS NOT NULL
+                    OR COALESCE(raw, '{}'::jsonb)->>'trail_price' IS NOT NULL
+                    OR COALESCE(raw, '{}'::jsonb)->>'trailPrice' IS NOT NULL
+                ORDER BY COALESCE(NULLIF(order_id, ''),
+                    symbol || ':' || COALESCE(event_time::text, '')),
+                    event_time DESC NULLS LAST, event_id DESC
             )
+            SELECT t.symbol, t.qty, t.order_id,
+                CASE WHEN latest.event_id IS NOT NULL THEN latest.status ELSE t.status END AS status,
+                CASE WHEN latest.event_id IS NOT NULL THEN latest.event_type ELSE t.event_type END AS event_type,
+                COALESCE(latest.event_time, t.event_time) AS event_time,
+                t.raw, CASE WHEN latest.event_id IS NOT NULL THEN latest.raw ELSE t.raw END AS lifecycle_raw,
+                t.event_time AS terms_observed_at
+            FROM trailing t
+            LEFT JOIN LATERAL (
+                SELECT event_id, status, event_type, event_time, raw
+                FROM order_events e
+                WHERE NULLIF(t.order_id, '') IS NOT NULL AND e.order_id = t.order_id
+                ORDER BY event_time DESC NULLS LAST, event_id DESC
+                LIMIT 1
+            ) latest ON TRUE
+            ORDER BY COALESCE(latest.event_time, t.event_time) DESC NULLS LAST, t.order_id
+            LIMIT %(limit)s
+            """,
+            {"limit": int(fetch_limit)},
         )
-            symbol,
-            qty,
-            order_id,
-            status,
-            event_type,
-            event_time,
-            raw
-        FROM order_events
-        WHERE (
-            event_type ILIKE 'TRAIL%%'
-            OR COALESCE(raw, '{}'::jsonb) ? 'trail_percent'
-            OR COALESCE(raw, '{}'::jsonb) ? 'trail_pct'
-            OR COALESCE(raw, '{}'::jsonb) ? 'trailPercent'
-            OR COALESCE(raw, '{}'::jsonb) ? 'trail_price'
-            OR COALESCE(raw, '{}'::jsonb) ? 'trailPrice'
-            OR COALESCE(raw, '{}'::jsonb) ? 'stop_price'
-            OR COALESCE(raw, '{}'::jsonb) ? 'stopPrice'
-        )
-        ORDER BY
-            COALESCE(
-                NULLIF(order_id, ''),
-                symbol || ':' || COALESCE(event_time::text, '')
-            ),
-            event_time DESC NULLS LAST,
-            event_id DESC
-        LIMIT %(limit)s
-        """,
-        {"limit": int(fetch_limit)},
-    )
+    except Exception:
+        return [], "postgres:order_events_unavailable"
     if not rows:
         return [], "postgres:order_events_empty"
 
     output: list[dict[str, Any]] = []
     for row in rows:
         raw_payload = _coerce_json_mapping(row.get("raw"))
+        lifecycle = _coerce_json_mapping(row.get("lifecycle_raw", row.get("raw")))
+        identity = _order_identity(lifecycle, order_id=row.get("order_id"), status=row.get("status"))
+        identity["raw_status"] = str(row.get("status") or lifecycle.get("status") or "") or None
         event_type = str(row.get("event_type") or "").strip().upper()
-        status_bucket = _execute_trailing_status_bucket(str(row.get("status") or ""), event_type)
+        status_bucket = _execute_order_status_bucket(identity["raw_status"] or "", event_type)
         ts_dt = _coerce_datetime_utc(row.get("event_time"))
 
         output.append(
@@ -7637,7 +7645,10 @@ def _execute_trailing_from_db(fetch_limit: int) -> tuple[list[dict[str, Any]], s
                 "trail": _execute_trail_text(raw_payload),
                 "stop_price": _execute_stop_price_from_raw(raw_payload),
                 "status": status_bucket,
-                **_order_identity(raw_payload, order_id=row.get("order_id"), status=row.get("status")),
+                **identity,
+                "observation_source": "postgres_history",
+                "current_protection": "unverified",
+                "terms_observed_at": _execute_iso_utc(_coerce_datetime_utc(row.get("terms_observed_at"))),
                 "parent_leg": _execute_parent_leg(
                     raw_payload, str(row.get("order_id") or "").strip()
                 ),
@@ -7655,7 +7666,7 @@ def _execute_trailing_from_db(fetch_limit: int) -> tuple[list[dict[str, Any]], s
 
 
 def _execute_trailing_from_alpaca(
-    *, fetch_limit: int, status_scope: str
+    *, fetch_limit: int, status_scope: str, include_lifecycle: bool = False
 ) -> tuple[list[dict[str, Any]], str]:
     if not _account_api_is_paper_mode():
         return [], "paper_mode_required"
@@ -7679,7 +7690,7 @@ def _execute_trailing_from_alpaca(
     elif isinstance(payload, Mapping) and isinstance(payload.get("orders"), list):
         raw_orders = payload.get("orders", [])
     else:
-        raw_orders = []
+        return [], "alpaca:invalid_orders_payload"
 
     rows: list[dict[str, Any]] = []
     for raw in raw_orders:
@@ -7691,7 +7702,7 @@ def _execute_trailing_from_alpaca(
             or raw.get("trail_pct") not in (None, "")
             or raw.get("trail_price") not in (None, "")
         )
-        if "trailing" not in type_text and not has_trail_fields:
+        if not include_lifecycle and "trailing" not in type_text and not has_trail_fields:
             continue
 
         ts_raw = (
@@ -7702,10 +7713,14 @@ def _execute_trailing_from_alpaca(
         )
         ts_dt = _coerce_datetime_utc(ts_raw)
         event_type = _execute_type_label(raw.get("type"), "TRAIL_SUBMIT", raw)
-        status_bucket = _execute_trailing_status_bucket(str(raw.get("status") or ""), event_type)
+        status_bucket = _execute_order_status_bucket(str(raw.get("status") or ""), "")
 
         rows.append(
             {
+                "_is_trailing": "trailing" in type_text or has_trail_fields,
+                "observation_source": "broker_response",
+                "current_protection": "unverified",
+                "terms_observed_at": _execute_iso_utc(ts_dt),
                 "symbol": str(raw.get("symbol") or "").strip().upper(),
                 "qty": _to_float(raw.get("qty") or raw.get("filled_qty")),
                 "trail": _execute_trail_text(raw),
@@ -7777,6 +7792,9 @@ def _execute_filter_trailing_rows(
                 "replaced_by": row.get("replaced_by"),
                 "parent_leg": row.get("parent_leg") or "--",
                 "order_id": row.get("order_id"),
+                "observation_source": row.get("observation_source", "unknown"),
+                "current_protection": "unverified",
+                "terms_observed_at": row.get("terms_observed_at"),
             }
         )
         if len(output) >= max(1, int(limit)):
@@ -8157,21 +8175,53 @@ def _execute_orders_payload(
 def _execute_trailing_stops_payload(
     *, status_scope: str, limit: int, query: str, lsx: str
 ) -> dict[str, Any]:
-    fetch_limit = max(int(limit) * 8, 320)
-
+    fetch_limit = min(max(int(limit) * 8, 320), 500)
     db_rows, db_detail = _execute_trailing_from_db(fetch_limit)
-    if db_rows:
-        source = "postgres"
-        source_detail = db_detail
-        staged_rows = db_rows
-    else:
-        alpaca_rows, alpaca_detail = _execute_trailing_from_alpaca(
-            fetch_limit=fetch_limit,
-            status_scope=status_scope,
-        )
-        staged_rows = alpaca_rows
-        source = "alpaca" if alpaca_rows else "none"
-        source_detail = f"{db_detail};{alpaca_detail}"
+    # Query all statuses: an open-only page cannot reconcile canceled history.
+    # Absence from this bounded page must never imply a state change.
+    broker_rows, broker_detail = _execute_trailing_from_alpaca(
+        fetch_limit=fetch_limit, status_scope="all", include_lifecycle=True
+    )
+    by_id = {}
+    epoch = datetime.fromtimestamp(0, tz=timezone.utc)
+    for row in broker_rows:
+        order_id = str(row.get("order_id") or "")
+        if order_id and (order_id not in by_id or
+                (row.get("_ts") or epoch) > (by_id[order_id].get("_ts") or epoch)):
+            by_id[order_id] = row
+        elif order_id and (row.get("_ts") or epoch) == (by_id[order_id].get("_ts") or epoch):
+            previous = by_id[order_id]
+            if any(previous.get(field) != row.get(field)
+                    for field in ("status", "replaces", "replaced_by")):
+                by_id[order_id] = dict(previous, status="UNKNOWN",
+                    raw_status="conflicting_equal_time_observations",
+                    replaces=None, replaced_by=None)
+    staged_rows = []
+    seen = set()
+    for historical in db_rows:
+        row = dict(historical)
+        order_id = str(row.get("order_id") or "")
+        current = by_id.get(order_id)
+        if current is not None and (current.get("_ts") is not None and
+                (row.get("_ts") is None or current["_ts"] >= row["_ts"])):
+            # At equal event time the direct broker response takes precedence.
+            # Keep historical terms separately dated; lifecycle comes from broker.
+            for field in ("status", "raw_status", "replaces", "replaced_by", "_ts"):
+                row[field] = current.get(field)
+            row["observation_source"] = "broker_response"
+            if current.get("_is_trailing"):
+                for field in ("trail", "stop_price", "qty", "terms_observed_at"):
+                    row[field] = current.get(field)
+        row["current_protection"] = "unverified"
+        staged_rows.append(row)
+        if order_id:
+            seen.add(order_id)
+    staged_rows.extend(row for order_id, row in by_id.items()
+        if row.get("_is_trailing") and order_id not in seen)
+    staged_rows.sort(key=lambda row: row.get("_ts") or
+        datetime.fromtimestamp(0, tz=timezone.utc), reverse=True)
+    source = "alpaca+postgres_history" if broker_rows else ("postgres_history" if db_rows else "none")
+    source_detail = f"{db_detail};{broker_detail}"
 
     rows = _execute_filter_trailing_rows(
         staged_rows,
@@ -8182,7 +8232,16 @@ def _execute_trailing_stops_payload(
     )
 
     return {
-        "ok": bool(rows),
+        "ok": bool(rows) or broker_detail == "alpaca:/v2/orders",
+        "partial": db_detail == "postgres:order_events_unavailable" or broker_detail != "alpaca:/v2/orders",
+        "coverage": "bounded_page_not_complete_inventory",
+        "broker_query_scope": "all",
+        "broker_page_limit": fetch_limit,
+        "broker_rows_returned": len(broker_rows),
+        "db_row_limit": fetch_limit,
+        "display_limit": limit,
+        "fetched_at_utc": datetime.now(timezone.utc).isoformat(),
+        "current_protection": "unverified",
         "rows": rows,
         "source": source,
         "source_detail": source_detail,
@@ -9997,6 +10056,7 @@ def _screener_filter_log_rows(
                 "ts_utc": row.get("ts_utc"),
                 "level": level,
                 "message": str(row.get("message") or "").strip(),
+                "source": row.get("source"),
                 "_ts": ts_value,
             }
         )
@@ -10138,6 +10198,7 @@ def _screener_logs_from_files(stage: str, fetch_limit: int) -> tuple[list[dict[s
             parsed = _screener_parse_log_line(line)
             if not parsed:
                 continue
+            parsed["source"] = source
             parsed_rows.append(parsed)
 
     if not parsed_rows:
@@ -10308,6 +10369,14 @@ def api_screener_logs():
         source = "postgres" if db_rows else "none"
         source_detail = db_source_detail if db_rows else f"{file_source_detail};{db_source_detail}"
 
+    from dashboards.log_reporting import log_receipt, log_provenance
+    source_groups = {}
+    for item in staged_rows:
+        item.setdefault("source", source_detail)
+        source_groups.setdefault(item["source"], []).append(item)
+    source_receipts = [dict(source=key, **log_receipt(items)) for key, items in source_groups.items()]
+    receipt = log_receipt(staged_rows)
+
     rows = _screener_filter_log_rows(
         staged_rows,
         level_filter=level_filter,
@@ -10322,7 +10391,9 @@ def api_screener_logs():
             "stage": stage,
             "source": source,
             "source_detail": source_detail,
-            "rows": rows,
+            **receipt,
+            "source_receipts": source_receipts,
+            "rows": [dict(row, **log_provenance(row["message"], str(row.get("source") or ""))) for row in rows],
         }
     )
 

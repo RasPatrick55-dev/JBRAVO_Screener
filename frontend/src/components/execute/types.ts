@@ -62,6 +62,9 @@ export interface ExecuteOrdersResponse {
 }
 
 export interface ExecuteTrailingStopRow {
+  observation_source?: "broker_response" | "postgres_history" | "unknown";
+  current_protection?: "unverified";
+  terms_observed_at?: string | null;
   raw_status?: string | null;
   order_id?: string | null;
   replaces?: string | null;

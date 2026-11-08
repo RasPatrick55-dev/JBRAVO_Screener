@@ -1,3 +1,4 @@
+import { eventFreshness, LogSourceReceipt, type LogReceipt } from "../dashboard/logEvidence";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LiveDataSyncState } from "../navbar/liveStatus";
 import type { LogsChipFilter, LogsStage, ScreenerLogRow, ScreenerLogsResponse } from "./types";
@@ -20,6 +21,8 @@ const REQUEST_TIMEOUT_MS = 15_000;
 
 const normalizeLogRow = (row: Partial<ScreenerLogRow>): ScreenerLogRow => {
   return {
+    source: row.source,
+    provenance_label: row.provenance_label,
     ts_utc: row.ts_utc ? String(row.ts_utc) : null,
     level: normalizeLogLevel(row.level),
     message: String(row.message ?? "").trim() || "(no message)",
@@ -83,6 +86,7 @@ const isTodayUtc = (value: string | null | undefined): boolean => {
 };
 
 export default function LogsPanel({ title, stage, onSyncStateChange }: LogsPanelProps) {
+  const [receipts, setReceipts] = useState<LogReceipt[]>([]);
   const [rows, setRows] = useState<ScreenerLogRow[]>([]);
   const [selectedChip, setSelectedChip] = useState<LogsChipFilter>("all");
   const [sourceDetail, setSourceDetail] = useState<string>("");
@@ -125,6 +129,7 @@ export default function LogsPanel({ title, stage, onSyncStateChange }: LogsPanel
         }
         const normalizedRows = (payload.rows ?? []).map((row) => normalizeLogRow(row));
         setRows(normalizedRows);
+        setReceipts(payload.source_receipts?.length ? payload.source_receipts : [{ source: payload.source_detail, observed_at: payload.observed_at, latest_event_at: payload.latest_event_at }]);
         setSourceDetail(String(payload.source_detail ?? payload.source ?? ""));
         setErrorMessage(null);
       } catch (error) {
@@ -208,6 +213,8 @@ export default function LogsPanel({ title, stage, onSyncStateChange }: LogsPanel
         </p>
       ) : null}
 
+      {receipts.map((receipt, index) => <LogSourceReceipt key={index} receipt={receipt} />)}
+      <p className="text-[10px] text-secondary">Fetch success does not imply a current computation. Log text is not broker fill evidence.</p>
       {errorMessage ? (
         <div
           role="alert"
@@ -320,6 +327,7 @@ export default function LogsPanel({ title, stage, onSyncStateChange }: LogsPanel
                           </span>
                         </td>
                         <td className="break-words px-2 py-2 text-left text-primary [overflow-wrap:anywhere]">
+                          <span className="block text-[9px] text-secondary">{row.provenance_label ?? "Unclassified · not broker evidence"} · {eventFreshness(row.ts_utc)}</span>
                           {row.message}
                         </td>
                       </tr>

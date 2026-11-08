@@ -117,7 +117,9 @@ def test_connection_badge_color(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert module.connection_badge_color({"trading_ok": False, "data_ok": True}) == "danger"
 
 
-def test_api_health_matches_loader(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_api_health_preserves_loader_and_qualifies_diagnostic_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _prepare_dashboard_data(tmp_path)
     module = _reload_dashboard_app(monkeypatch, tmp_path)
 
@@ -127,6 +129,10 @@ def test_api_health_matches_loader(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
     assert response.status_code == 200
     payload = json.loads(response.data.decode("utf-8"))
+    # HTTP health artifacts establish diagnostic state, not financial readiness.
+    assert payload.pop("evidence_kind") == "operational_diagnostic_artifacts"
+    assert payload.pop("financial_readiness") == "not_established_by_health_checks"
+    # Preserve every loader field and reject any other unasserted additions.
     assert payload == expected
 
 
@@ -232,8 +238,13 @@ def test_trades_leaderboard_limit_honors_requested_value(
 
 
 @pytest.mark.alpaca_optional
-def test_trades_latest_serializes_nan_as_zero(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    "raw_value, expected_value",
+    [(float("nan"), None), (0.0, 0.0)],
+    ids=["missing-is-null", "genuine-zero-is-zero"],
+)
+def test_trades_latest_distinguishes_unknown_numbers_from_genuine_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, raw_value: float, expected_value: float | None
 ) -> None:
     _prepare_dashboard_data(tmp_path)
     module = _reload_dashboard_app(monkeypatch, tmp_path)
@@ -246,9 +257,9 @@ def test_trades_latest_serializes_nan_as_zero(
                 "entry_time": now - pd.Timedelta(days=1),
                 "exit_time": now,
                 "qty": 10,
-                "entry_price": float("nan"),
-                "exit_price": float("nan"),
-                "realized_pnl": float("nan"),
+                "entry_price": raw_value,
+                "exit_price": raw_value,
+                "realized_pnl": raw_value,
                 "sort_ts": now,
             }
         ]
@@ -271,9 +282,13 @@ def test_trades_latest_serializes_nan_as_zero(
     payload = response.get_json()
     rows = payload.get("rows") or []
     assert len(rows) == 1
-    assert rows[0].get("avgEntryPrice") == 0.0
-    assert rows[0].get("priceSold") == 0.0
-    assert rows[0].get("totalPL") == 0.0
+    for field in ("avgEntryPrice", "priceSold", "totalPL"):
+        assert field in rows[0]
+        assert rows[0][field] == expected_value
+        if expected_value is None:
+            assert rows[0][field] is None
+        else:
+            assert isinstance(rows[0][field], (int, float))
 
 
 @pytest.mark.alpaca_optional
@@ -317,11 +332,16 @@ def test_trades_latest_total_days_uses_calendar_day_difference(
 
 
 @pytest.mark.alpaca_optional
-def test_execute_summary_preserves_explicit_zero_metrics(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    "qualified_result", [123.45, 0.0, None], ids=["qualified-gain", "qualified-zero", "unavailable"]
+)
+def test_execute_summary_preserves_zero_counts_but_requires_qualified_performance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, qualified_result: float | None
 ) -> None:
     _prepare_dashboard_data(tmp_path)
     module = _reload_dashboard_app(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(module, "_pythonanywhere_schedule_tasks", lambda: [])
 
     summary_from_metrics = {
         "last_run_utc": "2026-02-20T16:05:36.747252+00:00",
@@ -341,13 +361,19 @@ def test_execute_summary_preserves_explicit_zero_metrics(
     monkeypatch.setattr(
         module,
         "_execute_summary_counts_from_alpaca",
-        lambda _after, _until=None: (
-            {"submitted": 9, "filled": 4, "rejected": 1},
-            "alpaca:/v2/orders",
-        ),
+        lambda *_args, **_kwargs: pytest.fail("Authoritative zero counts must not query Alpaca"),
     )
-    monkeypatch.setattr(module, "_execute_latest_candidates_count", lambda: 6)
-    monkeypatch.setattr(module, "_execute_result_pl_from_db", lambda _dt: 123.45)
+    monkeypatch.setattr(
+        module, "_execute_latest_candidates_count",
+        lambda: pytest.fail("Authoritative zero candidates must not trigger a fallback"),
+    )
+    performance_queries = []
+
+    def qualified_performance(run_time):
+        performance_queries.append(run_time)
+        return qualified_result
+
+    monkeypatch.setattr(module, "_execute_result_pl_from_db", qualified_performance)
 
     payload = module._execute_summary_payload()
 
@@ -356,7 +382,15 @@ def test_execute_summary_preserves_explicit_zero_metrics(
     assert payload["submitted"] == 0
     assert payload["filled"] == 0
     assert payload["rejected"] == 0
-    assert payload["result_pl_usd"] == 0.0
+    # The operational aggregate's zero is not qualified performance evidence.
+    assert payload["result_pl_usd"] == qualified_result
+    assert performance_queries == [datetime.fromisoformat(summary_from_metrics["last_run_utc"])]
+    assert payload["result_pl_source"] == (
+        "postgres_validated_performance" if qualified_result is not None else None
+    )
+    assert payload["performance_status"] == (
+        "VALIDATED_PERFORMANCE" if qualified_result is not None else "HELD_OR_UNKNOWN"
+    )
 
 
 @pytest.mark.alpaca_optional

@@ -1,3 +1,4 @@
+import { formatRunDate, formatMlTimestamp as formatDateTime, formatMlInstantDate as formatShortDate, formatMlBoolean } from "../components/ml/displayValues";
 import { predictionFreshness, mlStagePresentation, successfulPredictionExecution } from "../components/ml/freshness";
 import { useMemo, type ReactNode } from "react";
 import { buildNavbarBadges, type LiveDataSyncState, useLiveTradingStatus } from "../components/navbar/liveStatus";
@@ -50,36 +51,6 @@ const cardTone: Record<StatusTone, string> = {
   neutral: "text-slate-200",
 };
 
-const formatDateTime = (value: string | null | undefined) => {
-  if (!value) {
-    return "No data";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-};
-
-const formatShortDate = (value: string | null | undefined) => {
-  if (!value) {
-    return "No data";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
-};
-
 const formatNumber = (value: number | null | undefined) => {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return "No data";
@@ -104,7 +75,7 @@ const formatDecimal = (value: number | null | undefined) => {
 const formatAction = (value: string | null | undefined) => {
   const text = String(value || "").trim();
   if (!text) {
-    return "none";
+    return "Unknown";
   }
   return text.replace(/_/g, " ");
 };
@@ -290,7 +261,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
     },
     {
       title: "Monitor action",
-      value: formatAction(data?.monitor?.recommended_action ?? "none"),
+      value: formatAction(data?.monitor?.recommended_action),
       detail:
         data?.monitor?.guard_decision && data.monitor.guard_decision !== "allow"
           ? `Guard ${data.monitor.guard_decision} (${data.monitor.guard_mode ?? "n/a"})`
@@ -303,20 +274,18 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
           ? ("error" as StatusTone)
           : data?.monitor?.recommended_action === "recalibrate"
             ? ("warning" as StatusTone)
-            : ("success" as StatusTone),
+            : data?.monitor?.recommended_action === "none" ? ("success" as StatusTone) : ("neutral" as StatusTone),
     },
     {
       title: "Champion",
-      value: data?.champion?.present
-        ? `${formatAction(data.champion.calibration ?? "none")}`
+      value: data?.champion?.present === true
+        ? `${formatAction(data.champion.calibration)}`
         : "No data",
-      detail: data?.champion?.present
-        ? `Run ${formatShortDate(data.champion.run_date)} · feature ${data.champion.feature_set ?? "n/a"}`
+      detail: data?.champion?.present === true
+        ? `Run ${formatRunDate(data.champion.run_date)} · feature ${data.champion.feature_set ?? "n/a"}`
         : "Champion artifact unavailable",
-      footnote: `min_model_score ${data?.champion?.execution?.min_model_score ?? "n/a"} · require ${String(
-        data?.champion?.execution?.require_model_score ?? false
-      )}`,
-      tone: data?.champion?.present ? ("success" as StatusTone) : ("neutral" as StatusTone),
+      footnote: `min_model_score ${data?.champion?.execution?.min_model_score ?? "n/a"} · require ${formatMlBoolean(data?.champion?.execution?.require_model_score)}`,
+      tone: data?.champion?.present === true ? ("success" as StatusTone) : ("neutral" as StatusTone),
     },
     {
       title: "Recent ML evidence",
@@ -438,7 +407,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                 />
                 <DetailRow
                   label="Recommended action"
-                  value={formatAction(data?.monitor?.recommended_action ?? "none")}
+                  value={formatAction(data?.monitor?.recommended_action)}
                   note={`Guard ${formatAction(data?.monitor?.guard_decision ?? "unknown")} / ${
                     data?.monitor?.guard_mode ?? "n/a"
                   }`}
@@ -449,7 +418,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                     Guard reasons
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {(data?.monitor?.guard_reasons?.length ? data.monitor.guard_reasons : ["none"]).map(
+                    {(data?.monitor?.guard_reasons?.length ? data.monitor.guard_reasons : data?.monitor?.guard_reasons ? ["none"] : ["Unknown"]).map(
                       (reason) => (
                         <span
                           key={reason}
@@ -485,7 +454,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                 <DetailRow
                   label="Market session"
                   value={data?.freshness?.session_status ?? "unknown"}
-                  note={`Expected session ${data?.freshness?.expected_session ?? "unknown"}; checked ${formatDateTime(data?.freshness?.observed_at)}`}
+                  note={`Expected session ${formatRunDate(data?.freshness?.expected_session)}; checked ${formatDateTime(data?.freshness?.observed_at)}`}
                 />
                 <DetailRow
                   label="Latest model"
@@ -495,7 +464,7 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                 <DetailRow
                   label="Feature set"
                   value={`${data?.freshness?.latest_features_set ?? "n/a"} -> ${data?.freshness?.pred_features_set ?? "n/a"}`}
-                  note={`Compatibility ${String(data?.freshness?.pred_compatible ?? "unknown")} / ${
+                  note={`Compatibility ${formatMlBoolean(data?.freshness?.pred_compatible)} / ${
                     data?.freshness?.pred_compat_reason ?? "n/a"
                   }`}
                 />
@@ -539,8 +508,8 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
               <div className="space-y-3">
                 <DetailRow
                   label="Champion run"
-                  value={formatShortDate(data?.champion?.run_date)}
-                  note={`Calibration ${formatAction(data?.champion?.calibration ?? "none")} · feature ${
+                  value={formatRunDate(data?.champion?.run_date)}
+                  note={`Calibration ${formatAction(data?.champion?.calibration)} · feature ${
                     data?.champion?.feature_set ?? "n/a"
                   }`}
                   variant="emerald"
@@ -548,22 +517,20 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                 <DetailRow
                   label="Execution settings"
                   value={`min ${data?.champion?.execution?.min_model_score ?? "n/a"}`}
-                  note={`require_model_score ${String(data?.champion?.execution?.require_model_score ?? false)}`}
+                  note={`require_model_score ${formatMlBoolean(data?.champion?.execution?.require_model_score)}`}
                   variant="emerald"
                 />
                 <DetailRow
                   label="Last remediation"
-                  value={`${formatAction(data?.remediation?.last_kind ?? "none")} / ${String(
-                    data?.remediation?.executed ?? false
-                  )}`}
-                  note={`Action ${formatAction(data?.remediation?.last_action ?? "none")} · run ${formatShortDate(
+                  value={`${formatAction(data?.remediation?.last_kind)} / ${formatMlBoolean(data?.remediation?.executed)}`}
+                  note={`Action ${formatAction(data?.remediation?.last_action)} · run ${formatRunDate(
                     data?.remediation?.run_date
                   )}`}
                   variant="emerald"
                 />
                 <DetailRow
                   label="Repredict after remediation"
-                  value={String(data?.remediation?.repredict_executed ?? false)}
+                  value={formatMlBoolean(data?.remediation?.repredict_executed)}
                   note={`rc ${data?.remediation?.repredict_rc ?? "n/a"} · ${
                     data?.remediation?.repredict_reason ?? "no repredict metadata"
                   }`}

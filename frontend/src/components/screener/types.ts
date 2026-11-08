@@ -98,12 +98,17 @@ export interface MetricsResponse {
 export type LogLevel = "ERROR" | "WARN" | "INFO" | "SUCCESS";
 
 export interface ScreenerLogRow {
+  source?: string;
+  provenance_label?: string;
   ts_utc: string | null;
   level: LogLevel | string;
   message: string;
 }
 
 export interface ScreenerLogsResponse {
+  observed_at?: string;
+  latest_event_at?: string | null;
+  source_receipts?: import("../dashboard/logEvidence").LogReceipt[];
   ok?: boolean;
   stage?: LogsStage | string;
   source?: string | null;
