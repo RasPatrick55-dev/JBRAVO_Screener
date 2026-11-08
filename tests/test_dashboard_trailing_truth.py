@@ -141,3 +141,26 @@ def test_database_timeout_is_unavailable_not_successful_empty():
     ns = helpers("_execute_trailing_from_db",
         _db_fetch_all_strict=Mock(side_effect=RuntimeError("statement timeout")))
     assert ns["_execute_trailing_from_db"](500) == ([], "postgres:order_events_unavailable")
+
+
+def test_lifecycle_query_uses_nonreserved_cte_name():
+    fetch = Mock(return_value=[])
+    ns = helpers("_execute_trailing_from_db", _db_fetch_all_strict=fetch)
+    ns["_execute_trailing_from_db"](500)
+    sql = fetch.call_args.args[0]
+    assert "WITH trailing_observations AS (" in sql
+    assert "FROM trailing_observations t" in sql
+    assert "WITH trailing AS" not in sql  # TRAILING is reserved by PostgreSQL.
+
+
+def test_lifecycle_query_postgresql_parser():
+    # Optional offline PostgreSQL grammar validation, no DB connection required.
+    pglast = pytest.importorskip("pglast")
+    fetch = Mock(return_value=[])
+    ns = helpers("_execute_trailing_from_db", _db_fetch_all_strict=fetch)
+    ns["_execute_trailing_from_db"](500)
+    sql = fetch.call_args.args[0].replace("%(limit)s", "500").replace("%%", "%")
+    assert len(pglast.parse_sql(sql)) == 1
+    invalid = sql.replace("trailing_observations", "trailing")
+    with pytest.raises(pglast.parser.ParseError, match='at or near "trailing"'):
+        pglast.parse_sql(invalid)
