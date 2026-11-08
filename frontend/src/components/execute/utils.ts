@@ -305,7 +305,13 @@ const matchesStatusScope = (scope: ExecuteStatusScope, status: string): boolean 
     return true;
   }
   if (scope === "open") {
-    return ["PENDING", "PARTIAL", "ACTIVE", "NEW", "ACCEPTED", "PENDING_NEW", "ACCEPTED_FOR_BIDDING", "OPEN", "PENDING_REPLACE", "PENDING_CANCEL", "DONE_FOR_DAY"].includes(status);
+    // Keep parity with dashboard_app._execute_status_scope_matches, plus raw
+    // broker states that its presentation normalizer groups under PENDING.
+    return [
+      "PENDING", "PARTIAL", "ACTIVE", "PENDING_REPLACE", "PENDING_CANCEL",
+      "DONE_FOR_DAY", "HELD", "STOPPED", "SUSPENDED", "CALCULATED",
+      "NEW", "ACCEPTED", "PENDING_NEW", "ACCEPTED_FOR_BIDDING", "OPEN",
+    ].includes(status);
   }
   return ["FILLED", "REJECTED", "TRIGGERED", "CANCELED", "EXPIRED", "REPLACED"].includes(status);
 };

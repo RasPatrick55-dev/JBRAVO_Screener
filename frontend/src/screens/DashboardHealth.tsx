@@ -928,7 +928,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   const monitoringSource = useSource("/api/positions/monitoring");
   const monitoringSnapshot = canDisplay(monitoringSource.kind) ? monitoringSource.payload as MonitoringPositionsResponse | null : null;
   const [pipelineTaskRun, setPipelineTaskRun] = useState<PipelineTaskRunResponse | null>(null);
-  const [executeTaskRun, setExecuteTaskRun] = useState<ExecuteTaskRunResponse | null>(null);
+  const executeTaskSource = useSource("/api/execute/task");
+  const executeTaskRun = executeTaskSource.payload as ExecuteTaskRunResponse | null;
   const [executeOrdersSummary, setExecuteOrdersSummary] =
     useState<ExecuteOrdersSummaryResponse | null>(null);
   const [pipelineLogText, setPipelineLogText] = useState<string | null>(null);
@@ -948,7 +949,6 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         overview,
         health,
         taskRunPayload,
-        executeTaskPayload,
         executeOrdersPayload,
         pythonAnywhereResourcesPayload,
         pythonAnywhereTasksPayload,
@@ -960,7 +960,6 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         fetchJson<HealthOverviewResponse>("/api/health/overview"),
         fetchJson<ApiHealthResponse>("/api/health"),
         fetchJson<PipelineTaskRunResponse>("/api/pipeline/task"),
-        fetchJson<ExecuteTaskRunResponse>("/api/execute/task"),
         fetchJson<ExecuteOrdersSummaryResponse>("/api/execute/orders-summary"),
         fetchJson<PythonAnywhereResourcesResponse>("/api/pythonanywhere/resources"),
         fetchJson<PythonAnywhereTasksResponse>("/api/pythonanywhere/tasks"),
@@ -977,7 +976,6 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
       setOverviewSnapshot(overview);
       setHealthSnapshot(health);
       setPipelineTaskRun(taskRunPayload);
-      setExecuteTaskRun(executeTaskPayload);
       setExecuteOrdersSummary(executeOrdersPayload);
       setPythonAnywhereResources(pythonAnywhereResourcesPayload?.ok === true ? pythonAnywhereResourcesPayload.resources ?? null : null);
       setPythonAnywhereTasks(scheduledTaskRows(pythonAnywhereTasksPayload));
@@ -1182,6 +1180,7 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         status: executorState,
         marketNote: executeMarketNote,
         lastScheduledAttempt: executeTaskRun?.last_scheduled_attempt,
+        taskSource: executeTaskSource,
       },
       monitoring: {
         positions: hasMonitoringApi ? monitoringPositionsFromApi : [],
@@ -1207,6 +1206,9 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     executeTaskRun?.started_utc,
     executeTaskRun?.rc,
     executeTaskRun?.last_scheduled_attempt,
+    executeTaskSource.kind,
+    executeTaskSource.freshness,
+    executeTaskSource.receivedAt,
     executeOrdersSummary,
     executeOrdersSummary?.source,
     executeOrdersSummary?.orders_filled,

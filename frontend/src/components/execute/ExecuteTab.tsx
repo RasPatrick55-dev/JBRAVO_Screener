@@ -142,7 +142,8 @@ export default function ExecuteTab({ onSyncStateChange }: ExecuteTabProps) {
     <div className="space-y-4">
       <ExecutionSummaryCard summary={summary} isLoading={isLoading} hasError={hasError}
         lastScheduledAttempt={(executionTask.payload as ProcessReceipt | null)?.last_scheduled_attempt}
-        lastExecutionReceipt={(executionTask.payload as ProcessReceipt | null)?.last_execution_receipt} />
+        lastExecutionReceipt={(executionTask.payload as ProcessReceipt | null)?.last_execution_receipt}
+        taskSource={executionTask} />
       <OrdersTableCard rows={ordersRows} isLoading={isLoading} hasError={hasError} />
       <TrailingStopsCard rows={trailingRows} isLoading={isLoading} hasError={hasError} />
       <ExecutionLogsCard logs={logsByStage} isLoading={isLoading} hasError={hasError} />

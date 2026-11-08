@@ -139,7 +139,7 @@ describe("execution metadata and independent attempts", () => {
     const html = renderToStaticMarkup(<ExecutionSummaryCard summary={{ok:true,last_run_utc:"2026-02-03T09:00:00Z",execution_schedule:{
       status:"verified",in_window:false,entry_start_local:"04:00",entry_end_local:"04:01",timezone:"America/New_York",
       lifecycle_owner:"MONITOR_POSITIONS",cancellation_policy:"monitor_exchange_regular_close",legacy_cancel_after_min:35,legacy_cancel_after_min_is_deadline:false,
-    }}} lastExecutionReceipt={{ok:true,source:"executor_receipt",status:"STALE",finished_utc:"2026-02-03T09:00:00Z"}} lastScheduledAttempt={{ok:true,status:"GUARDED_NO_ENTRY",started_utc:"2026-02-04T07:55:00Z",rc:1,orders_submitted:0,release_attribution:"unverified_historical_attempt"}}
+    }}} taskSource={{kind:"ready",freshness:"current",receivedAt:"2026-02-04T12:00:00Z"}} lastExecutionReceipt={{ok:true,source:"executor_receipt",status:"STALE",finished_utc:"2026-02-03T09:00:00Z"}} lastScheduledAttempt={{ok:true,status:"GUARDED_NO_ENTRY",started_utc:"2026-02-04T07:55:00Z",rc:1,orders_submitted:0,release_attribution:"unverified_historical_attempt"}}
       isLoading={false} hasError={false} />);
     for (const text of ["04:00-04:01 America/New_York", "MONITOR_POSITIONS", "Deadline: unknown", "not the cancellation deadline", "Last execution receipt", "GUARDED_NO_ENTRY", "not verified against the current release"]) expect(html).toContain(text);
     expect(html).toContain(">NO<");

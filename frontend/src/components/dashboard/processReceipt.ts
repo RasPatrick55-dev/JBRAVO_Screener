@@ -1,4 +1,16 @@
+import type { SourceResult } from "../ui/sourceState";
+
 export type ProcessStatus = "COMPLETED" | "FAILED" | "STALE" | "UNAVAILABLE" | "PENDING";
+
+export type TaskEvidenceSource = Pick<SourceResult, "kind" | "freshness" | "receivedAt">;
+
+export function taskEvidenceFreshness(source?: TaskEvidenceSource): "current" | "stale" | "unavailable" {
+  if (source?.freshness === "stale" || source?.kind === "stale") return "stale";
+  // A missing execution receipt can coexist with a valid scheduled attempt.
+  // Therefore use transport freshness, then validate each nested record itself.
+  if (source?.freshness === "current" && source.kind !== "loading" && source.receivedAt) return "current";
+  return "unavailable";
+}
 
 export interface ScheduledAttempt {
   ok?: boolean;

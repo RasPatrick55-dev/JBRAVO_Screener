@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { ExecuteSummaryResponse } from "./types";
 import ScheduledAttemptNotice from "../dashboard/ScheduledAttemptNotice";
-import type { ProcessReceipt, ScheduledAttempt } from "../dashboard/processReceipt";
+import { taskEvidenceFreshness, type ProcessReceipt, type ScheduledAttempt, type TaskEvidenceSource } from "../dashboard/processReceipt";
 import {
   formatDateUtc,
   formatNumber,
@@ -16,6 +16,7 @@ type Props = {
   hasError: boolean;
   lastScheduledAttempt?: ScheduledAttempt | null;
   lastExecutionReceipt?: ProcessReceipt | null;
+  taskSource?: TaskEvidenceSource;
 };
 
 const basePillClass =
@@ -35,14 +36,15 @@ export const validatedExecutionPL = (summary: ExecuteSummaryResponse | null): nu
   summary?.ok === true && summary.performance_status === "VALIDATED_PERFORMANCE" && summary.result_pl_source === "postgres_validated_performance"
     ? parseNumber(summary.result_pl_usd) : null;
 
-export default function ExecutionSummaryCard({ summary, isLoading, hasError, lastScheduledAttempt, lastExecutionReceipt }: Props) {
+export default function ExecutionSummaryCard({ summary, isLoading, hasError, lastScheduledAttempt, lastExecutionReceipt, taskSource }: Props) {
   const ready = !isLoading && !hasError && summary?.ok === true;
   const schedule = summary?.execution_schedule;
   const scheduleVerified = schedule?.status === "verified";
   const inWindow = scheduleVerified ? schedule.in_window : null;
   const windowLabel = scheduleVerified && schedule.entry_start_local && schedule.entry_end_local && schedule.timezone
     ? `${schedule.entry_start_local}-${schedule.entry_end_local} ${schedule.timezone}` : "Entry window unknown";
-  const runLabel = lastExecutionReceipt ? "Last execution receipt" : "Last reported run";
+  const taskFreshness = taskEvidenceFreshness(taskSource);
+  const runLabel = lastExecutionReceipt ? taskFreshness === "current" ? "Last execution receipt" : taskFreshness === "stale" ? "Cached execution receipt" : "Unverified execution receipt" : "Last reported run";
   const runTime = lastExecutionReceipt ? lastExecutionReceipt.ok === true ? lastExecutionReceipt.finished_utc : null : summary?.last_run_utc;
 
   const resultValue = ready ? validatedExecutionPL(summary) : null;
@@ -176,14 +178,14 @@ export default function ExecutionSummaryCard({ summary, isLoading, hasError, las
       </div>
 
       {ready ? <div className="mt-3 space-y-1 text-[11px] text-secondary">
-        <p>Run metrics source: {summary?.source || "unknown"}.{lastExecutionReceipt ? ` Actual receipt status: ${lastExecutionReceipt.status || "unknown"}.` : ""}</p>
+        <p>Run metrics source: {summary?.source || "unknown"}.{lastExecutionReceipt ? ` ${taskFreshness === "current" ? "Actual" : "Last known"} receipt status: ${lastExecutionReceipt.status || "unknown"}.` : ""}</p>
         <p>Lifecycle owner: {scheduleVerified ? schedule.lifecycle_owner || "unknown" : "unknown"}.</p>
         <p>Cancellation policy: {scheduleVerified ? schedule.cancellation_policy?.replace(/_/g, " ") || "unknown" : "unknown"}. Deadline: {scheduleVerified && schedule.cancellation_deadline_status === "verified" ? schedule.cancellation_deadline || "unknown" : "unknown"}.</p>
         {scheduleVerified && schedule.legacy_cancel_after_min_is_deadline === false ? <p>Legacy cancel-after-min {schedule.legacy_cancel_after_min ?? "unknown"} is a compatibility flag, not the cancellation deadline.</p> : null}
         <p>Schedule source: {schedule?.source || "unknown"}; checked {schedule?.observed_at || "unknown"}. Session: {schedule?.session_date || "unknown"} ({schedule?.session_status || "unknown"}).</p>
         {!scheduleVerified ? <p>{schedule?.reason || "Current schedule is unverified."}</p> : null}
       </div> : null}
-      <ScheduledAttemptNotice attempt={lastScheduledAttempt} />
+      <ScheduledAttemptNotice attempt={lastScheduledAttempt} taskSource={taskSource} />
 
       {hasError ? (
         <p className="mt-3 text-xs text-rose-300">Execution summary unavailable. Showing fallback values.</p>
