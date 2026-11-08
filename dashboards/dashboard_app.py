@@ -10250,6 +10250,12 @@ def api_screener_picks():
     )
 
 
+@server.route("/api/strategies/scorecard")
+def api_strategy_scorecard():
+    from dashboards.strategy_scorecard import api_payload
+    return _json_no_store(api_payload(base_dir=BASE_DIR))
+
+
 @server.route("/api/screener/backtest")
 def api_screener_backtest():
     from scripts.strategy_pipeline import enabled as strategy_enabled

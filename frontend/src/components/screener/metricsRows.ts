@@ -6,7 +6,7 @@ export const formatMetricWinRate = (value: number | null): string => value === n
 
 export const strategyLabel = (id: string, version: string): string =>
   id === "ALL_STRATEGIES" ? "All strategies (per-setup results)" :
-  id === "trend_pullback_reclaim_qualifying_close_v2" ? `Pullback/Reclaim v${version}` : `${id.replace(/_/g, " ")} v${version}`;
+  id === "trend_pullback_reclaim_qualifying_close_v2" ? `Pullback/Reclaim v${version}` : `${(id.endsWith(`_v${version}`) ? id.slice(0, -version.length - 2) : id).replace(/_/g, " ")} v${version}`;
 
 const digest = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 const strategyId = (value: unknown): value is string => typeof value === "string" && /^[a-z][a-z0-9_]{0,127}$/.test(value);

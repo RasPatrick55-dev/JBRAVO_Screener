@@ -1,0 +1,193 @@
+{
+  "actual_paper": {
+    "net_metrics_available": false,
+    "reason": "Complete actual paper cost accounting is not supplied by research archives.",
+    "status": "UNAVAILABLE"
+  },
+  "artifact_source": "pythonanywhere_api_hash_bound_to_postgres",
+  "cache_age_seconds": 0,
+  "cache_ttl_seconds": 900,
+  "coverage": {
+    "configured_strategy_count": 2,
+    "max_groups": 24,
+    "reasons": [],
+    "rejected_archives": 0,
+    "selection": "LATEST_COMPLETED_ARCHIVE_PER_CONFIGURED_STRATEGY",
+    "truncated": false,
+    "unavailable_groups": 1,
+    "verified_groups": 1
+  },
+  "generated_at": "2026-11-08T00:00:00+00:00",
+  "limitations": [
+    "Research simulations, not actual paper-account performance or a success forecast.",
+    "Each row covers its declared historical portfolio episode, not every qualifying setup.",
+    "Distinct strategies and incompatible episodes are not combined into one portfolio.",
+    "Closed-position P&L includes modeled fees/slippage and excludes cash dividends.",
+    "Retrospective universe and historical availability assumptions remain unqualified.",
+    "Week-cluster intervals describe this sample; they do not establish future performance.",
+    "Few signal-week clusters give unstable intervals; grouping does not remove cross-week holding or regime dependence.",
+    "Latest completed archives are historical evidence; newer scan attempts are not evaluated here."
+  ],
+  "metric_basis": "STRATEGY_RESEARCH_SIMULATION",
+  "ok": true,
+  "order_submission_authorized": false,
+  "research_qualified": false,
+  "rows": [
+    {
+      "as_of": null,
+      "average_loss": null,
+      "average_win": null,
+      "breakeven": null,
+      "closed_signals": null,
+      "configured_enabled": true,
+      "costs": {
+        "actual_costs_available": false,
+        "basis": "MODELED",
+        "fees": null,
+        "slippage": null,
+        "total": null
+      },
+      "definition_sha256": null,
+      "episode": null,
+      "episode_id": null,
+      "evidence": {
+        "archive_count": 0,
+        "distinct_signals": null,
+        "duplicate_observations": 0
+      },
+      "evidence_status": "UNAVAILABLE",
+      "expectancy_net_per_signal": null,
+      "failure_code": "completed_archive_unavailable",
+      "freshness": {
+        "basis": "LATEST_COMPLETED_ARCHIVE_ONLY",
+        "evidence_as_of": null,
+        "latest_attempt_at": null,
+        "latest_attempt_status": "NOT_EVALUATED",
+        "retained_historical_evidence": true,
+        "source_age_calendar_days": null
+      },
+      "losses": null,
+      "metric_basis": "STRATEGY_RESEARCH_SIMULATION",
+      "net_pnl": null,
+      "open_signals": null,
+      "order_submission_authorized": false,
+      "payoff_ratio": null,
+      "profit_factor": null,
+      "profit_factor_status": "UNKNOWN",
+      "research_qualified": false,
+      "sample_status": "UNKNOWN",
+      "scope": "DECLARED_EPISODE_SIMULATED_PORTFOLIO_SIGNALS",
+      "strategy_id": "bull_flag_breakout_v1",
+      "strategy_name": "bull flag breakout v1",
+      "strategy_version": null,
+      "uncertainty": {
+        "high": null,
+        "level": 0.95,
+        "low": null,
+        "method": "SIGNAL_WEEK_CLUSTER_BOOTSTRAP",
+        "samples": 0,
+        "signal_weeks": null,
+        "status": "UNAVAILABLE",
+        "warning": null
+      },
+      "unfilled_signals": null,
+      "win_rate_pct": null,
+      "wins": null
+    },
+    {
+      "as_of": "2026-11-06",
+      "average_loss": -40.0,
+      "average_win": 40.0,
+      "breakeven": 1,
+      "closed_signals": 3,
+      "configured_enabled": true,
+      "costs": {
+        "actual_costs_available": false,
+        "basis": "MODELED",
+        "fees": 9.0,
+        "slippage": 9.0,
+        "total": 18.0
+      },
+      "definition_sha256": "8a525e503987898b55af734543b54001f105b8001ec2f2b8a89196a07ddb2063",
+      "episode": {
+        "as_of": "2026-11-06",
+        "cost_case": {
+          "fee_per_fill": 1.0,
+          "id": "base_cost",
+          "slippage_bps": 5.0
+        },
+        "coverage": {
+          "evaluated_count": 5,
+          "excluded_count": 2,
+          "policy": {
+            "asset_class": "us_equity",
+            "source": "alpaca_assets",
+            "status": "active",
+            "tradable": true
+          },
+          "status": "COMPLETE"
+        },
+        "declared_symbols": 5,
+        "historical_scope": "SELECTED_SIMULATED_PORTFOLIO_SIGNALS_NOT_ALL_QUALIFYING_SETUPS",
+        "portfolio": {
+          "alloc_pct": 0.05,
+          "initial_cash": 100000,
+          "max_positions": 4,
+          "top_n": 3
+        },
+        "test_start": "2026-01-02",
+        "universe_kind": "DAILY_ACTIVE_TRADABLE_UNIVERSE"
+      },
+      "episode_id": "459003bca2a843e09529642be1920dda39ca76a8bc2090bb60d8b430ce485755",
+      "evidence": {
+        "archive_count": 1,
+        "archive_id": "664a2d1188d9e39ca8106e7613a5e8e3082e137ece69dbbc807a409f37855843",
+        "distinct_signals": 5,
+        "duplicate_observations": 0,
+        "manifest_sha256": "57e820b71b918ce3da13f9aed58565939fb6bac108ed625ab82eeba60f2c21df",
+        "result_sha256": "f149753f5d8b0cfe1f2b81855e13c4d43e4398951b6f77404918b8ef110933ab",
+        "scan_run_id": "ee676a2d990d5e4f7e42e47f471f755ac447a9938f933fb441db4b8b38df9d42"
+      },
+      "evidence_status": "VERIFIED",
+      "expectancy_net_per_signal": 0.0,
+      "freshness": {
+        "basis": "LATEST_COMPLETED_ARCHIVE_ONLY",
+        "evidence_as_of": "2026-11-06",
+        "latest_attempt_at": null,
+        "latest_attempt_status": "NOT_EVALUATED",
+        "retained_historical_evidence": true,
+        "source_age_calendar_days": 2
+      },
+      "losses": 1,
+      "metric_basis": "STRATEGY_RESEARCH_SIMULATION",
+      "net_pnl": 0.0,
+      "open_signals": 1,
+      "order_submission_authorized": false,
+      "payoff_ratio": 1.0,
+      "profit_factor": 1.0,
+      "profit_factor_status": "DEFINED",
+      "research_qualified": false,
+      "sample_status": "OBSERVED_SAMPLE_NOT_QUALIFICATION",
+      "scope": "DECLARED_EPISODE_SIMULATED_PORTFOLIO_SIGNALS",
+      "strategy_id": "trend_pullback_reclaim_qualifying_close_v2",
+      "strategy_name": "Pullback",
+      "strategy_version": "2",
+      "uncertainty": {
+        "high": 40.0,
+        "level": 0.95,
+        "low": -40.0,
+        "method": "SIGNAL_WEEK_CLUSTER_BOOTSTRAP",
+        "samples": 400,
+        "signal_weeks": 3,
+        "status": "DESCRIPTIVE_NOT_VALIDATION",
+        "warning": "FEW_SIGNAL_WEEK_CLUSTERS"
+      },
+      "unfilled_signals": 1,
+      "win_rate_pct": 33.333333333333336,
+      "wins": 1
+    }
+  ],
+  "rows_final": 2,
+  "source": "postgres",
+  "status": "PARTIAL"
+}

@@ -77,9 +77,9 @@ export function watchSource(path: string, publish: (result: SourceResult) => voi
   }, Math.min(1000, maxAgeMs));
   return () => {active = false; globalThis.clearInterval(poll); globalThis.clearInterval(expiry);};
 }
-export function useSource(path: string, interval = 20000, timeoutMs = 10000) {
+export function useSource(path: string, interval = 20000, timeoutMs = 10000, maxAgeMs = 60000) {
   const [result, setResult] = useState<SourceResult>({payload: null, kind: "loading", validity: "loading", freshness: "unknown"});
-  useEffect(() => watchSource(path, setResult, interval, fetch, 60000, timeoutMs), [path, interval, timeoutMs]);
+  useEffect(() => watchSource(path, setResult, interval, fetch, maxAgeMs, timeoutMs), [path, interval, timeoutMs, maxAgeMs]);
   return result;
 }
 
