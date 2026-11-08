@@ -1,1 +1,3 @@
 bin/run_premarket_once.sh text eol=lf
+tests/fixtures/ownership_native_engine.py text eol=lf
+tests/fixtures/ownership_native_rules.py text eol=lf
