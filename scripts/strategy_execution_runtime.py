@@ -84,7 +84,12 @@ def write_report(value,*,role,base_dir=ROOT):
 def source_guard(handoff,*,base_dir=ROOT,lifecycle=False):
     from scripts.strategy_pipeline import EXTRA_SOURCES
     pins=handoff['source_bindings']
-    require(set(pins)==set((*health.SOURCE_FILES,*EXTRA_SOURCES)),'strategy_execution_sources_not_bound')
+    # Existing positions retain their original source inventory. Unrelated
+    # dashboard/producer additions cannot invalidate an unchanged exit contract.
+    # Newly prepared entries still require the complete current inventory.
+    required=set(LIFECYCLE_COMPONENTS) if lifecycle else set((*health.SOURCE_FILES,*EXTRA_SOURCES))
+    require(isinstance(pins,dict) and (required<=set(pins) if lifecycle else set(pins)==required),
+            'strategy_execution_sources_not_bound')
     selected=LIFECYCLE_COMPONENTS if lifecycle else pins
     for name in selected:
         pin=pins[name]
