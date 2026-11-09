@@ -14,7 +14,7 @@ import time
 from uuid import UUID
 from threading import Event
 
-from dashboards.source_contracts import bounded_read, timestamp
+from dashboards.source_contracts import bounded_read
 
 
 SCHEMA = "jbravo.strategy-history.v1"
@@ -79,6 +79,37 @@ def text(value, maximum=128):
         "invalid_identity",
     )
     return value
+
+
+def timestamp(value):
+    """Normalize explicit zones without losing PostgreSQL microsecond precision.
+
+    PostgreSQL JSON trims trailing fractional zeroes. Python 3.10 accepts only
+    three or six fractional digits, so pad (never truncate) before parsing.
+    Naive values are not evidence of a UTC instant and remain unavailable.
+    """
+    try:
+        if isinstance(value, datetime):
+            parsed = value
+        elif type(value) is str:
+            match = re.fullmatch(
+                r"([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2})"
+                r"(?:\.([0-9]{1,6}))?(Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])",
+                value,
+            )
+            if match is None:
+                return None
+            main, fraction, offset = match.groups()
+            if fraction is not None:
+                main += "." + fraction.ljust(6, "0")
+            parsed = datetime.fromisoformat(main + ("+00:00" if offset == "Z" else offset))
+        else:
+            return None
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed.astimezone(timezone.utc).isoformat()
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 
 def instant(value):

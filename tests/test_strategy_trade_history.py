@@ -2,9 +2,10 @@
 
 import ast
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 import json
 from pathlib import Path
+import re
 from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import UUID
@@ -816,3 +817,126 @@ def test_timeout_after_database_task_entry_is_distinct(monkeypatch):
     result = H.snapshot(Mock(), client, IDENTITY, read=lambda function, **kwargs: function())
     assert result["reason"] == "source_timeout"
     assert result["database_task_entered"] is True
+
+
+def python310_fraction_parser(monkeypatch):
+    """Compatibility shim, not a claim that these tests run on Python 3.10."""
+    from dashboards import source_contracts as S
+
+    class Python310DateTime(datetime):
+        @classmethod
+        def fromisoformat(cls, value):
+            fraction = re.search(r"[0-9]{2}:[0-9]{2}:[0-9]{2}\.([0-9]+)", value)
+            if fraction is not None and len(fraction[1]) not in (3, 6):
+                raise ValueError("Python 3.10 fractional second grammar")
+            return datetime.fromisoformat(value)
+
+    monkeypatch.setattr(H, "datetime", Python310DateTime)
+    monkeypatch.setattr(S, "datetime", Python310DateTime)
+    return S
+
+
+@pytest.mark.parametrize("fraction", ["", ".1", ".12", ".123", ".1234", ".12345", ".123456"])
+@pytest.mark.parametrize("offset", ["Z", "+00:00", "+05:30", "-04:00"])
+def test_zoned_fraction_precision_survives_python310_grammar(monkeypatch, fraction, offset):
+    source = f"2026-10-05T10:00:00{fraction}{offset}"
+    expected = datetime.fromisoformat(source.replace("Z", "+00:00")).astimezone(timezone.utc)
+    S = python310_fraction_parser(monkeypatch)
+    if len(fraction) in (2, 3, 5, 6):
+        assert S.timestamp(source) is None  # Reproduce the old helper's rejection.
+    assert H.timestamp(source) == expected.isoformat()
+    assert H.instant(source) == expected
+
+
+class UnknownOffset(tzinfo):
+    def utcoffset(self, value):
+        return None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        True,
+        20261005,
+        {},
+        "2026-10-05",
+        "2026-10-05T10:00:00",
+        "2026-10-05T10:00:00.12345",
+        "2026-10-05T10:00:00.Z",
+        "2026-10-05T10:00:00.1234567Z",
+        "2026-10-05T10:00:00.123456789+00:00",
+        "2026-10-05T10:00:00.12345+24:00",
+        "2026-10-05T10:00:00.12345+01:60",
+        "2026-10-05T10:00:00.12345+0000",
+        "2026-10-05T10:00:00.12345UTC",
+        "2026-10-05T10:00:00.12345Z\n",
+        "2026-10-05T10:00:00,12345Z",
+        "2026-02-30T10:00:00.12345Z",
+        "2026-10-05T10:00:60.12345Z",
+        "0001-01-01T00:00:00+01:00",
+        "9999-12-31T23:59:59-01:00",
+        datetime(2026, 10, 5, 10),
+        datetime(2026, 10, 5, 10, tzinfo=UnknownOffset()),
+    ],
+)
+def test_timestamp_does_not_invent_zone_or_truncate_precision(value):
+    assert H.timestamp(value) is None
+    with pytest.raises(H.EvidenceError, match="invalid_timestamp"):
+        H.instant(value)
+
+
+def test_aware_datetime_and_postgresql_separator_preserve_instant():
+    value = datetime(2026, 10, 5, 10, 0, 0, 12000, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+    expected = "2026-10-05T04:30:00.012000+00:00"
+    assert H.timestamp(value) == expected
+    assert H.timestamp(value.isoformat(sep="T")) == expected
+    assert H.timestamp(value.isoformat(sep=" ")) == expected
+
+
+@pytest.mark.parametrize("bad_signal_time", [False, True])
+def test_wire_reader_through_projection_uses_same_strict_timestamp_contract(
+    monkeypatch, bad_signal_time
+):
+    s, records = signal(), orders()
+    s["updated_at"] = "2026-10-05T10:00:00.12345" + ("" if bad_signal_time else "+00:00")
+    records[0]["updated_at"] = "2026-10-01T10:00:00.1+00:00"
+    records[0]["observation"].update(
+        updated_at="2026-10-01T15:30:00.1+05:30", filled_at="2026-10-01T10:00:00.1Z"
+    )
+    records[1]["updated_at"] = "2026-10-05T10:00:00.1234+00:00"
+    records[1]["observation"].update(
+        updated_at="2026-10-05T06:00:00.12-04:00", filled_at="2026-10-05T10:00:00.12Z"
+    )
+    policy = dict(
+        deployment_id=IDENTITY[0],
+        database_id=IDENTITY[1],
+        database_name=DATABASE_NAME,
+        connected_database=DATABASE_NAME,
+    )
+    conn = identity_connection(policy)
+    batches = [[policy], [s], records, []]
+    encoded = [[json.dumps(row) for row in batch] for batch in batches]
+    conn.cursor.return_value.fetchmany.side_effect = [
+        [(body, len(batch), sum(len(item.encode()) for item in batch)) for body in batch]
+        for batch in encoded
+    ]
+    python310_fraction_parser(monkeypatch)
+    client = SimpleNamespace(get_account=Mock(return_value=SimpleNamespace(id=UUID(ACCOUNT))))
+    result = H.snapshot(lambda: conn, client, IDENTITY, read=lambda fn, **kw: fn(), now=NOW)
+    if bad_signal_time:
+        assert result["status"] == "unavailable" and result["rows"] == []
+        assert result["failure_stage"] == "database_history_read"
+        assert conn.cursor.return_value.fetchmany.call_count == 2
+    else:
+        assert result["status"] == "ready" and result["broker_account_match"] == "verified"
+        assert result["source_as_of"] == "2026-10-05T10:00:00.123450+00:00"
+        row = result["rows"][0]
+        assert row["status"] == "complete" and row["gross_realized_pnl"] == 80.0
+        assert row["updated_at"] == result["source_as_of"]
+        assert row["entry_time"] == "2026-10-01T10:00:00.100000+00:00"
+        assert row["exit_time"] == "2026-10-05T10:00:00.120000+00:00"
+        assert conn.cursor.return_value.fetchmany.call_count == 4
+    conn.rollback.assert_called_once()
+    conn.close.assert_called_once()
+    conn.commit.assert_not_called()
