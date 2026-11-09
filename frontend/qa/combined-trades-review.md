@@ -14,8 +14,8 @@ one unknown candidate, one open recognition-only signal and one unfilled signal.
 
 ## Automated checks
 
-- `npm test`: 855 tests in 43 files passed on the final backend fixture.
-- 75 new tests in `CombinedTradesOverview.test.tsx` exercise the real production
+- `npm test`: 881 tests in 43 files passed on the final backend fixture.
+- 101 current-path tests in `CombinedTradesOverview.test.tsx` exercise the real production
   component/adapter and its shared request lifecycle, not the historical fixture.
 - 81 old composition tests in seven suites continue through a QA-only frozen
   `LegacyTradesTab`. These preserve legacy contract regressions and are not
@@ -70,3 +70,21 @@ The visual review caught loading copy that said unavailable before settlement;
 that wording and malformed-source account-binding copy were corrected and
 regression assertions added. The offline preview blocks external web fonts,
 so visual measurements use the existing fallback font stacks.
+
+## Independent-review follow-up
+
+The independent review found five accepted contradictory payloads in the first
+UI commit. The follow-up adds admission guards, not recomputed financial results:
+INCLUDED requires CLOSED; source and price basis must agree; ALL counts/coverage
+must match the full listed cohort; per-source counts must match source/inclusion
+rows; leaderboard and extrema symbols must belong to included records; and
+included entry/exit clocks must be ordered. Chronology comparison retains nine
+fractional digits and normalizes supplied offsets without computing date-range
+membership. The original final wire is unchanged.
+
+The current 101-test suite comprises 77 contract/SSR cases, 6 mounted TradesTab
+cases and 18 shared-watcher retention cases. All 26 added regression cases pass.
+Malformed HTTP200 cohorts still clear previous financial results. The original
+fixture, view/layout component hashes and one-request behavior remain unchanged;
+only the admission adapter, tests and rebuilt JavaScript changed. The owned
+local Vite session was stopped after visual review, without touching user tabs.

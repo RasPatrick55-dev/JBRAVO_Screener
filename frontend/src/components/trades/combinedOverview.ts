@@ -20,6 +20,12 @@ export const combinedTimestamp = (value: unknown): value is string => {
   return year > 0 && month >= 1 && month <= 12 && day >= 1 && day <= [31,leap ? 29 : 28,31,30,31,30,31,31,30,31,30,31][month-1];
 };
 const nullableTime = (value: unknown) => value === null || combinedTimestamp(value);
+// Compare already validated wire clocks without dropping sub-millisecond digits.
+// This is a chronology admission guard, never range membership or P/L arithmetic.
+const preciseTime = (value: string): bigint => {
+  const parts = /^(.*:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(value)!;
+  return BigInt(Date.parse(parts[1] + parts[3])) * 1000000n + BigInt((parts[2] ?? "").padEnd(9, "0"));
+};
 // Formatting conversion only. Python owns exact-decimal economics, lifecycle,
 // order ownership, UTC range membership and every aggregate/rank.
 const amount = (value: unknown): number | null => {
@@ -80,7 +86,9 @@ export function combinedOverview(payload: ObjectValue | null): CombinedOverview 
     const legacy = row.source_kind === "LEGACY_EXECUTION";
     if (legacy ? !count(row.trade_id) || row.trade_id === 0 || row.signal_id !== null || row.row_id !== `legacy:${row.trade_id}` || row.account_binding !== "unverified" :
         !hash(row.signal_id) || !strategySymbol(row.symbol) || row.trade_id !== null || row.row_id !== `strategy:${row.signal_id}` || row.account_binding !== "verified") return null;
-    if (row.inclusion === "INCLUDED" && (row.gross_pnl === null || row.entry_time === null || row.exit_time === null) ||
+    if (row.price_basis !== (legacy ? "RECORDED_LEDGER" : "STORED_ORDER_FILL_AVERAGES")) return null;
+    if (row.inclusion === "INCLUDED" && (row.state !== "CLOSED" || row.gross_pnl === null || row.entry_time === null || row.exit_time === null ||
+        preciseTime(row.entry_time as string) > preciseTime(row.exit_time as string)) ||
         row.inclusion !== "INCLUDED" && row.gross_pnl !== null) return null;
     seen.add(row.row_id);
     rows.push({rowId:row.row_id,sourceKind:row.source_kind as CombinedTradeRow["sourceKind"],symbol:row.symbol as string ?? "Unknown",
@@ -94,6 +102,17 @@ export function combinedOverview(payload: ObjectValue | null): CombinedOverview 
   if (rows.length !== counts.included + counts.excluded + counts.unknown ||
       rows.filter(row=>row.inclusion === "INCLUDED").length !== counts.included ||
       rows.filter(row=>row.inclusion === "POLICY_EXCLUDED").length !== counts.excluded) return null;
+  const coverageFields = ["included", "excluded", "unknown"] as const;
+  const inclusionFields = ["INCLUDED", "POLICY_EXCLUDED", "UNKNOWN"] as const;
+  for (const [kind, expected] of [["LEGACY_EXECUTION", legacyCoverage], ["STRATEGY_EXECUTION", strategyCoverage]] as const) {
+    const group = rows.filter(row=>row.sourceKind === kind);
+    if (coverageFields.some((key,index)=>expected[key] !== group.filter(row=>row.inclusion === inclusionFields[index]).length)) return null;
+  }
+  const sameCoverage = (value:unknown, expected:typeof counts) => {
+    const actual=coverage(value);
+    return actual !== null && coverageFields.every(key=>actual[key] === expected[key]);
+  };
+  const includedSymbols = new Set(rows.filter(row=>row.inclusion === "INCLUDED").map(row=>row.symbol));
   const stats:RangeRowMetrics[] = [], seenRanges = new Set<string>();
   for (const value of payload.stats) {
     const row = object(value), cov = coverage(row?.coverage), top = object(row?.topTrade), worst = object(row?.worstLoss);
@@ -105,6 +124,12 @@ export function combinedOverview(payload: ObjectValue | null): CombinedOverview 
     const label = {d:"DAILY",w:"WEEKLY",m:"MONTHLY",y:"YEARLY",all:"ALL"}[key] as RangeRowMetrics["label"];
     if (row.label !== label || cov.included > 0 && (row.totalPL === null || row.winRatePct === null || top.pl === null || worst.pl === null || !symbol(top.symbol) || !symbol(worst.symbol)) ||
         cov.included === 0 && (row.winRatePct !== null || top.pl !== null || worst.pl !== null || (cov.unknown > 0 ? row.totalPL !== null : amount(row.totalPL) !== 0))) return null;
+    if (key === "all") {
+      const details=object(row.coverage)!, sources=object(details.by_source);
+      if (!sameCoverage(cov,counts) || !sources || !sameCoverage(sources.legacy,legacyCoverage) || !sameCoverage(sources.strategy,strategyCoverage) ||
+          details.deduplicated !== object(payload.coverage)!.deduplicated || details.strategy_not_closed !== object(payload.coverage)!.strategy_not_closed) return null;
+    }
+    if (cov.included > 0 && (!includedSymbols.has(String(top.symbol)) || !includedSymbols.has(String(worst.symbol)))) return null;
     seenRanges.add(key);
     stats.push({key,label,coverage:cov,tradesCount:row.tradesCount,totalPL:amount(row.totalPL),winRatePct:row.winRatePct as number|null,
       topTrade:{symbol:top.symbol as string ?? "--",pl:amount(top.pl)},worstLoss:{symbol:worst.symbol as string ?? "--",pl:amount(worst.pl)}});
@@ -119,7 +144,7 @@ export function combinedOverview(payload: ObjectValue | null): CombinedOverview 
       const symbols = new Set<string>();
       for (const value of list) {
         const row = object(value), pl = amount(row?.pl);
-        if (!row || !symbol(row.symbol) || symbols.has(row.symbol) || row.rank !== rankings[range][mode].length + 1 ||
+        if (!row || !symbol(row.symbol) || !includedSymbols.has(row.symbol) || symbols.has(row.symbol) || row.rank !== rankings[range][mode].length + 1 ||
             pl === null || (mode === "winners" ? pl <= 0 : pl >= 0)) return null;
         symbols.add(row.symbol); rankings[range][mode].push({rank:row.rank as number,symbol:row.symbol,pl});
       }

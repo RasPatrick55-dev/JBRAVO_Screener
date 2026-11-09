@@ -114,6 +114,70 @@ describe("actual combined Trades contract and presentation",()=>{
   });
 });
 
+describe("independent review cross-field admission regressions",()=>{
+  it.each(["LEGACY_EXECUTION","STRATEGY_EXECUTION"])("requires native CLOSED for an INCLUDED %s candidate",kind=>{
+    const p=fixture();p.rows.find((row:Obj)=>row.source_kind === kind && row.inclusion === "INCLUDED").state="OPEN";
+    expect(combinedOverview(p)).toBeNull();expect(markup(source(p))).toContain("Combined gross unavailable");
+  });
+  it.each(["LEGACY_EXECUTION","STRATEGY_EXECUTION"])("binds %s to its exact source price basis",kind=>{
+    const p=fixture();p.rows.find((row:Obj)=>row.source_kind === kind).price_basis=kind === "LEGACY_EXECUTION" ? "STORED_ORDER_FILL_AVERAGES" : "RECORDED_LEDGER";
+    expect(combinedOverview(p)).toBeNull();
+  });
+  it("rejects mutually consistent ALL count/coverage inflation against the unchanged full cohort",()=>{
+    const p=fixture(),all=p.stats.find((row:Obj)=>row.key === "all");all.tradesCount++;all.coverage.included++;
+    expect(combinedOverview(p)).toBeNull();
+  });
+  it.each(["included","excluded","unknown"])("binds global per-source %s coverage to actual source/inclusion rows",key=>{
+    const p=fixture(),from=p.coverage.by_source.strategy[key] > 0 ? "strategy" : "legacy",to=from === "strategy" ? "legacy" : "strategy";
+    p.coverage.by_source[from][key]--;p.coverage.by_source[to][key]++;
+    // Preserve each global sum; the per-source wire must still match row identities.
+    expect(combinedOverview(p)).toBeNull();
+  });
+  it.each(["excluded","unknown"])("binds ALL %s count to the full cohort",key=>{
+    const p=fixture();p.stats.find((row:Obj)=>row.key === "all").coverage[key]++;
+    expect(combinedOverview(p)).toBeNull();
+  });
+  it.each(["legacy","strategy"])("binds ALL %s source coverage to the full cohort",kind=>{
+    const p=fixture();p.stats.find((row:Obj)=>row.key === "all").coverage.by_source[kind].included++;
+    expect(combinedOverview(p)).toBeNull();
+  });
+  it.each(["deduplicated","strategy_not_closed"])("binds ALL %s coverage metadata to the full cohort",key=>{
+    const p=fixture();p.stats.find((row:Obj)=>row.key === "all").coverage[key]++;
+    expect(combinedOverview(p)).toBeNull();
+  });
+  it.each(["d","w","m","y","all"])("requires %s leaderboard symbols to belong to the included population",range=>{
+    for(const mode of ["winners","losers"]){const p=fixture();p.rankings[range][mode][0].symbol="NEVER";expect(combinedOverview(p)).toBeNull();}
+  });
+  it("does not allow an excluded or unknown symbol to stand in for an included rank",()=>{
+    for(const inclusion of ["POLICY_EXCLUDED","UNKNOWN"]){const p=fixture();p.rankings.all.winners[0].symbol=p.rows.find((row:Obj)=>row.inclusion===inclusion).symbol;expect(combinedOverview(p)).toBeNull();}
+  });
+  it.each(["topTrade","worstLoss"])("requires %s identity to exist in the included population",key=>{
+    const p=fixture();p.stats.find((row:Obj)=>row.key === "all")[key].symbol="NEVER";expect(combinedOverview(p)).toBeNull();
+  });
+  it.each(["LEGACY_EXECUTION","STRATEGY_EXECUTION"])("rejects reversed %s chronology at whole-second and nanosecond precision",kind=>{
+    for(const [entry,exit] of [["2001-02-03T11:00:01Z","2001-02-03T11:00:00Z"],
+      ["2001-02-03T11:00:00.123456789Z","2001-02-03T11:00:00.123456788Z"],
+      ["2001-02-03T06:00:00.123456789-05:00","2001-02-03T11:00:00.123456788Z"]]){
+      const p=fixture(),row=p.rows.find((row:Obj)=>row.source_kind===kind && row.inclusion === "INCLUDED");row.entry_time=entry;row.exit_time=exit;
+      expect(combinedOverview(p)).toBeNull();
+    }
+  });
+  it("accepts equal instants and ordered nanoseconds across timezone offsets without changing supplied fields",()=>{
+    for(const exit of ["2001-02-03T11:00:00.123456789Z","2001-02-03T11:00:00.123456790Z"]){
+      const p=fixture(),row=p.rows.find((row:Obj)=>row.inclusion === "INCLUDED");row.entry_time="2001-02-03T06:00:00.123456789-05:00";row.exit_time=exit;
+      const view=combinedOverview(p);expect(view).not.toBeNull();expect(view!.rows.find(value=>value.rowId===row.row_id)!.sellDate).toBe(exit);
+    }
+  });
+  it("does not retain previously valid totals after a contradictory HTTP200 cohort",async()=>{
+    vi.useFakeTimers();vi.setSystemTime(new Date(wire.observed_at));const events:SourceResult[]=[];
+    const invalid=fixture();invalid.rows.find((row:Obj)=>row.inclusion === "INCLUDED").state="OPEN";
+    const fetcher=vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(fixture()))).mockResolvedValueOnce(new Response(JSON.stringify(invalid)));
+    const stop=watchSource(COMBINED_GROSS_PATH,r=>events.push(r),20000,fetcher,60000,45000,combinedGrossReadPolicy);await settle();
+    expect(events.at(-1)!.kind).toBe("partial");await vi.advanceTimersByTimeAsync(20000);await settle();
+    expect(events.at(-1)!.kind).toBe("unavailable");expect(markup(events.at(-1)!)).not.toContain("Original Recorded P/L:");stop();
+  });
+});
+
 describe("actual TradesTab coherent controls and read lifecycle",()=>{
   it("uses one request for all sections and reuses server ranking/filter results",async()=>{
     vi.useFakeTimers();vi.setSystemTime(new Date(wire.observed_at));vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);
