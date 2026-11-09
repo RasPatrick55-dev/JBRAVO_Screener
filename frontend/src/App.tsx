@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import AccountOverview from "./screens/AccountOverview";
 import DashboardHealth from "./screens/DashboardHealth";
 import ExecuteTrades from "./screens/ExecuteTrades";
@@ -28,16 +28,24 @@ const labelFromHash = (hash: string) => {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState("Dashboard");
+  const [activeTab, setActiveTab] = useState(() =>
+    typeof window === "undefined" ? "Dashboard" : labelFromHash(window.location.hash) ?? "Dashboard"
+  );
+  const previousTab = useRef(activeTab);
+
+  useLayoutEffect(() => {
+    if (previousTab.current === activeTab) return;
+    previousTab.current = activeTab;
+    // A screen change remounts its navbar. Restore the navigation focus without
+    // letting focus scroll the document, then start the new page at the top.
+    document.querySelector<HTMLButtonElement>('nav[aria-label="Primary"] [aria-current="page"]')
+      ?.focus({ preventScroll: true });
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [activeTab]);
 
   useEffect(() => {
-    const initial = labelFromHash(window.location.hash);
-    if (initial) {
-      setActiveTab(initial);
-    }
-
     const handleHashChange = () => {
-      const next = labelFromHash(window.location.hash);
+      const next = window.location.hash === "" ? "Dashboard" : labelFromHash(window.location.hash);
       if (next) {
         setActiveTab(next);
       }

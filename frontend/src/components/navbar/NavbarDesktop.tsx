@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { NavbarDesktopProps } from "../../types/ui";
 import StatusBadge from "../badges/StatusBadge";
 import MarketClockGroup, { type MarketClockRecord } from "../header/MarketClockGroup";
@@ -9,6 +9,32 @@ export default function NavbarDesktop({ tabs, rightBadges, onTabSelect }: Navbar
   const [market, setMarket] = useState<MarketClockRecord | null>(null);
   const [localUtc, setLocalUtc] = useState(() => new Date().toISOString());
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const navRef = useRef<HTMLElement | null>(null);
+  const activeLabel = tabs.find((tab) => tab.isActive)?.label;
+
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const revealActive = () => {
+      const active = nav.querySelector<HTMLButtonElement>('[aria-current="page"]');
+      if (!active) return;
+      const viewport = nav.getBoundingClientRect();
+      const button = active.getBoundingClientRect();
+      const left = viewport.left + nav.clientLeft;
+      const right = left + nav.clientWidth;
+      // Only move this horizontal strip, never the document or other ancestors.
+      if (button.left < left) nav.scrollLeft += button.left - left;
+      else if (button.right > right) nav.scrollLeft += button.right - right;
+    };
+    revealActive();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(revealActive);
+    observer?.observe(nav);
+    window.addEventListener("resize", revealActive);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", revealActive);
+    };
+  }, [activeLabel]);
 
   useEffect(() => {
     const tick = () => setLocalUtc(new Date().toISOString());
@@ -106,6 +132,7 @@ export default function NavbarDesktop({ tabs, rightBadges, onTabSelect }: Navbar
               </div>
             </div>
             <nav
+              ref={navRef}
               aria-label="Primary"
               className="flex items-center gap-2 overflow-x-auto text-sm font-medium text-slate-500 dark:text-slate-400 lg:overflow-visible"
             >
