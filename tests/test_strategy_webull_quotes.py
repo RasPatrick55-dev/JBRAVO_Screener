@@ -218,6 +218,17 @@ def test_provider_setup_failure_does_not_block_broker_initialization_or_reconcil
     assert calls == [1] and broker.quote_failures == {'SPY': 'QUOTE_TRANSPORT_UNAVAILABLE'}
 
 
+def test_entry_only_market_data_false_cannot_enable_webull_transport(modules):
+    calls = []
+    _, B = webull.execution_components(modules.baseline_broker.PaperBroker,
+        modules.baseline_engine.Engine, quote_factory=lambda: calls.append('factory'))
+    broker = B(ENV, session=Session(), market_data=False)
+    assert broker.market_data is False and broker.quote_feed is None
+    assert broker.quotes({'SPY'}, now=NOW) == {}
+    assert broker.quote_failures == {'SPY': 'QUOTE_FORBIDDEN'}
+    assert broker.requests == 0 and calls == []
+
+
 def test_factory_rejects_changed_native_exit_price_or_order_sequence(modules):
     class Changed(modules.baseline_engine.Engine):
         def manage(self, *args, **kwargs):
