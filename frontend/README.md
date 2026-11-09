@@ -82,3 +82,28 @@ Execute P/L and current entry-window claims remain hidden on failed refreshes;
 retained order/log observations are labeled unverified. PostgreSQL remains the
 canonical pipeline/accounting source, CSV remains diagnostic, and execution
 remains paper-only.
+
+## Strategy trade history
+
+Trades now reads `/api/trades/strategy-history?limit=25` independently through
+the shared request lifecycle. The separate Strategy Trade History card consumes
+`jbravo.strategy-history.v1` from PostgreSQL strategy execution observations.
+It does not add these rows to the legacy ledger, performance summary or ranking.
+
+Native signal state is separate from observed fill completion. Complete exits,
+partial exits, entries without an exit, observed unfilled entries and incomplete
+evidence remain distinct. Gross realized P/L requires the server's complete
+FULL_EXIT_OBSERVED classification and native CLOSED state. Fees and net remain
+unknown. Stored ownership labels are historical and do not establish current
+position-management authority. Response receipts and source record times are
+separate; polling is not a live fill or position read.
+
+The endpoint returns the latest bounded signals without pagination. The card
+shows the `has_more` limitation and reports legacy order-ID overlap exclusions.
+Unavailable or malformed responses do not become empty results or zero P/L.
+Failed refreshes retain the original sample with a visible stale warning.
+
+For local visual QA without API/database/broker calls, run Vite and open
+`/qa/strategyHistoryPreview.html`. This is a standalone synthetic fixture page,
+not a production route or source of trading facts. See
+`qa/strategy-history-review.md` for the tested scenarios and limits.

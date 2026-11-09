@@ -4,6 +4,8 @@ import { canDisplay, finiteNumber, useSource, type SourceResult } from "../ui/so
 import TradesPerformanceBoard from "./TradesPerformanceBoard";
 import TradesLeaderboard from "./TradesLeaderboard";
 import LatestTradesTable from "./LatestTradesTable";
+import StrategyHistoryCard from "./StrategyHistoryCard";
+import { STRATEGY_HISTORY_PATH, strategyHistoryView } from "./strategyHistory";
 import { allocationGrossRows } from "./AllocationGrossPanel";
 import { buildLeaderboardRequestPath } from "./leaderboardData";
 import { recordedGrossContract, normalizeRecordedGrossStats, normalizeRecordedGrossLeaders, coverageText } from "./recordedGrossData";
@@ -121,6 +123,8 @@ export default function TradesTab({ onSyncStateChange }: { onSyncStateChange?: (
   const grossStats = useSource("/api/trades/stats?range=all&basis=execution_gross");
   const leaders = useSource(buildLeaderboardRequestPath(range, mode, 12, "execution_gross"));
   const history = useSource(`/api/trades/history?limit=25${cursor === undefined ? "" : `&before=${cursor}`}`);
+  const strategyHistory = useSource(STRATEGY_HISTORY_PATH);
+  const strategyKind = strategyHistoryView(strategyHistory).kind;
   const grossKind:SourceResult["kind"] = canDisplay(grossStats.kind) && !recordedGrossContract(grossStats.payload,"execution_gross") ? "unavailable" : grossStats.kind;
   const readyStats = canDisplay(grossKind) ? normalizeRecordedGrossStats(grossStats.payload,"execution_gross") : [];
   const leaderData = normalizeRecordedGrossLeaders(leaders.payload,"execution_gross");
@@ -136,13 +140,14 @@ export default function TradesTab({ onSyncStateChange }: { onSyncStateChange?: (
   const undisplayedCount = Math.max(0, returnedCount - rows.length);
   const incompleteHistory = undisplayedCount ? `${undisplayedCount} returned history ${undisplayedCount === 1 ? "record has an invalid identifier; its details are" : "records have invalid identifiers; their details are"} unavailable.` : null;
   useEffect(() => {
-    const kinds = [grossKind, leaderKind, history.kind];
+    const kinds = [grossKind, leaderKind, history.kind, strategyKind];
     onSyncStateChange?.(kinds.includes("loading") ? "loading" : kinds.every(kind => ["ready", "empty"].includes(kind)) ? "ready" : "error");
-  }, [grossKind, leaderKind, history.kind, onSyncStateChange]);
+  }, [grossKind, leaderKind, history.kind, strategyKind, onSyncStateChange]);
   const netMessage = stats.kind === "held" ? "Performance held; accounting qualification is not established." : `Qualified net performance ${stats.kind}; recorded gross does not qualify net.`;
   const metricMessage = !canDisplay(grossKind) ? "Execution gross inputs unavailable; amounts and coverage are unknown." :
     !readyStats.length ? "Execution gross fields incomplete; values unknown." : null;
   return <section className="space-y-4" aria-label="Trades tab">
+    <StrategyHistoryCard result={strategyHistory}/>
     <div className="grid gap-md xl:grid-cols-3 xl:items-stretch">
       <div className="contents xl:col-span-2 xl:block xl:space-y-4">
         <div className="order-1"><TradesPerformanceBoard gross rows={readyStats} isLoading={grossStats.kind === "loading"}
