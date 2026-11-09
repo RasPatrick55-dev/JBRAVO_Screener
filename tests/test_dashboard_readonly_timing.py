@@ -13,6 +13,7 @@ from flask import Flask, Response, g, jsonify, request
 import pytest
 
 
+pytestmark = pytest.mark.alpaca_optional
 APP = Path(__file__).resolve().parents[1] / "dashboards/dashboard_app.py"
 TREE = ast.parse(APP.read_text(encoding="utf-8"))
 
