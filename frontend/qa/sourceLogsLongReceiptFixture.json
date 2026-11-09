@@ -1,0 +1,88 @@
+{
+  "provenance": "Reconstructed from the live rendered Source Logs Board on 2026-11-08T23:45Z; exact source and receipt text, no additional API request. Rows omitted because this regression is receipt/grid sizing.",
+  "responses": {
+    "screener": {
+      "ok": true,
+      "stage": "screener",
+      "source": "pythonanywhere",
+      "source_detail": "pythonanywhere:/home/RasPatrick/jbravo_screener/logs/screener.log;pythonanywhere:/home/RasPatrick/jbravo_screener/logs/pipeline.log",
+      "source_receipts": [
+        {
+          "source": "pythonanywhere:/home/RasPatrick/jbravo_screener/logs/screener.log",
+          "latest_event_at": "2026-10-25T04:02:04+00:00",
+          "observed_at": "2026-11-08T23:45:39.523783+00:00",
+          "timestamp_basis": "Explicit offsets preserved; offset-free leading task/log timestamps interpreted as UTC (producer convention); JSON finished_at requires an explicit offset",
+          "unknown_timestamp_count": 243
+        },
+        {
+          "source": "pythonanywhere:/home/RasPatrick/jbravo_screener/logs/pipeline.log",
+          "latest_event_at": "2026-10-25T04:05:00+00:00",
+          "observed_at": "2026-11-08T23:45:39.584548+00:00",
+          "timestamp_basis": "Explicit offsets preserved; offset-free leading task/log timestamps interpreted as UTC (producer convention); JSON finished_at requires an explicit offset",
+          "unknown_timestamp_count": 84
+        }
+      ],
+      "rows": []
+    },
+    "backtest": {
+      "ok": true,
+      "stage": "backtest",
+      "source": "pythonanywhere",
+      "source_detail": "pythonanywhere:/home/RasPatrick/jbravo_screener/logs/step.backtest.out;pythonanywhere:/home/RasPatrick/jbravo_screener/logs/backtest.log;pythonanywhere:/home/RasPatrick/jbravo_screener/logs/pipeline.log",
+      "source_receipts": [
+        {
+          "source": "pythonanywhere:/home/RasPatrick/jbravo_screener/logs/step.backtest.out",
+          "latest_event_at": "2026-10-25T04:02:42+00:00",
+          "observed_at": "2026-11-08T23:45:42.143212+00:00",
+          "timestamp_basis": "Explicit offsets preserved; offset-free leading task/log timestamps interpreted as UTC (producer convention); JSON finished_at requires an explicit offset",
+          "unknown_timestamp_count": 0
+        },
+        {
+          "source": "pythonanywhere:/home/RasPatrick/jbravo_screener/logs/backtest.log",
+          "latest_event_at": "2026-11-08T23:34:44+00:00",
+          "observed_at": "2026-11-08T23:45:42.146863+00:00",
+          "timestamp_basis": "Explicit offsets preserved; offset-free leading task/log timestamps interpreted as UTC (producer convention); JSON finished_at requires an explicit offset",
+          "unknown_timestamp_count": 0
+        },
+        {
+          "source": "pythonanywhere:/home/RasPatrick/jbravo_screener/logs/pipeline.log",
+          "latest_event_at": "2026-10-25T04:05:00+00:00",
+          "observed_at": "2026-11-08T23:45:42.262056+00:00",
+          "timestamp_basis": "Explicit offsets preserved; offset-free leading task/log timestamps interpreted as UTC (producer convention); JSON finished_at requires an explicit offset",
+          "unknown_timestamp_count": 84
+        }
+      ],
+      "rows": []
+    },
+    "metrics": {
+      "ok": true,
+      "stage": "metrics",
+      "source": "pythonanywhere",
+      "source_detail": "pythonanywhere:/home/RasPatrick/jbravo_screener/logs/step.metrics.out;pythonanywhere:/home/RasPatrick/jbravo_screener/logs/metrics.log;pythonanywhere:/home/RasPatrick/jbravo_screener/logs/pipeline.log",
+      "source_receipts": [
+        {
+          "source": "pythonanywhere:/home/RasPatrick/jbravo_screener/logs/step.metrics.out",
+          "latest_event_at": "2026-10-25T04:02:44+00:00",
+          "observed_at": "2026-11-08T23:45:45.626926+00:00",
+          "timestamp_basis": "Explicit offsets preserved; offset-free leading task/log timestamps interpreted as UTC (producer convention); JSON finished_at requires an explicit offset",
+          "unknown_timestamp_count": 5331
+        },
+        {
+          "source": "pythonanywhere:/home/RasPatrick/jbravo_screener/logs/metrics.log",
+          "latest_event_at": "2026-10-25T04:02:44+00:00",
+          "observed_at": "2026-11-08T23:45:45.668286+00:00",
+          "timestamp_basis": "Explicit offsets preserved; offset-free leading task/log timestamps interpreted as UTC (producer convention); JSON finished_at requires an explicit offset",
+          "unknown_timestamp_count": 1975
+        },
+        {
+          "source": "pythonanywhere:/home/RasPatrick/jbravo_screener/logs/pipeline.log",
+          "latest_event_at": "2026-10-25T04:05:00+00:00",
+          "observed_at": "2026-11-08T23:45:45.717719+00:00",
+          "timestamp_basis": "Explicit offsets preserved; offset-free leading task/log timestamps interpreted as UTC (producer convention); JSON finished_at requires an explicit offset",
+          "unknown_timestamp_count": 84
+        }
+      ],
+      "rows": []
+    }
+  }
+}

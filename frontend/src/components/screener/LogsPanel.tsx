@@ -186,7 +186,7 @@ export default function LogsPanel({ title, stage, onSyncStateChange }: LogsPanel
   }, [rows, selectedChip]);
 
   return (
-    <section className={`flex h-full min-h-0 flex-col rounded-2xl p-3 shadow-card jbravo-panel sm:p-md ${stageStyle.panel}`}>
+    <section className={`flex h-full min-h-0 min-w-0 flex-col rounded-2xl p-3 shadow-card jbravo-panel sm:p-md ${stageStyle.panel}`}>
       <header className="flex items-center justify-between gap-2">
         <h3 className="font-arimo text-xs font-semibold uppercase tracking-[0.08em] text-primary sm:text-sm">{title}</h3>
         <button
