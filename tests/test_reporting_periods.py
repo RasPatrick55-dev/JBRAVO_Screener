@@ -119,3 +119,65 @@ def test_calendar_failure_is_bounded_and_does_not_reopen_database(monkeypatch):
     assert result["stats"][-1]["tradesCount"] == 2 and result["rankings"]["w"] is None
     assert "private" not in str(result)
     conn.close.assert_called_once()
+
+class _DatetimeMeta(type):
+    def __instancecheck__(cls, value):
+        return isinstance(value, datetime)
+
+
+class StrictPython310Datetime(datetime, metaclass=_DatetimeMeta):
+    """Model native fromisoformat's supported fraction widths, not modern leniency."""
+    @classmethod
+    def fromisoformat(cls, value):
+        import re
+        match = re.search(r"\.(\d+)", value)
+        if value.endswith("Z") or match and len(match[1]) not in (3, 6):
+            raise ValueError("Invalid isoformat string")
+        return super().fromisoformat(value)
+
+
+@pytest.mark.parametrize("fraction", ["", *["." + "123456789"[:n] for n in range(1, 10)]])
+@pytest.mark.parametrize("suffix", ["Z", "+00:00", "-05:00"])
+def test_calendar_accepts_all_broker_fractions_on_python310(monkeypatch, fraction, suffix):
+    # Reproduce the old failure through the actual trading parser without
+    # changing it, then require the dashboard not to use that parser.
+    from scripts import trade_disposition as D
+    monkeypatch.setattr(D, "datetime", StrictPython310Datetime)
+    monkeypatch.setattr(P.H, "datetime", StrictPython310Datetime)
+    stamp = "2026-11-09T14:31:47" + fraction + suffix
+    if len(fraction) > 7:
+        with pytest.raises(Exception, match="TIME_INVALID"):
+            D.aware_time(stamp)
+    monkeypatch.setattr(D, "aware_time", lambda value: pytest.fail("Trading parser must not be used"))
+    at = now("2026-11-09T22:00:00Z")
+    periods = P.validate(calendar("2026-11-02", "2026-11-09", "2026-11-13", "2026-11-30"), at)
+    assert periods.selected(stamp, "w")
+    assert periods.selected(stamp, "m")
+
+
+@pytest.mark.parametrize("at,dates,before,on", [
+    ("2026-03-09T04:00:00Z", ["2026-03-02","2026-03-09","2026-03-31"],
+     "2026-03-09T03:59:59.999999999Z", "2026-03-09T04:00:00.000000000Z"),
+    ("2026-11-02T05:00:00Z", ["2026-11-02","2026-11-30"],
+     "2026-11-02T04:59:59.999999999Z", "2026-11-02T05:00:00.000000000Z"),
+    ("2026-12-01T05:00:00Z", ["2026-11-30","2026-12-01","2026-12-31"],
+     "2026-12-01T04:59:59.999999999Z", "2026-12-01T05:00:00.000000000Z"),
+])
+def test_python310_nanos_do_not_round_across_calendar_or_cutoff(monkeypatch, at, dates, before, on):
+    monkeypatch.setattr(P.H, "datetime", StrictPython310Datetime)
+    periods = P.validate(calendar(*dates), now(at))
+    key = "m" if "12-01" in at else "w"
+    assert not periods.selected(before, key)
+    assert periods.selected(on, key)
+    assert not periods.selected(on.replace(".000000000", ".000000001"), key)
+
+@pytest.mark.parametrize("stamp,weekly,monthly", [
+    ("2026-11-09T14:20:25.70516267+00:00", True, True),  # ARDT exit
+    ("2026-11-05T17:16:49.746895118+00:00", False, True),  # THC exit
+    ("2026-11-05T09:20:13.733191542+00:00", False, True),  # ARDT entry parser coverage only
+])
+def test_actual_observed_broker_timestamp_shapes(monkeypatch, stamp, weekly, monthly):
+    monkeypatch.setattr(P.H, "datetime", StrictPython310Datetime)
+    periods = P.validate(calendar("2026-11-02", "2026-11-05", "2026-11-09", "2026-11-13", "2026-11-30"), now("2026-11-09T22:00:00Z"))
+    assert periods.selected(stamp, "w") is weekly
+    assert periods.selected(stamp, "m") is monthly
