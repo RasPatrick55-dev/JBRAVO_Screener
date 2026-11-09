@@ -66,7 +66,33 @@ STRATEGY_COHORT_SQL = (
 )
 
 
+# Fixed pairs of existing projection queries, never native policy queries.
+GUARD_PAIR_SQL = (
+    "WITH visibility(c0,c1,c2,c3,c4,c5,c6) AS MATERIALIZED ("
+    + E.VISIBILITY_SQL
+    + "), schema_rows(c0,c1,c2) AS MATERIALIZED ("
+    + E.SCHEMA_SQL
+    + ") "
+    "SELECT 'visibility'::text AS section,pg_catalog.row_number() OVER (ORDER BY c0)::text AS ordinal,"
+    "pg_catalog.json_build_array(c0,c1,c2,c3,c4,c5,c6)::text AS body FROM visibility UNION ALL "
+    "SELECT 'schema',pg_catalog.row_number() OVER (ORDER BY c0,c1)::text,"
+    "pg_catalog.json_build_array(c0,c1,c2)::text FROM schema_rows"
+)
+EXECUTION_PAIR_SQL = (
+    "WITH owners(body) AS MATERIALIZED ("
+    + E.OWNERS_SQL
+    + "), fills(body) AS MATERIALIZED ("
+    + E.FILLS_SQL
+    + ") "
+    "SELECT 'owners'::text AS section,pg_catalog.row_number() OVER "
+    "(ORDER BY (body::jsonb->'row'->>'trade_id')::bigint)::text AS ordinal,body FROM owners UNION ALL "
+    "SELECT 'fills',pg_catalog.row_number() OVER (ORDER BY body::jsonb->'row'->>'activity_id')::text,body FROM fills"
+)
+
+
 PLANS = {
+    GUARD_PAIR_SQL: dict(kind="canonical", arity=3, order="q.c0,q.c1::bigint"),
+    EXECUTION_PAIR_SQL: dict(kind="canonical", arity=3, order="q.c0,q.c1::bigint"),
     STRATEGY_COHORT_SQL: dict(kind="canonical", arity=3, order="q.c0,q.c1::bigint"),
     STRATEGY_VISIBILITY_SQL: dict(kind="canonical", arity=7, order="q.c0"),
     SIGNALS_SQL: dict(kind="canonical", arity=1, order="q.c0::jsonb->'row'->>'signal_id'"),
@@ -126,17 +152,96 @@ def strategy_cohort(cursor, account):
 
 
 class LegacyInputCapture:
-    """Retain the already-bounded fill evidence without another SQL read."""
+    """One-pass pairing; unchanged native readers consume exact original rows.
+
+    Nothing is reused across cohort passes. Native policy replay is untouched.
+    Each batch is fully charged/drained by T before its original rows are exposed.
+    """
 
     def __init__(self, cursor):
         self.cursor, self.sql, self.fills = cursor, None, None
+        self.pending = None
+        self.rows = None
+        H.need(
+            not (
+                {E.VISIBILITY_SQL, E.SCHEMA_SQL, E.OWNERS_SQL, E.FILLS_SQL} & cursor.canonical_sql
+            ),
+            "projection_pair_native_overlap",
+        )
+
+    def pair(self, sql, params, caps):
+        self.cursor.execute(sql, params)
+        groups = {key: [] for key in caps}
+        for row in self.cursor.fetchall():
+            H.need(
+                len(row) == 3
+                and row[0] in groups
+                and type(row[1]) is str
+                and row[1].isascii()
+                and row[1].isdigit()
+                and len(row[1]) <= 4
+                and type(row[2]) is str,
+                "projection_pair_wire_invalid",
+            )
+            section, ordinal, body = row
+            H.need(int(ordinal) == len(groups[section]) + 1, "projection_pair_order_invalid")
+            H.need(len(groups[section]) < caps[section], "population_overflow")
+            if section in ("visibility", "schema"):
+                values = json.loads(body)
+                H.need(
+                    type(values) is list
+                    and len(values) == (7 if section == "visibility" else 3)
+                    and all(type(v) in (str, int, bool, type(None)) for v in values),
+                    "projection_pair_guard_invalid",
+                )
+                groups[section].append(tuple(values))
+            else:
+                groups[section].append((body,))
+        return groups
 
     def execute(self, sql, params=None):
+        H.need(self.rows is None, "projection_pair_unconsumed")
         self.sql = sql
-        return self.cursor.execute(sql, params)
+        if self.pending is not None:
+            expected, expected_params, rows = self.pending
+            H.need(
+                sql == expected and params == expected_params, "projection_pair_sequence_changed"
+            )
+            self.rows, self.pending = rows, None
+        elif sql == E.VISIBILITY_SQL:
+            H.need(params is None, "projection_pair_params_invalid")
+            groups = self.pair(GUARD_PAIR_SQL, None, dict(visibility=3, schema=65))
+            self.rows = groups["visibility"]
+            self.pending = (E.SCHEMA_SQL, None, groups["schema"])
+        elif sql == E.OWNERS_SQL:
+            H.need(
+                type(params) is tuple
+                and len(params) == 3
+                and all(type(p) is list for p in params)
+                and params[1] == params[2],
+                "projection_pair_params_invalid",
+            )
+            # Native read_inputs derives both owner queries and fills from this
+            # same sorted order population. Require the subsequent call exactly.
+            groups = self.pair(
+                EXECUTION_PAIR_SQL,
+                (*params, params[1]),
+                dict(owners=E.MAX_OWNERS, fills=E.MAX_FILLS),
+            )
+            self.rows = groups["owners"]
+            self.pending = (E.FILLS_SQL, (list(params[1]),), groups["fills"])
+        else:
+            H.need(
+                sql in (E.LOCK_SQL, E.TRADES_SQL) and params is None,
+                "projection_pair_sequence_changed",
+            )
+            return self.cursor.execute(sql, params)
 
     def fetchall(self):
-        rows = self.cursor.fetchall()
+        if self.rows is None:
+            rows = self.cursor.fetchall()
+        else:
+            rows, self.rows = self.rows, None
         if self.sql == E.FILLS_SQL:
             self.fills, _ = E.split_versions([D.document(row[0]) for row in rows], "activity_id")
         return rows
@@ -148,7 +253,7 @@ class LegacyInputCapture:
 def read_cohort(connection_factory, identity, account):
     """Same transaction and finite transport budget as native execution gross.
 
-    Twelve fixed cohort SELECTs plus the existing finite canonical policy plan
+    Ten fixed cohort SELECTs plus the existing finite canonical policy plan
     and final replay. Every population/version is compared before returning.
     """
     connection = None

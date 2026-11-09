@@ -48,6 +48,27 @@ class FullNative(Native):
         return super().execute(sql, params)
 
     def native(self, sql, params):
+        if sql in (C.GUARD_PAIR_SQL, C.EXECUTION_PAIR_SQL):
+            specs = (
+                [("visibility", C.E.VISIBILITY_SQL, None), ("schema", C.E.SCHEMA_SQL, None)]
+                if sql == C.GUARD_PAIR_SQL
+                else [
+                    ("owners", C.E.OWNERS_SQL, params[:3]),
+                    ("fills", C.E.FILLS_SQL, (params[3],)),
+                ]
+            )
+            return sorted(
+                [
+                    (
+                        name,
+                        str(i),
+                        json.dumps(list(row)) if name in ("visibility", "schema") else row[0],
+                    )
+                    for name, query, args in specs
+                    for i, row in enumerate(self.native(query, args), 1)
+                ],
+                key=lambda row: (row[0], int(row[1])),
+            )
         if sql == C.STRATEGY_COHORT_SQL:
             self.batch_reads += 1
             visibility = [
@@ -164,3 +185,95 @@ def test_native_semantics_preserved():
 def test_guarded_case_ctes_have_explicit_body_column_alias():
     for name in ("signals", "orders", "claims"):
         assert name + "(body) AS MATERIALIZED (" in C.STRATEGY_COHORT_SQL
+
+
+class PairCursor:
+    canonical_sql = set()
+
+    def __init__(self, rows=()):
+        self.rows, self.calls = list(rows), []
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+
+    def fetchall(self):
+        return self.rows
+
+
+def test_pairing_preserves_exact_sql_and_parameter_arity():
+    assert C.E.VISIBILITY_SQL in C.GUARD_PAIR_SQL and C.E.SCHEMA_SQL in C.GUARD_PAIR_SQL
+    assert C.E.OWNERS_SQL in C.EXECUTION_PAIR_SQL and C.E.FILLS_SQL in C.EXECUTION_PAIR_SQL
+    assert C.EXECUTION_PAIR_SQL.count("%s") == 4
+    assert C.GUARD_PAIR_SQL.count("%s") == 0
+    assert not {C.E.VISIBILITY_SQL, C.E.SCHEMA_SQL, C.E.OWNERS_SQL, C.E.FILLS_SQL} & {
+        sql for sql, plan in C.T.plan_table().items() if plan["kind"] != "control"
+    }
+
+
+def test_pair_rejects_native_replay_overlap():
+    cursor = PairCursor()
+    cursor.canonical_sql = {C.E.FILLS_SQL}
+    with pytest.raises(ValueError, match="projection_pair_native_overlap"):
+        C.LegacyInputCapture(cursor)
+
+
+@pytest.mark.parametrize(
+    "sql,params",
+    [
+        ("SELECT unexpected", None),
+        (C.E.SCHEMA_SQL, None),
+        (C.E.FILLS_SQL, ([],)),
+        (C.E.OWNERS_SQL, ([1], ["a"], ["b"])),
+        (C.E.VISIBILITY_SQL, (1,)),
+    ],
+)
+def test_pair_rejects_unexpected_sql_or_parameters(sql, params):
+    cursor = PairCursor()
+    with pytest.raises(ValueError):
+        C.LegacyInputCapture(cursor).execute(sql, params)
+    assert cursor.calls == []
+
+
+def test_pair_requires_matching_fill_population_and_does_not_cache_across_instances():
+    cursor = PairCursor()
+    capture = C.LegacyInputCapture(cursor)
+    capture.execute(C.E.OWNERS_SQL, ([1], ["a"], ["a"]))
+    assert capture.fetchall() == []
+    with pytest.raises(ValueError, match="projection_pair_sequence_changed"):
+        capture.execute(C.E.FILLS_SQL, (["b"],))
+    capture.execute(C.E.FILLS_SQL, (["a"],))
+    assert capture.fetchall() == [] and capture.fills == []
+    second = C.LegacyInputCapture(cursor)
+    second.execute(C.E.OWNERS_SQL, ([1], ["a"], ["a"]))
+    assert len(cursor.calls) == 2
+    assert cursor.calls[0] == (C.EXECUTION_PAIR_SQL, ([1], ["a"], ["a"], ["a"]))
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        ("unknown", "1", "{}"),
+        ("owners", "2", "{}"),
+        ("fills", "1", None),
+        ("schema", "1", "{}"),
+        ("visibility", "1", "[true]"),
+    ],
+)
+def test_pair_rejects_malformed_wire(row):
+    capture = C.LegacyInputCapture(PairCursor([row]))
+    with pytest.raises(ValueError):
+        capture.pair(C.GUARD_PAIR_SQL, None, dict(visibility=3, schema=65, owners=1000, fills=4000))
+
+
+@pytest.mark.parametrize("section,cap", [("owners", 1000), ("fills", 4000)])
+def test_pair_rejects_overflow(section, cap):
+    capture = C.LegacyInputCapture(PairCursor([(section, str(i), "{}") for i in range(1, cap + 2)]))
+    with pytest.raises(ValueError, match="population_overflow"):
+        capture.pair(C.EXECUTION_PAIR_SQL, None, {section: cap})
+
+
+def test_pair_requires_consumption_before_next_query():
+    capture = C.LegacyInputCapture(PairCursor())
+    capture.execute(C.E.VISIBILITY_SQL)
+    with pytest.raises(ValueError, match="projection_pair_unconsumed"):
+        capture.execute(C.E.SCHEMA_SQL)
