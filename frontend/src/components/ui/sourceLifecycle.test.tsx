@@ -29,10 +29,10 @@ describe("async source boundaries", () => {
   });
   it("logs deadline does not erase broker marks", async () => {
     vi.useFakeTimers(); const positions:SourceResult[]=[],logs:SourceResult[]=[];
-    const stopPositions=watchSource("/positions",v=>positions.push(v),20000,vi.fn().mockResolvedValue(response({ok:true,positions:[{symbol:"AAA",currentPrice:13.5}]})));
+    const stopPositions=watchSource("/positions",v=>positions.push(v),20000,vi.fn().mockImplementation(() => Promise.resolve(response({ok:true,positions:[{symbol:"AAA",currentPrice:13.5}]}))));
     const logFetch:typeof fetch=(_path,init)=>new Promise<Response>((_resolve,reject)=>init?.signal?.addEventListener("abort",()=>reject(new Error("deadline"))));
     const stopLogs=watchSource("/logs",v=>logs.push(v),20000,logFetch);
-    await settle(); await vi.advanceTimersByTimeAsync(10001);
+    await settle(); await vi.advanceTimersByTimeAsync(45001);
     expect(logs[logs.length-1].kind).toBe("unavailable"); expect(positions[positions.length-1].kind).toBe("ready");
     expect(positions[positions.length-1].payload?.positions).toEqual([{symbol:"AAA",currentPrice:13.5}]); stopPositions();stopLogs();
   });
@@ -170,14 +170,14 @@ describe("review financial consumers and async page wiring", () => {
     const captured:any[]=[],cleanups:(()=>void)[]=[];
     vi.doMock("react",async()=>{
       const actual=await vi.importActual<typeof import("react")>("react");
-      return {...actual,useState:(initial:any)=>[typeof initial==="function"?initial():initial,(value:any)=>captured.push(value)],
+      return {...actual,useState:(initial:any)=>[typeof initial==="function"?initial():initial,(value:any)=>captured.push(value?.result ?? value)],
         useEffect:(effect:()=>void|(()=>void))=>{const cleanup=effect();if(cleanup)cleanups.push(cleanup);},useMemo:(factory:()=>unknown)=>factory()};
     });
     vi.stubGlobal("window",globalThis);
     vi.stubGlobal("fetch",vi.fn((path:string)=>path.includes("logs")||path.includes(".log")?new Promise(()=>{}):Promise.resolve(response(path.includes("positions/monitoring")?{ok:true,observed_at:"2026-10-25T16:00:00Z",positions:[{symbol:"AAA",currentPrice:13.5}]}:{ok:true}))));
     try{
       const {default:Dashboard}=await import("../../screens/DashboardHealth");Dashboard({});
-      await settle();
+      await settle(); await settle();
       expect(captured.some(value=>value?.kind==="ready"&&value?.payload?.positions?.[0]?.currentPrice===13.5)).toBe(true);
       await vi.advanceTimersByTimeAsync(61000);
       expect(captured.some(value=>value?.kind==="stale"&&value?.payload?.positions?.[0]?.symbol==="AAA")).toBe(true);
@@ -197,7 +197,7 @@ describe("v3 independent review state regressions",()=>{
       watchSource("/positions",v=>broker.push(v),20000,vi.fn().mockResolvedValue(response({ok:true,source:"alpaca",positions:[{symbol:"AAA"}],summary:{totalOpenPL:42.125}})))];
     try{
       await settle();expect(held[held.length-1].kind).toBe("held");
-      await vi.advanceTimersByTimeAsync(failure==="timeout"?30001:20001);
+      await vi.advanceTimersByTimeAsync(failure==="timeout"?65001:20001);
       expect(held[held.length-1].kind).toBe("held");
       expect(held[held.length-1].validity).toBe("held");expect(held[held.length-1].freshness).toBe("stale");
       expect(canDisplay(held[held.length-1].kind)).toBe(false);

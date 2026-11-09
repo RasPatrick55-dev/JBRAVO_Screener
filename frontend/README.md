@@ -51,3 +51,34 @@ Refresh stored files only after an authorized provider lookup and reviewed etag/
 change; no polling, webhook subscription or credential setup is introduced.
 
 Logo images preserve their native aspect ratios with object-contain and a light neutral backing inside the original compact tile. MOD/MUR source softness is retained without invented replacements.
+
+## Dashboard request lifecycle
+
+Data reads use a shared FIFO dispatcher with at most four active requests per
+page. Queue time remains loading; the 45-second response-and-body deadline starts
+when the request is dispatched. The strategy scorecard retains its explicit
+35-second deadline and longer refresh/freshness settings. Cancellation removes
+queued reads, aborts dispatched reads, clears timers, and prevents late results
+from publishing after navigation or a changed query.
+
+Polling waits a full interval after each settled read, rather than starting a
+second request on a fixed timer. Existing intervals remain 20 seconds for most
+panels, 15 seconds for stored connection diagnostics, and one second for the
+server clock. Manual refreshes while a read is queued or active are coalesced.
+ML Overview remains one-shot per mount; its diagnostic artifact ages and source
+labels are not rewritten by transport success.
+
+Execute state and audit use finite JSON reads, never EventSource streams. Initial
+loading is distinct from an unavailable first read. Failed refreshes preserve
+last successful samples with stale/unknown notices and their original receipts.
+Changed query paths do not inherit old rows or receipts. Account endpoints publish
+independently through the same source-state rules. All account reads use the
+canonical same-origin `/api` routes (the local Vite proxy supplies development
+routing), with no alternate-origin retries.
+
+Transport recovery does not qualify financial results or imply current broker
+protection. Held/unavailable business envelopes remain fail-closed. Validated
+Execute P/L and current entry-window claims remain hidden on failed refreshes;
+retained order/log observations are labeled unverified. PostgreSQL remains the
+canonical pipeline/accounting source, CSV remains diagnostic, and execution
+remains paper-only.

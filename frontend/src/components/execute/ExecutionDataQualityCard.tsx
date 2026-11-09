@@ -1,114 +1,27 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { usePollingRead, refreshNotice } from "../ui/usePollingRead";
+import { useMemo } from "react";
 import type { ExecuteAuditFinding, ExecuteAuditResponse } from "./types";
 import {
   auditSeverityChipClass,
-  fetchJsonNoStore,
   formatAgeSeconds,
   formatDateTimeUtc,
   formatNumber,
-  parseSseJson,
 } from "./utils";
 
 const chipClass =
   "inline-flex rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase outline outline-1";
-const REFRESH_INTERVAL_MS = 20_000;
-const FIRST_LOAD_GRACE_MS = 2_500;
-const REQUEST_TIMEOUT_MS = 15_000;
-
-const hasUsableAudit = (payload: ExecuteAuditResponse | null): payload is ExecuteAuditResponse => {
-  if (!payload || typeof payload !== "object") {
-    return false;
+const parseAudit = (value: unknown): ExecuteAuditResponse => {
+  const payload = value as ExecuteAuditResponse | null;
+  if (!payload || typeof payload !== "object" || !Boolean(payload.findings || payload.severity_counts || payload.cross_checks)) {
+    throw new Error("Data quality audit unavailable.");
   }
-  return Boolean(payload.findings || payload.severity_counts || payload.cross_checks);
+  return payload;
 };
 
 export default function ExecutionDataQualityCard() {
-  const [audit, setAudit] = useState<ExecuteAuditResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasError, setHasError] = useState(false);
-  const hasLoadedOnceRef = useRef(false);
-  const fallbackInFlightRef = useRef(false);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const applyPayload = (payload: ExecuteAuditResponse | null) => {
-      if (!isMounted) {
-        return;
-      }
-
-      if (hasUsableAudit(payload)) {
-        setAudit(payload);
-        setHasError(false);
-        hasLoadedOnceRef.current = true;
-      } else {
-        if (!hasLoadedOnceRef.current) {
-          setAudit(null);
-        }
-        setHasError(true);
-      }
-      setIsLoading(false);
-    };
-
-    const loadFallback = async () => {
-      if (fallbackInFlightRef.current) {
-        return;
-      }
-      fallbackInFlightRef.current = true;
-      setIsLoading(!hasLoadedOnceRef.current);
-      const payload = await fetchJsonNoStore<ExecuteAuditResponse>(
-        `/api/execute/audit?limit=200&ts=${Date.now()}`,
-        REQUEST_TIMEOUT_MS
-      );
-      applyPayload(payload);
-      fallbackInFlightRef.current = false;
-    };
-
-    if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
-      void loadFallback();
-      const intervalId = window.setInterval(() => {
-        void loadFallback();
-      }, REFRESH_INTERVAL_MS);
-      return () => {
-        isMounted = false;
-        window.clearInterval(intervalId);
-      };
-    }
-
-    setIsLoading(!hasLoadedOnceRef.current);
-    const source = new EventSource("/api/execute/audit/stream?limit=200");
-    const fallbackTimer = window.setTimeout(() => {
-      if (!hasLoadedOnceRef.current) {
-        void loadFallback();
-      }
-    }, FIRST_LOAD_GRACE_MS);
-    const intervalId = window.setInterval(() => {
-      void loadFallback();
-    }, REFRESH_INTERVAL_MS);
-
-    source.onmessage = (event) => {
-      const payload = parseSseJson<ExecuteAuditResponse>(event.data);
-      if (!payload) {
-        return;
-      }
-      window.clearTimeout(fallbackTimer);
-      applyPayload(payload);
-    };
-    source.onerror = () => {
-      if (!isMounted) {
-        return;
-      }
-      window.clearTimeout(fallbackTimer);
-      void loadFallback();
-    };
-
-    return () => {
-      isMounted = false;
-      window.clearTimeout(fallbackTimer);
-      window.clearInterval(intervalId);
-      source.close();
-    };
-  }, []);
+  const source = usePollingRead("/api/execute/audit?limit=200", parseAudit);
+  const { data: audit, isLoading } = source;
+  const hasError = Boolean(source.error);
 
   const findings = useMemo(
     () => (audit?.findings ?? []).slice(0, 6),
@@ -116,12 +29,12 @@ export default function ExecutionDataQualityCard() {
   );
 
   const fetched = formatDateTimeUtc(audit?.fetched_at_utc ?? null);
-  const highCount = Number(audit?.severity_counts?.high ?? 0);
-  const warningCount = Number(audit?.severity_counts?.warning ?? 0);
-  const overlapCount = Number(audit?.cross_checks?.orders_subset?.open_closed_intersection_count ?? 0);
+  const highCount = audit?.severity_counts?.high ?? null;
+  const warningCount = audit?.severity_counts?.warning ?? null;
+  const overlapCount = audit?.cross_checks?.orders_subset?.open_closed_intersection_count ?? null;
   const ordersAge = audit?.cross_checks?.freshness?.orders_newest_age_seconds ?? null;
   const logsAge = audit?.cross_checks?.freshness?.execute_logs_newest_age_seconds ?? null;
-  const isHealthy = Boolean(audit?.ok);
+  const isHealthy = !hasError && audit?.ok === true;
 
   return (
     <section className="overflow-hidden rounded-2xl outline-subtle shadow-card jbravo-panel p-3 sm:p-5">
@@ -142,7 +55,7 @@ export default function ExecutionDataQualityCard() {
               : "bg-rose-500/20 text-rose-700 dark:text-rose-300 outline-rose-400/55")
           }
         >
-          {isHealthy ? "Healthy" : "Issues"}
+          {isLoading ? "Loading" : hasError ? source.receivedAt ? "Stale" : "Unavailable" : isHealthy ? "Healthy" : "Issues"}
         </span>
       </header>
 
@@ -198,7 +111,7 @@ export default function ExecutionDataQualityCard() {
               {!isLoading && findings.length === 0 ? (
                 <tr>
                   <td colSpan={3} className="px-3 py-6 text-center text-sm text-secondary">
-                    No findings.
+                    {hasError ? "Current audit findings are unknown." : "No findings."}
                   </td>
                 </tr>
               ) : null}
@@ -228,7 +141,7 @@ export default function ExecutionDataQualityCard() {
       </div>
 
       {hasError ? (
-        <p className="mt-3 text-xs text-rose-700 dark:text-rose-300">Data quality audit stream unavailable.</p>
+        <p className="mt-3 text-xs text-rose-700 dark:text-rose-300">{refreshNotice(source.error, source.receivedAt)}</p>
       ) : null}
     </section>
   );

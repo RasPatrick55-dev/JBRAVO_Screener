@@ -37,9 +37,9 @@ export const validatedExecutionPL = (summary: ExecuteSummaryResponse | null): nu
     ? parseNumber(summary.result_pl_usd) : null;
 
 export default function ExecutionSummaryCard({ summary, isLoading, hasError, lastScheduledAttempt, lastExecutionReceipt, taskSource }: Props) {
-  const ready = !isLoading && !hasError && summary?.ok === true;
+  const ready = !isLoading && summary?.ok === true;
   const schedule = summary?.execution_schedule;
-  const scheduleVerified = schedule?.status === "verified";
+  const scheduleVerified = !hasError && schedule?.status === "verified";
   const inWindow = scheduleVerified ? schedule.in_window : null;
   const windowLabel = scheduleVerified && schedule.entry_start_local && schedule.entry_end_local && schedule.timezone
     ? `${schedule.entry_start_local}-${schedule.entry_end_local} ${schedule.timezone}` : "Entry window unknown";
@@ -47,7 +47,7 @@ export default function ExecutionSummaryCard({ summary, isLoading, hasError, las
   const runLabel = lastExecutionReceipt ? taskFreshness === "current" ? "Last execution receipt" : taskFreshness === "stale" ? "Cached execution receipt" : "Unverified execution receipt" : "Last reported run";
   const runTime = lastExecutionReceipt ? lastExecutionReceipt.ok === true ? lastExecutionReceipt.finished_utc : null : summary?.last_run_utc;
 
-  const resultValue = ready ? validatedExecutionPL(summary) : null;
+  const resultValue = ready && !hasError ? validatedExecutionPL(summary) : null;
   const resultTone =
     resultValue !== null && resultValue > 0 ? "text-emerald-700 dark:text-emerald-300" : resultValue !== null && resultValue < 0 ? "text-rose-700 dark:text-rose-300" : "text-slate-900 dark:text-slate-200";
 
@@ -188,7 +188,7 @@ export default function ExecutionSummaryCard({ summary, isLoading, hasError, las
       <ScheduledAttemptNotice attempt={lastScheduledAttempt} taskSource={taskSource} />
 
       {hasError ? (
-        <p className="mt-3 text-xs text-rose-700 dark:text-rose-300">Execution summary unavailable. Showing fallback values.</p>
+        <p className="mt-3 text-xs text-rose-700 dark:text-rose-300">Execution summary unavailable. Any displayed values are last known observations; current status is unverified.</p>
       ) : null}
     </section>
   );

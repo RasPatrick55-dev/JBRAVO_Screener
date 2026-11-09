@@ -1,3 +1,4 @@
+import { deadlineRead, readJson, READ_TIMEOUT_MS } from "../ui/readLifecycle";
 import type { LogLevel, MetricsRow, ScreenerLogRow, ScreenerPickRow } from "./types";
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
@@ -22,33 +23,17 @@ const percentFormatter = new Intl.NumberFormat("en-US", {
 export const withTs = (path: string) =>
   `${path}${path.includes("?") ? "&" : "?"}ts=${Date.now()}`;
 
-export const fetchNoStoreJson = async <T,>(path: string, timeoutMs = 15_000): Promise<T> => {
-  const controller = new AbortController();
-  const timeoutId = globalThis.setTimeout(() => controller.abort(), Math.max(1_000, timeoutMs));
-  try {
-    const response = await fetch(path, {
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`Request failed (${response.status})`);
-    }
-    const payload = await response.json();
-    if (payload?.ok !== true) {
-      const metricsPending = /^\/api\/screener\/metrics(?:\?|$)/.test(path) && payload?.status === "METRICS_PENDING";
-      throw new Error(metricsPending ? "Metrics are waiting for the strategy backtest." : "PostgreSQL data unavailable; no file fallback.");
-    }
-    return payload as T;
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error("Request timeout");
-    }
-    throw error;
-  } finally {
-    globalThis.clearTimeout(timeoutId);
+export function parseScreenerPayload<T>(value: unknown, metrics = false): T {
+  const payload = value as { ok?: boolean; status?: string } | null;
+  if (payload?.ok !== true) {
+    throw new Error(metrics && payload?.status === "METRICS_PENDING"
+      ? "Metrics are waiting for the strategy backtest." : "PostgreSQL data unavailable; no file fallback.");
   }
-};
+  return value as T;
+}
+
+export const fetchNoStoreJson = async <T,>(path: string, timeoutMs = READ_TIMEOUT_MS, signal?: AbortSignal): Promise<T> =>
+  deadlineRead(async requestSignal => parseScreenerPayload<T>(await readJson(path, requestSignal), /^\/api\/screener\/metrics(?:\?|$)/.test(path)), timeoutMs, signal);
 
 export const parseNumber = (value: unknown): number | null => {
   if (value === null || value === undefined || value === "") {

@@ -48,7 +48,7 @@ describe("retained gross coverage through freshness transitions",()=>{
       try {
         await settle();
         expect(result?.freshness).toBe("current");
-        await vi.advanceTimersByTimeAsync(transition==="rejection"?20000:transition==="timeout"?30001:60001);
+        await vi.advanceTimersByTimeAsync(transition==="rejection"?20000:transition==="timeout"?65001:60001);
         expect(result?.kind).toBe("stale");expect(result?.freshness).toBe("stale");
         expect(result?.validity).toBe(scenario==="genuine-empty"?"empty":"partial");
         expect(result?.payload).toEqual(payload);

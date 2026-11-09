@@ -54,7 +54,7 @@ describe("bounded connection polling and expiry",()=>{
     const transport=vi.fn<typeof fetch>().mockImplementation(async()=>phase==="request"?await pending as Response:{ok:true,json:()=>pending} as Response);
     const events:(boolean|null)[]=[];const stop=watchTradingStatus(value=>events.push(value),transport);
     try {
-      await settle();await vi.advanceTimersByTimeAsync(5001);await settle();
+      await settle();await vi.advanceTimersByTimeAsync(45001);await settle();
       expect(events[events.length-1]).toBeNull();expect(transport.mock.calls[0][1]?.signal?.aborted).toBe(true);
       finish!(phase==="request"?response(payload()):payload());await settle();
       expect(events).not.toContain(true);

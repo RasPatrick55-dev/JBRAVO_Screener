@@ -1,3 +1,4 @@
+import { deadlineRead, readJson, READ_TIMEOUT_MS } from "../ui/readLifecycle";
 import type {
   ExecuteLogRow,
   ExecuteLsxFilter,
@@ -23,24 +24,9 @@ const numberFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 9,
 });
 
-export const fetchJsonNoStore = async <T,>(path: string, timeoutMs = 15_000): Promise<T | null> => {
-  const controller = new AbortController();
-  const timeoutId = globalThis.setTimeout(() => controller.abort(), Math.max(1_000, timeoutMs));
-  try {
-    const response = await fetch(path, {
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      return null;
-    }
-    return (await response.json()) as T;
-  } catch {
-    return null;
-  } finally {
-    globalThis.clearTimeout(timeoutId);
-  }
+export const fetchJsonNoStore = async <T,>(path: string, timeoutMs = READ_TIMEOUT_MS, signal?: AbortSignal): Promise<T | null> => {
+  try { return await deadlineRead(async requestSignal => await readJson(path, requestSignal) as T, timeoutMs, signal); }
+  catch { return null; }
 };
 
 export const parseSseJson = <T,>(raw: string): T | null => {

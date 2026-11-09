@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { deadlineRead } from "../ui/sourceState";
+import { pollRead, READ_TIMEOUT_MS } from "../ui/readLifecycle";
 import type { LogReceipt } from "./logEvidence";
 
 export interface ProviderLogSource extends LogReceipt {
@@ -13,7 +13,7 @@ export type ProviderLogs = {
   receivedAt?: string;
 };
 const initial: ProviderLogs = { kind: "loading", sources: [] };
-export const PROVIDER_READ_TIMEOUT_MS = 45000;
+export const PROVIDER_READ_TIMEOUT_MS = READ_TIMEOUT_MS;
 
 // One bounded provider read at a time. A failed refresh never substitutes unrelated
 // local files, nor claims that no activity occurred. Cached provider evidence keeps
@@ -24,15 +24,13 @@ export function watchProviderLogs(
   interval = 20000,
   timeout = PROVIDER_READ_TIMEOUT_MS,
 ) {
-  let active = true, inFlight = false;
+  let active = true;
   let state = initial;
   const emit = (next: ProviderLogs) => { if (active) { state = next; publish(next); } };
   emit(initial);
-  const load = async () => {
-    if (!active || inFlight) return;
-    inFlight = true;
-    try {
-      const sources = await deadlineRead(async signal => {
+  const polling = pollRead({
+    interval, timeout,
+    read: async signal => {
         const response = await transport("/api/pythonanywhere/logs", {
           signal, cache: "no-store", headers: { Accept: "application/json" },
         });
@@ -50,16 +48,16 @@ export function watchProviderLogs(
           throw new Error("provider_logs_unavailable");
         }
         return data.sources as ProviderLogSource[];
-      }, timeout);
+    },
+    success: sources => {
       emit({ kind: sources.some(row => row.text.trim()) ? "ready" : "empty", sources,
         receivedAt: new Date().toISOString() });
-    } catch {
+    },
+    failure: () => {
       emit({ ...state, kind: state.receivedAt ? "stale" : "unavailable" });
-    } finally { inFlight = false; }
-  };
-  void load();
-  const timer = globalThis.setInterval(() => void load(), interval);
-  return () => { active = false; globalThis.clearInterval(timer); };
+    },
+  });
+  return () => { active = false; polling.stop(); };
 }
 
 export function useProviderLogs() {

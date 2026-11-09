@@ -1,10 +1,11 @@
+import { usePollingRead, refreshNotice } from "../ui/usePollingRead";
 import { ComputationScope, computationStatus } from "./completion";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { LiveDataSyncState } from "../navbar/liveStatus";
 import type { ScreenerPickRow, ScreenerPicksResponse } from "./types";
 import {
   compareNullableNumbers,
-  fetchNoStoreJson,
+  parseScreenerPayload,
   formatCompactNumber,
   formatCurrency,
   formatPercent,
@@ -12,7 +13,6 @@ import {
   formatUtcDateTime,
   normalizeSymbol,
   parseNumber,
-  withTs,
 } from "./utils";
 
 type PicksSortColumn = "rank" | "final_score" | "price" | "adv20" | "atrp";
@@ -58,83 +58,26 @@ const formatScore = (value: number | null | undefined): string => {
   }
   return value.toFixed(3);
 };
-const REFRESH_INTERVAL_MS = 20_000;
-const REQUEST_TIMEOUT_MS = 15_000;
+const parsePicks = (value: unknown) => {
+  const contract = parseScreenerPayload<ScreenerPicksResponse>(value);
+  const rows = (contract.rows ?? []).map(normalizePickRow).filter(row => row.symbol !== "--");
+  return { contract, rows };
+};
 
 type ScreenerPicksCardProps = {
   onSyncStateChange?: (state: LiveDataSyncState) => void;
 };
 
 export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCardProps) {
-  const [contract, setContract] = useState<ScreenerPicksResponse | null>(null);
-  const [rows, setRows] = useState<ScreenerPickRow[]>([]);
-  const [scopeLabel, setScopeLabel] = useState("PostgreSQL candidate session; completion unverified");
-  const [runTsUtc, setRunTsUtc] = useState<string | null>(null);
-  const [statusLabel, setStatusLabel] = useState("UNKNOWN");
+  const source = usePollingRead("/api/screener/picks?limit=50&filter=all", parsePicks);
+  const contract = source.data?.contract ?? null;
+  const rows = source.data?.rows ?? [];
+  const { isLoading } = source;
+  const errorMessage = refreshNotice(source.error, source.receivedAt);
+  const runTsUtc = contract?.run_ts_utc ?? null;
+  const scopeLabel = `PostgreSQL candidate session ${contract?.run_date ?? "unknown"}; completion ${contract?.completion_status ?? "unverified"}`;
+  const statusLabel = isLoading ? "LOADING" : source.error ? source.receivedAt ? "STALE" : "UNAVAILABLE" : computationStatus(contract);
   const [sortState, setSortState] = useState<SortState>(defaultSort);
-  const [isLoading, setIsLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
-  const hasLoadedRef = useRef(false);
-
-  useEffect(() => {
-    let isMounted = true;
-    let inFlight = false;
-
-    const load = async () => {
-      if (inFlight) {
-        return;
-      }
-      inFlight = true;
-      setIsLoading(!hasLoadedRef.current);
-      const params = new URLSearchParams({
-        limit: "50",
-        filter: "all",
-      });
-
-      try {
-        const payload = await fetchNoStoreJson<ScreenerPicksResponse>(
-          withTs(`/api/screener/picks?${params.toString()}`),
-          REQUEST_TIMEOUT_MS
-        );
-        if (!isMounted) {
-          return;
-        }
-        const normalizedRows = (payload.rows ?? [])
-          .map((row) => normalizePickRow(row))
-          .filter((row) => row.symbol !== "--");
-        setRows(payload.ok === true ? normalizedRows : []);
-        setContract(payload);
-        setRunTsUtc(payload.run_ts_utc ?? null);
-        setScopeLabel(`PostgreSQL candidate session ${payload.run_date ?? "unknown"}; completion ${payload.completion_status ?? "unverified"}`);
-        setStatusLabel(computationStatus(payload));
-        setErrorMessage(null);
-      } catch (error) {
-        if (!isMounted) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : "Unable to load screener picks.";
-        setErrorMessage(message);
-        setRows([]); setContract(null); setStatusLabel("UNAVAILABLE");
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-          hasLoadedRef.current = true;
-        }
-        inFlight = false;
-      }
-    };
-
-    void load();
-    const intervalId = window.setInterval(() => {
-      void load();
-    }, REFRESH_INTERVAL_MS);
-
-    return () => {
-      isMounted = false;
-      window.clearInterval(intervalId);
-    };
-  }, [reloadToken]);
 
   useEffect(() => {
     if (!onSyncStateChange) {
@@ -226,7 +169,7 @@ export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCa
           </span>
         </div>
       </header>
-      <ComputationScope payload={contract} />
+      <ComputationScope payload={source.error ? null : contract} />
 
       {errorMessage ? (
         <div
@@ -236,7 +179,8 @@ export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCa
           <span>{errorMessage}</span>
           <button
             type="button"
-            onClick={() => setReloadToken((value) => value + 1)}
+            onClick={source.refresh}
+            disabled={source.isRefreshing}
             className="rounded-md px-2 py-1 font-semibold uppercase tracking-wide outline outline-1 outline-rose-300/70 transition hover:bg-rose-100/70 dark:outline-rose-400/45 dark:hover:bg-rose-500/20"
           >
             Retry
@@ -316,7 +260,7 @@ export default function ScreenerPicksCard({ onSyncStateChange }: ScreenerPicksCa
               {!isLoading && displayedRows.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-3 py-8 text-center text-sm text-secondary">
-                    No results available.
+                    {errorMessage ? "Current Screener picks are unavailable." : "No results available."}
                   </td>
                 </tr>
               ) : null}

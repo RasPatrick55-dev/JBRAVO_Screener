@@ -1,8 +1,9 @@
-import { eventFreshness, LogSourceReceipt, type LogReceipt } from "../dashboard/logEvidence";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { usePollingRead, refreshNotice } from "../ui/usePollingRead";
+import { eventFreshness, LogSourceReceipt } from "../dashboard/logEvidence";
+import { useEffect, useMemo, useState } from "react";
 import type { LiveDataSyncState } from "../navbar/liveStatus";
 import type { LogsChipFilter, LogsStage, ScreenerLogRow, ScreenerLogsResponse } from "./types";
-import { fetchNoStoreJson, formatUtcDateTime, normalizeLogLevel, withTs } from "./utils";
+import { parseScreenerPayload, formatUtcDateTime, normalizeLogLevel } from "./utils";
 
 interface LogsPanelProps {
   title: string;
@@ -16,8 +17,7 @@ const chipOptions: Array<{ key: LogsChipFilter; label: string }> = [
   { key: "warnings", label: "Warnings" },
   { key: "today", label: "Today" },
 ];
-const REFRESH_INTERVAL_MS = 20_000;
-const REQUEST_TIMEOUT_MS = 15_000;
+
 
 const normalizeLogRow = (row: Partial<ScreenerLogRow>): ScreenerLogRow => {
   return {
@@ -85,78 +85,27 @@ const isTodayUtc = (value: string | null | undefined): boolean => {
   );
 };
 
+const parseLogs = (value: unknown) => {
+  const payload = parseScreenerPayload<ScreenerLogsResponse>(value);
+  return {
+    rows: (payload.rows ?? []).map(normalizeLogRow),
+    receipts: payload.source_receipts?.length ? payload.source_receipts : [{ source: payload.source_detail, observed_at: payload.observed_at, latest_event_at: payload.latest_event_at }],
+    sourceDetail: String(payload.source_detail ?? payload.source ?? ""),
+  };
+};
+
 export default function LogsPanel({ title, stage, onSyncStateChange }: LogsPanelProps) {
-  const [receipts, setReceipts] = useState<LogReceipt[]>([]);
-  const [rows, setRows] = useState<ScreenerLogRow[]>([]);
   const [selectedChip, setSelectedChip] = useState<LogsChipFilter>("all");
-  const [sourceDetail, setSourceDetail] = useState<string>("");
-  const [isLoading, setIsLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
-  const hasLoadedRef = useRef(false);
-
+  const params = new URLSearchParams({ stage, limit: "200",
+    level: selectedChip === "errors" ? "errors" : selectedChip === "warnings" ? "warnings" : "all",
+    today: selectedChip === "today" ? "1" : "0" });
+  const source = usePollingRead(`/api/screener/logs?${params}`, parseLogs);
+  const rows = source.data?.rows ?? [];
+  const receipts = source.data?.receipts ?? [];
+  const sourceDetail = source.data?.sourceDetail ?? "";
+  const { isLoading } = source;
+  const errorMessage = refreshNotice(source.error, source.receivedAt);
   const stageStyle = stageStyleMap[stage] ?? stageStyleMap.screener;
-
-  useEffect(() => {
-    let isMounted = true;
-    let inFlight = false;
-
-    const load = async () => {
-      if (inFlight) {
-        return;
-      }
-      inFlight = true;
-      setIsLoading(!hasLoadedRef.current);
-
-      const level =
-        selectedChip === "errors" ? "errors" : selectedChip === "warnings" ? "warnings" : "all";
-      const today = selectedChip === "today" ? "1" : "0";
-
-      const params = new URLSearchParams({
-        stage,
-        limit: "200",
-        level,
-        today,
-      });
-
-      try {
-        const payload = await fetchNoStoreJson<ScreenerLogsResponse>(
-          withTs(`/api/screener/logs?${params.toString()}`),
-          REQUEST_TIMEOUT_MS
-        );
-        if (!isMounted) {
-          return;
-        }
-        const normalizedRows = (payload.rows ?? []).map((row) => normalizeLogRow(row));
-        setRows(normalizedRows);
-        setReceipts(payload.source_receipts?.length ? payload.source_receipts : [{ source: payload.source_detail, observed_at: payload.observed_at, latest_event_at: payload.latest_event_at }]);
-        setSourceDetail(String(payload.source_detail ?? payload.source ?? ""));
-        setErrorMessage(null);
-      } catch (error) {
-        if (!isMounted) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : "Unable to load logs.";
-        setErrorMessage(message);
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-          hasLoadedRef.current = true;
-        }
-        inFlight = false;
-      }
-    };
-
-    void load();
-    const intervalId = window.setInterval(() => {
-      void load();
-    }, REFRESH_INTERVAL_MS);
-
-    return () => {
-      isMounted = false;
-      window.clearInterval(intervalId);
-    };
-  }, [reloadToken, selectedChip, stage]);
 
   useEffect(() => {
     if (!onSyncStateChange) {
@@ -191,7 +140,8 @@ export default function LogsPanel({ title, stage, onSyncStateChange }: LogsPanel
         <h3 className="font-arimo text-xs font-semibold uppercase tracking-[0.08em] text-primary sm:text-sm">{title}</h3>
         <button
           type="button"
-          onClick={() => setReloadToken((value) => value + 1)}
+          onClick={source.refresh}
+          disabled={source.isRefreshing}
           aria-label={`Refresh ${title}`}
           className="inline-flex h-7 w-7 items-center justify-center rounded-md outline outline-1 outline-slate-300/80 transition hover:bg-slate-100/70 dark:outline-slate-600/80 dark:hover:bg-slate-700/40"
         >
@@ -220,10 +170,11 @@ export default function LogsPanel({ title, stage, onSyncStateChange }: LogsPanel
           role="alert"
           className="mt-2 flex items-center justify-between gap-2 rounded-md border border-rose-300/60 bg-rose-50/80 px-2 py-1.5 text-[11px] text-rose-800 dark:border-rose-400/40 dark:bg-rose-500/10 dark:text-rose-200"
         >
-          <span className="truncate">{errorMessage}</span>
+          <span className="min-w-0 break-words">{errorMessage}</span>
           <button
             type="button"
-            onClick={() => setReloadToken((value) => value + 1)}
+            onClick={source.refresh}
+          disabled={source.isRefreshing}
             className="rounded px-1.5 py-0.5 font-semibold uppercase tracking-wide outline outline-1 outline-rose-300/70"
           >
             Retry
@@ -291,7 +242,7 @@ export default function LogsPanel({ title, stage, onSyncStateChange }: LogsPanel
               {!isLoading && displayedRows.length === 0 ? (
                 <tr>
                   <td colSpan={3} className="px-2 py-8 text-center text-sm text-secondary">
-                    No results available.
+                    {errorMessage ? "Log source unavailable; current activity is unknown." : "No results available."}
                   </td>
                 </tr>
               ) : null}

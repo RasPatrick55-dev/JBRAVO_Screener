@@ -1,23 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import ExecutionLogsCard from "./ExecutionLogsCard";
 import ExecutionSummaryCard from "./ExecutionSummaryCard";
 import OrdersTableCard from "./OrdersTableCard";
 import TrailingStopsCard from "./TrailingStopsCard";
 import type { ExecuteStateResponse } from "./types";
-import { fetchJsonNoStore, parseSseJson } from "./utils";
+import { usePollingRead, refreshNotice } from "../ui/usePollingRead";
 import type { LiveDataSyncState } from "../navbar/liveStatus";
 import { useSource } from "../ui/sourceState";
 import type { ProcessReceipt } from "../dashboard/processReceipt";
 
-const REFRESH_INTERVAL_MS = 20_000;
-const FIRST_LOAD_GRACE_MS = 2_500;
-const REQUEST_TIMEOUT_MS = 15_000;
-
-const hasUsableState = (value: ExecuteStateResponse | null): value is ExecuteStateResponse => {
-  if (!value || typeof value !== "object") {
-    return false;
+const parseState = (value: unknown): ExecuteStateResponse => {
+  const payload = value as ExecuteStateResponse | null;
+  if (!payload || typeof payload !== "object" || !Boolean(payload.summary || payload.orders || payload.trailing_stops || payload.logs)) {
+    throw new Error("Execution state unavailable.");
   }
-  return Boolean(value.summary || value.orders || value.trailing_stops || value.logs);
+  return payload;
 };
 
 type ExecuteTabProps = {
@@ -26,93 +23,9 @@ type ExecuteTabProps = {
 
 export default function ExecuteTab({ onSyncStateChange }: ExecuteTabProps) {
   const executionTask = useSource("/api/execute/task");
-  const [payload, setPayload] = useState<ExecuteStateResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasError, setHasError] = useState(false);
-  const hasLoadedOnceRef = useRef(false);
-  const fallbackInFlightRef = useRef(false);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const applyPayload = (nextPayload: ExecuteStateResponse | null) => {
-      if (!isMounted) {
-        return;
-      }
-
-      if (hasUsableState(nextPayload)) {
-        setPayload(nextPayload);
-        setHasError(false);
-        hasLoadedOnceRef.current = true;
-      } else {
-        if (!hasLoadedOnceRef.current) {
-          setPayload(null);
-        }
-        setHasError(true);
-      }
-      setIsLoading(false);
-    };
-
-    const loadFallback = async () => {
-      if (fallbackInFlightRef.current) {
-        return;
-      }
-      fallbackInFlightRef.current = true;
-      setIsLoading(!hasLoadedOnceRef.current);
-      const fallback = await fetchJsonNoStore<ExecuteStateResponse>(
-        `/api/execute/state?ts=${Date.now()}`,
-        REQUEST_TIMEOUT_MS
-      );
-      applyPayload(fallback);
-      fallbackInFlightRef.current = false;
-    };
-
-    if (typeof window === "undefined" || typeof window.EventSource === "undefined") {
-      void loadFallback();
-      const intervalId = window.setInterval(() => {
-        void loadFallback();
-      }, REFRESH_INTERVAL_MS);
-      return () => {
-        isMounted = false;
-        window.clearInterval(intervalId);
-      };
-    }
-
-    setIsLoading(!hasLoadedOnceRef.current);
-    const source = new EventSource("/api/execute/state/stream");
-
-    const fallbackTimer = window.setTimeout(() => {
-      if (!hasLoadedOnceRef.current) {
-        void loadFallback();
-      }
-    }, FIRST_LOAD_GRACE_MS);
-    const pollTimer = window.setInterval(() => {
-      void loadFallback();
-    }, REFRESH_INTERVAL_MS);
-
-    source.onmessage = (event) => {
-      const parsed = parseSseJson<ExecuteStateResponse>(event.data);
-      if (!parsed) {
-        return;
-      }
-      window.clearTimeout(fallbackTimer);
-      applyPayload(parsed);
-    };
-    source.onerror = () => {
-      if (!isMounted) {
-        return;
-      }
-      window.clearTimeout(fallbackTimer);
-      void loadFallback();
-    };
-
-    return () => {
-      isMounted = false;
-      window.clearTimeout(fallbackTimer);
-      window.clearInterval(pollTimer);
-      source.close();
-    };
-  }, []);
+  const source = usePollingRead("/api/execute/state", parseState);
+  const { data: payload, isLoading } = source;
+  const hasError = Boolean(source.error) || (!isLoading && payload?.ok === false);
 
   useEffect(() => {
     if (!onSyncStateChange) {
@@ -140,12 +53,13 @@ export default function ExecuteTab({ onSyncStateChange }: ExecuteTabProps) {
 
   return (
     <div className="space-y-4">
-      <ExecutionSummaryCard summary={summary} isLoading={isLoading} hasError={hasError}
+      {source.error ? <p role="alert" className="text-xs text-rose-700 dark:text-rose-300">{refreshNotice(source.error, source.receivedAt)}</p> : null}
+      <ExecutionSummaryCard summary={summary} isLoading={isLoading} hasError={hasError || (!isLoading && summary?.ok !== true)}
         lastScheduledAttempt={(executionTask.payload as ProcessReceipt | null)?.last_scheduled_attempt}
         lastExecutionReceipt={(executionTask.payload as ProcessReceipt | null)?.last_execution_receipt}
         taskSource={executionTask} />
-      <OrdersTableCard rows={ordersRows} isLoading={isLoading} hasError={hasError} />
-      <TrailingStopsCard rows={trailingRows} isLoading={isLoading} hasError={hasError} />
+      <OrdersTableCard rows={ordersRows} isLoading={isLoading} hasError={hasError || (!isLoading && payload?.orders?.ok !== true)} />
+      <TrailingStopsCard rows={trailingRows} isLoading={isLoading} hasError={hasError || (!isLoading && payload?.trailing_stops?.ok !== true)} />
       <ExecutionLogsCard logs={logsByStage} isLoading={isLoading} hasError={hasError} />
     </div>
   );

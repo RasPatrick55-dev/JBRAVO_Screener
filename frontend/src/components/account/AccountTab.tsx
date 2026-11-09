@@ -1,6 +1,6 @@
-import { useSource } from "../ui/sourceState";
+import { useSource, canDisplay } from "../ui/sourceState";
 import SourceNotice from "../ui/SourceNotice";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo } from "react";
 import type { LiveDataSyncState } from "../navbar/liveStatus";
 import AccountBreakdownCard from "./AccountBreakdownCard";
 import AccountPerformanceCard from "./AccountPerformanceCard";
@@ -17,64 +17,7 @@ import type {
   OrderLogRow,
 } from "./types";
 
-const REFRESH_INTERVAL_MS = 20_000;
-const FETCH_TIMEOUT_MS = 20_000;
 const performancePeriods = ["Daily", "Weekly", "Monthly", "Yearly"];
-
-const withTs = (path: string) => `${path}${path.includes("?") ? "&" : "?"}ts=${Date.now()}`;
-
-const fetchJsonAttempt = async <T,>(url: string): Promise<T | null> => {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const response = await fetch(url, {
-      headers: { Accept: "application/json" },
-      cache: "no-store",
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      return null;
-    }
-    return (await response.json()) as T;
-  } catch {
-    return null;
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
-};
-
-const localApiOrigins = (): string[] => {
-  const explicit = String(import.meta.env.VITE_API_BASE_URL ?? "").trim();
-  if (explicit) {
-    return [explicit.replace(/\/+$/, "")];
-  }
-  if (typeof window === "undefined") {
-    return [];
-  }
-  const hostname = window.location.hostname;
-  if (hostname === "localhost" || hostname === "127.0.0.1") {
-    return ["http://127.0.0.1:8050", "http://localhost:8050"];
-  }
-  return [];
-};
-
-const fetchJson = async <T,>(path: string): Promise<T | null> => {
-  const primary = await fetchJsonAttempt<T>(path);
-  if (primary !== null) {
-    return primary;
-  }
-  if (/^https?:\/\//i.test(path)) {
-    return null;
-  }
-  const apiOrigins = localApiOrigins();
-  for (const origin of apiOrigins) {
-    const fallback = await fetchJsonAttempt<T>(`${origin}${path}`);
-    if (fallback !== null) {
-      return fallback;
-    }
-  }
-  return null;
-};
 
 const asRecord = (value: unknown): Record<string, unknown> | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -291,113 +234,32 @@ const normalizeOrderLogs = (payload: unknown): OrderLogRow[] => {
     .filter((row): row is OrderLogRow => Boolean(row));
 };
 
-interface LoadingState {
-  summary: boolean;
-  performance: boolean;
-  history: boolean;
-  openOrders: boolean;
-  logs: boolean;
-}
-
-const defaultLoadingState: LoadingState = {
-  summary: true,
-  performance: true,
-  history: true,
-  openOrders: true,
-  logs: true,
-};
-
 type AccountTabProps = {
   onSyncStateChange?: (state: LiveDataSyncState) => void;
 };
 
 export default function AccountTab({ onSyncStateChange }: AccountTabProps) {
-  const [summary, setSummary] = useState<AccountSummary | null>(null);
-  const [performanceRows, setPerformanceRows] = useState<AccountPerformanceRow[]>([]);
-  const [accountTotal, setAccountTotal] = useState<AccountTotal>({
-    equity: null,
-    netChangePct: null,
-    netChangeUsd: null,
-    equityBasis: "last_close",
-    performanceBasis: "close_to_close",
-  });
-  const [portfolioPoints, setPortfolioPoints] = useState<EquityCurvePoint[]>([]);
+  const summarySource = useSource("/api/account/summary");
+  const performanceSource = useSource("/api/account/performance?range=all");
+  const historySource = useSource("/api/account/portfolio_history?period=1Y&timeframe=1D");
+  const logsSource = useSource("/api/account/order_logs?limit=100");
   const ordersSource = useSource("/api/account/open_orders?limit=50");
-  const openOrders = normalizeOpenOrders(ordersSource.payload);
-  const [orderLogs, setOrderLogs] = useState<OrderLogRow[]>([]);
-  const [loading, setLoading] = useState<LoadingState>(defaultLoadingState);
-  const [hasError, setHasError] = useState(false);
-
-  const hasLoadedRef = useRef(false);
-
-  useEffect(() => {
-    let isMounted = true;
-    let inFlight = false;
-
-    const load = async () => {
-      if (inFlight) return;
-      inFlight = true;
-      if (!hasLoadedRef.current) {
-        setLoading(defaultLoadingState);
-      } else {
-        setLoading((previous) => ({ ...previous, performance: true }));
-      }
-
-      const [summaryResult, performanceResult, historyResult, logsResult] =
-        await Promise.allSettled([
-          fetchJson<unknown>(withTs("/api/account/summary")),
-          fetchJson<unknown>(withTs("/api/account/performance?range=all")),
-          fetchJson<unknown>(withTs("/api/account/portfolio_history?period=1Y&timeframe=1D")),
-          fetchJson<unknown>(withTs("/api/account/order_logs?limit=100")),
-        ]);
-
-      if (!isMounted) {
-        inFlight = false;
-        return;
-      }
-
-      const summaryPayload = summaryResult.status === "fulfilled" ? summaryResult.value : null;
-      const performancePayload = performanceResult.status === "fulfilled" ? performanceResult.value : null;
-      const historyPayload = historyResult.status === "fulfilled" ? historyResult.value : null;
-      const logsPayload = logsResult.status === "fulfilled" ? logsResult.value : null;
-
-      const normalizedSummary = normalizeSummary(summaryPayload);
-      const normalizedPerformance = normalizePerformanceRows(performancePayload);
-      const normalizedPoints = normalizePortfolioPoints(historyPayload);
-      const normalizedLogs = normalizeOrderLogs(logsPayload);
-
-      setSummary(normalizedSummary);
-      setPerformanceRows(normalizedPerformance.rows);
-      setAccountTotal(normalizedPerformance.total ?? {equity: null, netChangePct: null, netChangeUsd: null});
-      setPortfolioPoints(normalizedPoints);
-      setOrderLogs(normalizedLogs);
-      setHasError([summaryPayload, performancePayload, historyPayload, logsPayload].some(payload => asRecord(payload)?.ok !== true || asRecord(payload)?.status === "partial"));
-      setLoading({
-        summary: false,
-        performance: false,
-        history: false,
-        openOrders: false,
-        logs: false,
-      });
-      hasLoadedRef.current = true;
-      inFlight = false;
-    };
-
-    load();
-    const intervalId = window.setInterval(load, REFRESH_INTERVAL_MS);
-
-    return () => {
-      isMounted = false;
-      window.clearInterval(intervalId);
-    };
-  }, []);
+  const summary = normalizeSummary(canDisplay(summarySource.kind) ? summarySource.payload : null);
+  const performance = normalizePerformanceRows(canDisplay(performanceSource.kind) ? performanceSource.payload : null);
+  const performanceRows = performance.rows;
+  const accountTotal = performance.total ?? { equity: null, netChangePct: null, netChangeUsd: null };
+  const portfolioPoints = normalizePortfolioPoints(canDisplay(historySource.kind) ? historySource.payload : null);
+  const orderLogs = normalizeOrderLogs(canDisplay(logsSource.kind) ? logsSource.payload : null);
+  const openOrders = normalizeOpenOrders(canDisplay(ordersSource.kind) ? ordersSource.payload : null);
+  const sources = [summarySource, performanceSource, historySource, logsSource, ordersSource];
+  const anyLoading = sources.some(source => source.kind === "loading");
+  const hasError = sources.some(source => !["loading", "ready", "empty"].includes(source.kind));
 
   useEffect(() => {
     if (!onSyncStateChange) {
       return;
     }
-    const anyLoading = Object.values(loading).some(Boolean);
-    if (anyLoading || ordersSource.kind === "loading") {
+    if (anyLoading) {
       onSyncStateChange("loading");
       return;
     }
@@ -406,7 +268,7 @@ export default function AccountTab({ onSyncStateChange }: AccountTabProps) {
       return;
     }
     onSyncStateChange("ready");
-  }, [hasError, loading, ordersSource.kind, onSyncStateChange]);
+  }, [hasError, anyLoading, ordersSource.kind, onSyncStateChange]);
 
   const tableRows = useMemo(() => {
     const byPeriod = new Map<string, AccountPerformanceRow>();
@@ -435,25 +297,29 @@ export default function AccountTab({ onSyncStateChange }: AccountTabProps) {
           role="alert"
           className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-300/35 dark:bg-amber-500/10 dark:text-amber-200"
         >
-          Some account data is unavailable or partial. Unknown amounts are shown as --. Source: configured Alpaca paper broker; historical trade accounting remains separately qualified.
+          Some account data is unavailable, partial, or stale. Unknown amounts are shown as --; stale samples are labeled with their last successful read. Source: configured Alpaca paper broker; historical trade accounting remains separately qualified.
         </div>
       ) : null}
 
       <div className="grid gap-4 xl:grid-cols-12 xl:items-start">
         <div className="space-y-4 xl:col-span-5">
+          <SourceNotice label="Account performance" {...performanceSource} />
           <AccountPerformanceCard
             rows={tableRows}
             total={accountTotal}
-            isLoading={loading.performance}
+            isLoading={performanceSource.kind === "loading"}
           />
-          <AccountBreakdownCard summary={summary} isLoading={loading.summary} />
+          <SourceNotice label="Account summary" {...summarySource} />
+          <AccountBreakdownCard summary={summary} isLoading={summarySource.kind === "loading"} />
         </div>
 
         <div className="space-y-4 xl:col-span-7">
-          <EquityCurveCard points={portfolioPoints} isLoading={loading.history} />
+          <SourceNotice label="Account equity history" {...historySource} />
+          <EquityCurveCard points={portfolioPoints} isLoading={historySource.kind === "loading"} sourceKind={historySource.kind} />
           <SourceNotice label="Open broker orders" {...ordersSource} />
           <OpenOrdersCard rows={openOrders} isLoading={ordersSource.kind === "loading"} sourceKind={ordersSource.kind} />
-          <DailyOrderLogsCard rows={orderLogs} isLoading={loading.logs} />
+          <SourceNotice label="Account order logs" {...logsSource} />
+          <DailyOrderLogsCard rows={orderLogs} isLoading={logsSource.kind === "loading"} sourceKind={logsSource.kind} />
         </div>
       </div>
     </section>

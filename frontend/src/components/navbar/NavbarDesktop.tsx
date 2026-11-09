@@ -1,3 +1,4 @@
+import { pollRead, readJson } from "../ui/readLifecycle";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { NavbarDesktopProps } from "../../types/ui";
 import StatusBadge from "../badges/StatusBadge";
@@ -44,38 +45,18 @@ export default function NavbarDesktop({ tabs, rightBadges, onTabSelect }: Navbar
   }, []);
 
   useEffect(() => {
-    let isMounted = true;
-    let inFlight = false;
-
-    const fetchTime = async () => {
-      if (inFlight) {
-        return;
-      }
-      inFlight = true;
-      try {
-        const response = await fetch("/api/time", { cache: "no-store" });
-        if (!response.ok) {
-          if (isMounted) setMarket(null);
-          return;
-        }
-        const payload = (await response.json()) as { utc?: string; market?: MarketClockRecord };
-        if (isMounted && payload.utc) {
+    const polling = pollRead({
+      interval: 1000,
+      read: async signal => await readJson("/api/time", signal) as { utc?: string; market?: MarketClockRecord },
+      success: payload => {
+        if (payload.utc) {
           setServerUtc(payload.utc);
           setMarket(payload.market ?? null);
         }
-      } catch {
-        if (isMounted) setMarket(null);
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    fetchTime();
-    const intervalId = window.setInterval(fetchTime, 1000);
-    return () => {
-      isMounted = false;
-      window.clearInterval(intervalId);
-    };
+      },
+      failure: () => { setServerUtc(""); setMarket(null); },
+    });
+    return polling.stop;
   }, []);
 
   useEffect(() => {
