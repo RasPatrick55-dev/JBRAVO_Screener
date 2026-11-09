@@ -267,6 +267,14 @@ describe("current trading calendar ranges",()=>{
     expect(html).toContain("America/New_York | period-to-date through");
     expect(html).not.toContain("rolling UTC 1, 7, 30");
   });
+  it("renders each period label once per desktop and mobile board, not in the trades count",()=>{
+    const doc=new DOMParser().parseFromString(markup(),"text/html");
+    const board=doc.querySelector('[aria-label="Performance board"]')!;
+    const label="2001-01-29 to 2001-02-02";
+    expect(Array.from(board.querySelectorAll("th p")).filter(p=>p.textContent?.includes(label))).toHaveLength(1);
+    expect(Array.from(board.querySelectorAll("td p")).filter(p=>p.textContent?.includes(label))).toHaveLength(0);
+    expect(Array.from(board.querySelectorAll("article p")).filter(p=>p.textContent?.includes(label))).toHaveLength(1);
+  });
   it("accepts the exact Python-produced unavailable-calendar wire",()=>{
     expect(combinedOverview(calendarUnavailableWire)).not.toBeNull();
   });

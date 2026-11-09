@@ -4,13 +4,12 @@ Never approximates holidays or changes execution/session eligibility. Open dates
 include pre/postmarket completions; the captured observation instant caps results.
 """
 from calendar import monthrange
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from alpaca.trading.requests import GetCalendarRequest
 
 from dashboards import strategy_trade_history as H
-from scripts import trade_disposition as D
 
 NY = ZoneInfo("America/New_York")
 
@@ -76,8 +75,16 @@ class Periods:
                      for key, (start, end) in bounds(now).items()}
 
     def selected(self, stamp, key):
-        return (H.instant(stamp) <= H.instant(self.now)
-                and D.aware_time(stamp).astimezone(NY).date() in self.days[key])
+        nanos = H.instant(stamp)
+        if nanos > H.instant(self.now):
+            return False
+        # Native Python3.10 cannot parse Alpaca's 7-9 fractional digits with
+        # datetime.fromisoformat. Keep exact nanoseconds for the cutoff above;
+        # only the calendar-date conversion needs whole seconds (floor, not round).
+        whole_second = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
+            seconds=nanos // 1_000_000_000
+        )
+        return whole_second.astimezone(NY).date() in self.days[key]
 
     def metadata(self, key):
         days = sorted(self.days[key])

@@ -226,8 +226,7 @@ export default function TradesPerformanceBoard({
                       <td className="font-cousine px-2 py-2.5 text-center text-sm font-bold text-primary tabular-nums">
                         {!gross ? <p className={metricLabelClass}>Trades</p> : null}
                         <p className={gross ? undefined : "mt-1"}>{row.tradesCount === null ? unknownLabel : numberFormatter.format(row.tradesCount)}</p>
-                        {row.periodLabel ? <p className="text-xs text-secondary">{row.periodLabel}</p> : null}
-                {gross && row.coverage ? <small className="text-secondary">{row.coverage.excluded} excluded / {row.coverage.unknown} unknown</small> : null}
+                        {gross && row.coverage ? <small className="text-secondary">{row.coverage.excluded} excluded / {row.coverage.unknown} unknown</small> : null}
                       </td>
                     </tr>
                   );
