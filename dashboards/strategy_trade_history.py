@@ -322,7 +322,7 @@ def blank_row(signal):
     )
 
 
-def project_signal(signal, records, account, now):
+def project_signal(signal, records, account, now, *, include_exact=False):
     row = blank_row(signal)
     try:
         sid, symbol, payload = signal["signal_id"], signal["symbol"], signal["payload"]
@@ -567,8 +567,10 @@ def project_signal(signal, records, account, now):
         with localcontext() as arithmetic:
             arithmetic.prec = 80
             proceeds = sum((o["_qty"] * o["_price"] for o in sells), Decimal(0))
-            exit_average = float(proceeds / sold) if sold else None
-            gross = float(proceeds - bought * entry["_price"])
+            exact_exit_average = proceeds / sold if sold else None
+            exit_average = float(exact_exit_average) if sold else None
+            exact_gross = proceeds - bought * entry["_price"]
+            gross = float(exact_gross)
         row.update(
             entry_qty=float(bought),
             exited_qty=float(sold),
@@ -589,6 +591,25 @@ def project_signal(signal, records, account, now):
         )
         if closed and signal["state"] == "CLOSED":
             row.update(status="complete", reason=None, gross_realized_pnl=gross)
+            if include_exact:
+                row["_exact"] = dict(
+                    qty=bought,
+                    entry_price=entry["_price"],
+                    exit_price=exact_exit_average,
+                    gross=exact_gross,
+                    order_ids=sorted(by_id),
+                    filled_orders=[
+                        dict(
+                            id=o["id"],
+                            side=o["side"],
+                            qty=o["_qty"],
+                            price=o["_price"],
+                            filled_at=timestamp(o["filled_at"]),
+                        )
+                        for o in by_id.values()
+                        if o["_qty"]
+                    ],
+                )
         elif closed or signal["state"] == "CLOSED":
             row["reason"] = "native_state_reconciliation_required"
         return row

@@ -23,6 +23,7 @@ const completeIds = (value: unknown): value is string[] => Array.isArray(value) 
 export const strategyEvidenceLabel = (value: string | null) => value ? value.replace(/_/g, " ") : "Unknown";
 
 export type StrategyHistoryRow = {
+  combinedInclusion?: "INCLUDED" | "EXCLUDED" | "UNKNOWN" | "NOT_CLOSED"; combinedReason?: string | null;
   signalId: string; symbol: string; strategyId: string | null; state: string;
   status: "complete" | "partial" | "incomplete"; reason: string | null;
   completion: "FULL_EXIT_OBSERVED" | "PARTIAL_EXIT_OBSERVED" | "NO_EXIT_OBSERVED" | "NO_ENTRY_FILL_OBSERVED" | "UNVERIFIED";
@@ -76,6 +77,8 @@ export function strategyHistoryView(result: SourceResult): StrategyHistoryView {
     const inconsistentComplete = row.status === "complete" && !complete;
     const available = known && !inconsistentComplete;
     rows.push({
+      combinedInclusion: ["INCLUDED","EXCLUDED","UNKNOWN","NOT_CLOSED"].includes(String(row.combined_inclusion)) ? row.combined_inclusion as StrategyHistoryRow["combinedInclusion"] : undefined,
+      combinedReason: text(row.combined_reason),
       signalId, symbol, strategyId: text(row.strategy_id), state,
       status: complete ? "complete" : available ? "partial" : "incomplete",
       reason: !bound || inconsistentComplete ? "source_evidence_unverified" : text(row.reason),

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { SourceResult } from "../ui/sourceState";
-import { STRATEGY_HISTORY_LIMIT, strategyCompletion, strategyCurrency, strategyEvidenceLabel, strategyHistoryView, strategyNumber, strategyOwnership, strategyTime, type StrategyHistoryRow } from "./strategyHistory";
+import { STRATEGY_HISTORY_LIMIT, strategyCompletion, strategyCurrency, strategyEvidenceLabel, strategyHistoryView, strategyNumber, strategyOwnership, strategyTime, type StrategyHistoryRow, type StrategyHistoryView } from "./strategyHistory";
 
 function Evidence({ row }: { row: StrategyHistoryRow }) {
   return <details className="mt-2 text-[11px] font-normal text-secondary">
@@ -20,6 +20,7 @@ function Evidence({ row }: { row: StrategyHistoryRow }) {
 function State({ row }: { row: StrategyHistoryRow }) {
   return <div className="space-y-1 break-words">
     <p className="font-semibold text-primary">{row.state}</p>
+    {row.combinedInclusion ? <p className="text-[11px] text-secondary">Gross cohort: {strategyEvidenceLabel(row.combinedInclusion)}{row.combinedReason ? ` | ${strategyEvidenceLabel(row.combinedReason)}` : ""}</p> : null}
     <p className="text-secondary">{strategyCompletion(row.completion)}</p>
     <p className="text-[11px] text-secondary">{strategyOwnership(row.ownership)}</p>
     {row.reason ? <p className="text-[11px] text-secondary">{strategyEvidenceLabel(row.reason)}</p> : null}
@@ -34,8 +35,9 @@ function MobileField({ label, children }: { label: string; children: ReactNode }
   </div>;
 }
 
-export default function StrategyHistoryCard({ result }: { result: SourceResult }) {
-  const view = strategyHistoryView(result);
+export default function StrategyHistoryCard({ result, combinedView }: { result: SourceResult; combinedView?: StrategyHistoryView }) {
+  const view = combinedView ?? strategyHistoryView(result);
+  const combined = combinedView !== undefined;
   const loading = view.kind === "loading", unavailable = view.kind === "unavailable";
   const stale = result.freshness === "stale";
   const empty = stale ? "No rows in the retained strategy sample. Current history is unverified." :
@@ -45,20 +47,20 @@ export default function StrategyHistoryCard({ result }: { result: SourceResult }
       <h2 className="font-arimo text-sm font-semibold uppercase tracking-[0.08em] text-primary">Strategy Trade History</h2>
       <span className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase ring-1 ring-inset ${unavailable ? "jbravo-status-error" : "text-secondary"}`}>{loading ? "Loading" : unavailable ? "Unavailable" : stale ? "Stale read" : view.kind === "partial" ? "Partial evidence" : "Stored paper observations"}</span>
     </header>
-    <p className="mt-2 text-xs text-secondary">Recent strategy signals and their stored paper fills. Native state and observed exits are shown separately; a full exit does not establish complete cost accounting.</p>
-    <p className="mt-1 text-xs font-semibold text-secondary">Separate from the recorded ledger below. These rows are not added to its performance totals or leaderboard. Fees and net P/L are unknown.</p>
+    <p className="mt-2 text-xs text-secondary">{combined ? "Strategy signals in the same stored cohort used by every Trades section." : "Recent strategy signals and their stored paper fills."} Native state and observed exits are shown separately; a full exit does not establish complete cost accounting.</p>
+    <p className="mt-1 text-xs font-semibold text-secondary">{combined ? "Eligible closed strategy fills are included once in the combined gross totals and leaderboard. Open and unfilled signals are not realized trades." : "Separate from the recorded ledger below. These rows are not added to its performance totals or leaderboard."} Fees and net P/L are unknown.</p>
     {stale ? <p role="status" className="mt-2 text-xs font-semibold text-secondary">Showing a stale strategy read. Current lifecycle and fill state are unverified; timestamps below belong to the retained sample.</p> : null}
-    <p className="mt-2 break-words text-[11px] text-secondary">Source: {result.payload?.source === "postgres_strategy_execution" ? "PostgreSQL strategy execution" : "Unknown"} | Last successful read: {strategyTime(result.receivedAt ?? null)}</p>
+    <p className="mt-2 break-words text-[11px] text-secondary">Source: {((combined && !unavailable && !loading) || result.payload?.source === "postgres_strategy_execution") ? "PostgreSQL strategy execution" : "Unknown"} | Last successful read: {strategyTime(result.receivedAt ?? null)}</p>
     {result.refreshStatus === "unavailable" ? <p role="status" className="mt-1 text-[11px] text-secondary">Current source unavailable. Last attempt: {strategyTime(result.lastAttemptAt ?? null)}. A response is not a successful data read.</p> : null}
     <details className="mt-1 text-[11px] text-secondary">
       <summary className="cursor-pointer">Source and accounting limits</summary>
       <div className="mt-1 space-y-1 break-words">
         <p>Source read: {strategyTime(view.observedAt)} | Latest stored record: {strategyTime(view.sourceAsOf)}</p>
         <p>Freshness: stored observations, not live broker state. An updated read does not make historical fills current.</p>
-        <p>Scope: configured paper broker | Stored broker account binding: {result.payload?.broker_account_match === "verified" ? "Verified" : "Unavailable"}</p>
+        <p>Scope: configured paper broker | Stored broker account binding: {(combined ? !unavailable && !loading && result.payload?.strategy_account_binding === "verified" : result.payload?.broker_account_match === "verified") ? "Verified" : "Unavailable"}</p>
         <p>Gross realized P/L is supplied only for a fully exited signal with complete fill evidence and native CLOSED state. Partial exits and unreconciled states have unknown gross here. Open-position marks are not included.</p>
-        <p>Fees have not been allocated. Net performance is not qualified. Strategy and legacy records may overlap and must not be summed.</p>
-        <p>Signals excluded because their order IDs also appear in the legacy ledger: {strategyNumber(view.legacyOverlap)}.</p>
+        <p>Fees have not been allocated. Net performance is not qualified. {combined ? "Python resolves order ownership before combining eligible contributions; no client-side sum is used." : "Strategy and legacy records may overlap and must not be summed."}</p>
+        {combined ? <p>Gross cohort inclusion and exclusion reasons are supplied per signal by the same backend observation. A complete fill is not automatically eligible.</p> : <p>Signals excluded because their order IDs also appear in the legacy ledger: {strategyNumber(view.legacyOverlap)}.</p>}
       </div>
     </details>
     {view.error ? <p role="alert" className="mt-3 rounded-lg border border-rose-300/60 bg-rose-50/80 p-3 text-xs text-rose-800 dark:border-rose-400/40 dark:bg-rose-500/10 dark:text-rose-200">{view.error}</p> : null}
@@ -84,7 +86,7 @@ export default function StrategyHistoryCard({ result }: { result: SourceResult }
       </div>
       <div className="mt-3 hidden max-h-[440px] max-w-full overflow-auto sm:block" role="region" aria-label="Scrollable strategy trade history" tabIndex={0} data-strategy-layout="desktop">
         <table className="w-full min-w-[920px] table-fixed">
-          <caption className="sr-only">Stored paper strategy signals, separate from recorded ledger accounting. All dates are UTC. Unknown amounts are not zero.</caption>
+          <caption className="sr-only">{combined ? "Stored paper strategy signals from the shared combined gross cohort." : "Stored paper strategy signals, separate from recorded ledger accounting."} All dates are UTC. Unknown amounts are not zero.</caption>
           <colgroup><col className="w-[17%]"/><col className="w-[18%]"/><col className="w-[12%]"/><col className="w-[13%]"/><col className="w-[18%]"/><col className="w-[12%]"/><col className="w-[10%]"/></colgroup>
           <thead className="sticky top-0 z-10 bg-slate-100/95 dark:bg-slate-900/95"><tr className="border-b border-slate-200/70 text-left text-[10px] font-semibold uppercase tracking-wide text-secondary dark:border-slate-700/70">
             {["Symbol / strategy", "Native state / fills", "Shares", "Average fill prices", "Fill times (UTC)", "Gross realized P/L", "Cost accounting"].map(label => <th scope="col" key={label} className="px-2 py-2">{label}</th>)}
@@ -101,6 +103,6 @@ export default function StrategyHistoryCard({ result }: { result: SourceResult }
         </table>
       </div>
     </> : null}
-    {!loading && !unavailable ? <p className="mt-3 text-[11px] text-secondary">Latest {STRATEGY_HISTORY_LIMIT} strategy signals requested. Showing {view.rows.length} after exclusions and identity checks.{view.hasMore === true ? " More signals exist; older history is not shown." : view.hasMore === null ? " Additional-history coverage is unknown." : ""} This is not an account-wide trade count.</p> : null}
+    {!loading && !unavailable ? <p className="mt-3 text-[11px] text-secondary">{combined ? `Showing ${view.rows.length} recent strategy signals from the shared cohort; lifecycle preview limit ${STRATEGY_HISTORY_LIMIT}.` : `Latest ${STRATEGY_HISTORY_LIMIT} strategy signals requested. Showing ${view.rows.length} after exclusions and identity checks.`}{view.hasMore === true ? " More signals exist; older history is not shown." : view.hasMore === null ? " Additional-history coverage is unknown." : ""} This is not an account-wide trade count.</p> : null}
   </section>;
 }

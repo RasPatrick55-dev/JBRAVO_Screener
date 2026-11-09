@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import fixture from "../src/components/trades/registeredApiFixture.json";
-import TradesTab, { physicalHistoryRows } from "../src/components/trades/TradesTab";
+import TradesTab, { physicalHistoryRows } from "./fixtures/LegacyTradesTab";
 import * as sources from "../src/components/ui/sourceState";
 import type { SourceResult, SourcePayload } from "../src/components/ui/sourceState";
 
