@@ -1,0 +1,53 @@
+{
+  "schema_version": "jbravo.strategy-history.v1",
+  "source": "postgres_strategy_execution",
+  "trade_view": "STRATEGY_EXECUTION_HISTORY",
+  "observed_at": "2026-11-09T17:00:00+00:00",
+  "source_as_of": "2026-10-05T10:00:00+00:00",
+  "freshness": "stored_observations_not_live",
+  "account_scope": "configured_paper_broker",
+  "broker_account_match": "verified",
+  "evidence_basis": "STORED_BROKER_ORDER_OBSERVATIONS",
+  "performance_status": "NOT_QUALIFIED_STRATEGY_HISTORY",
+  "accounting_complete": false,
+  "fees_status": "UNKNOWN_UNALLOCATED",
+  "net_status": "UNKNOWN",
+  "limit": 25,
+  "ok": true,
+  "status": "ready",
+  "reason": null,
+  "rows": [
+    {
+      "signal_id": "7777777777777777777777777777777777777777777777777777777777777777",
+      "symbol": "SYNTH",
+      "strategy_id": "synthetic-pattern",
+      "state": "CLOSED",
+      "status": "complete",
+      "reason": null,
+      "entry_qty": 40.0,
+      "exited_qty": 40.0,
+      "remaining_qty": 0.0,
+      "entry_avg_price": 10.0,
+      "exit_avg_price": 12.0,
+      "entry_time": "2026-10-01T10:00:00+00:00",
+      "exit_time": "2026-10-05T10:00:00+00:00",
+      "gross_realized_pnl": 80.0,
+      "fees": null,
+      "net_realized_pnl": null,
+      "fees_status": "UNKNOWN_UNALLOCATED",
+      "completion_status": "FULL_EXIT_OBSERVED",
+      "updated_at": "2026-10-05T10:00:00+00:00",
+      "entry_order_ids": [
+        "synthetic-entry-0"
+      ],
+      "exit_order_ids": [
+        "synthetic-exit-0"
+      ],
+      "evidence_basis": "STORED_BROKER_ORDER_OBSERVATIONS",
+      "ownership_scope": "STRATEGY_SIGNAL",
+      "ownership_basis": "STORED_SIGNAL_PAYLOAD_NOT_REVALIDATED"
+    }
+  ],
+  "has_more": false,
+  "legacy_overlap_count": 0
+}
