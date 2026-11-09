@@ -193,11 +193,11 @@ def read_snapshot(connection_factory, account, expected_identity, limit):
             )
             need(
                 len(identity) == 1
-                and tuple(
-                    identity[0].get(k)
-                    for k in ("deployment_id", "database_id", "database_name", "connected_database")
-                )
-                == (*expected_identity, expected_identity[2]),
+                and (identity[0].get("deployment_id"), identity[0].get("database_id"))
+                == expected_identity
+                and type(identity[0].get("database_name")) is str
+                and bool(identity[0]["database_name"])
+                and identity[0]["database_name"] == identity[0].get("connected_database"),
                 "database_identity_mismatch",
             )
             signals = reader.rows(
@@ -589,19 +589,38 @@ def snapshot(
         net_status="UNKNOWN",
         limit=limit,
     )
-    if client is None or type(expected_identity) is not tuple or len(expected_identity) != 3:
+    # Canonical read identity contains deployment_id/database_id only. The
+    # configured three-field disposition binding ends in an evidence reference,
+    # not a database name; never reinterpret that reference as one.
+    if client is None or type(expected_identity) is not tuple or len(expected_identity) != 2:
         return unavailable(base, "paper_read_context_unavailable")
+    failure_stage = "broker_account_read"
     try:
         account = read(client.get_account, seconds=2)
         need(type(account.id) in (str, UUID), "broker_account_identity_invalid")
         account_id = text(str(account.id))
         need(str(UUID(account_id)) == account_id, "broker_account_identity_invalid")
+        failure_stage = "database_history_read"
         signals, records, overlap, has_more = read(
             lambda: read_snapshot(connection_factory, account_id, expected_identity, limit),
             seconds=7,
         )
-    except Exception:
-        return unavailable(base, "strategy_history_unavailable")
+    except Exception as error:
+        # Fixed phases/codes only. Never return SQL/provider exception text,
+        # configuration, account IDs, database names or evidence references.
+        known = {
+            "database_identity_mismatch",
+            "database_unavailable",
+            "read_budget_exceeded",
+            "row_budget_exceeded",
+            "broker_account_identity_invalid",
+        }
+        reason = (
+            str(error)
+            if type(error) is EvidenceError and str(error) in known
+            else "strategy_history_unavailable"
+        )
+        return dict(unavailable(base, reason), failure_stage=failure_stage)
     base["broker_account_match"] = "verified"
     legacy_ids = {
         r.get(k) for r in overlap for k in ("entry_order_id", "exit_order_id") if r.get(k)

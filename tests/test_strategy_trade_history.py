@@ -20,7 +20,8 @@ SID = "7" * 64
 NOW = datetime(2026, 11, 9, 17, tzinfo=timezone.utc)
 ENTRY_TIME = "2026-10-01T10:00:00+00:00"
 EXIT_TIME = "2026-10-05T10:00:00+00:00"
-IDENTITY = ("synthetic-deployment", "synthetic-database", "synthetic-db")
+IDENTITY = ("synthetic-deployment", "00000000-0000-4000-8000-000000000002")
+DATABASE_NAME = "synthetic-db"
 
 
 def signal():
@@ -462,8 +463,8 @@ def test_reader_budget_wire_sentinel_and_cleanup():
             dict(
                 deployment_id=IDENTITY[0],
                 database_id=IDENTITY[1],
-                database_name=IDENTITY[2],
-                connected_database=IDENTITY[2],
+                database_name=DATABASE_NAME,
+                connected_database=DATABASE_NAME,
             )
         ],
         [signal()],
@@ -540,7 +541,7 @@ def test_route_is_no_store_public_get_with_paper_guard(monkeypatch):
         _parse_positive_int=lambda *a, **kw: 25,
         _dashboard_broker_context=lambda: ("paper-client", "configured_paper_broker"),
         _dashboard_read_policy_identity=lambda: IDENTITY[:2],
-        db=SimpleNamespace(_PAPER_DISPOSITION_BINDING=IDENTITY),
+        db=SimpleNamespace(_PAPER_DISPOSITION_BINDING=(*IDENTITY, "synthetic-evidence-reference")),
         _json_no_store=lambda obj: (obj, "no-store"),
     )
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), namespace)
@@ -559,3 +560,169 @@ def test_module_does_not_import_execution_stores_or_broker_writers():
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
     }
     assert not calls & {"commit", "submit_order", "replace_order", "cancel_order", "execute_trades"}
+
+
+def identity_connection(row):
+    cursor = Mock()
+    cursor.__enter__ = Mock(return_value=cursor)
+    cursor.__exit__ = Mock(return_value=False)
+    body = json.dumps(row)
+    cursor.fetchmany.side_effect = [[(body, 1, len(body.encode()))], [], [], []]
+    conn = Mock(autocommit=False)
+    conn.get_transaction_status.return_value = 0
+    conn.cursor.return_value = cursor
+    return conn
+
+
+def test_canonical_identity_pair_and_connected_database_are_separate_contracts():
+    expected = ("synthetic-deployment", "00000000-0000-4000-8000-000000000002")
+    conn = identity_connection(
+        dict(
+            deployment_id=expected[0],
+            database_id=expected[1],
+            database_name="synthetic-db",
+            connected_database="synthetic-db",
+        )
+    )
+    assert H.read_snapshot(lambda: conn, ACCOUNT, expected, 25) == ([], [], [], False)
+    conn.rollback.assert_called_once()
+    conn.close.assert_called_once()
+
+
+def test_route_passes_canonical_pair_not_evidence_reference(monkeypatch):
+    path = Path(__file__).resolve().parents[1] / "dashboards/dashboard_app.py"
+    node = next(
+        n
+        for n in ast.parse(path.read_text(encoding="utf-8")).body
+        if isinstance(n, ast.FunctionDef) and n.name == "api_trades_strategy_history"
+    )
+    node.decorator_list = []
+    expected = ("synthetic-deployment", "00000000-0000-4000-8000-000000000002")
+    pin = (*expected, "metadata-owner-fixture:sha256:" + "a" * 64)
+    capture = Mock(return_value={"ok": True})
+    monkeypatch.setattr(H, "snapshot", capture)
+    namespace = dict(
+        request=request,
+        _parse_positive_int=lambda *a, **kw: 25,
+        _dashboard_broker_context=lambda: ("paper-client", "configured_paper_broker"),
+        _dashboard_read_policy_identity=lambda: expected,
+        db=SimpleNamespace(_PAPER_DISPOSITION_BINDING=pin),
+        _json_no_store=lambda value: value,
+    )
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), namespace)
+    with Flask(__name__).test_request_context("/api/trades/strategy-history"):
+        namespace[node.name]()
+    assert capture.call_args.args[2] == expected
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("deployment_id", "other-deployment"),
+        ("database_id", "00000000-0000-4000-8000-000000000003"),
+        ("database_name", "wrong-database"),
+        ("connected_database", "wrong-database"),
+        ("database_name", None),
+        ("database_name", ""),
+    ],
+)
+def test_database_binding_mismatch_still_fails_before_history_queries(field, value):
+    row = dict(
+        deployment_id=IDENTITY[0],
+        database_id=IDENTITY[1],
+        database_name=DATABASE_NAME,
+        connected_database=DATABASE_NAME,
+    )
+    row[field] = value
+    conn = identity_connection(row)
+    with pytest.raises(H.EvidenceError, match="database_identity_mismatch"):
+        H.read_snapshot(lambda: conn, ACCOUNT, IDENTITY, 25)
+    assert conn.cursor.return_value.fetchmany.call_count == 1
+    conn.rollback.assert_called_once()
+    conn.close.assert_called_once()
+
+
+def test_three_field_evidence_binding_is_not_a_read_identity():
+    client = SimpleNamespace(get_account=Mock())
+    factory = Mock()
+    result = H.snapshot(factory, client, (*IDENTITY, "synthetic-evidence-reference"))
+    assert (
+        result["status"] == "unavailable" and result["reason"] == "paper_read_context_unavailable"
+    )
+    client.get_account.assert_not_called()
+    factory.assert_not_called()
+
+
+@pytest.mark.parametrize("bad_name", [None, "", 42, True, [], {}])
+def test_equal_invalid_database_names_cannot_satisfy_identity(bad_name):
+    conn = identity_connection(
+        dict(
+            deployment_id=IDENTITY[0],
+            database_id=IDENTITY[1],
+            database_name=bad_name,
+            connected_database=bad_name,
+        )
+    )
+    with pytest.raises(H.EvidenceError, match="database_identity_mismatch"):
+        H.read_snapshot(lambda: conn, ACCOUNT, IDENTITY, 25)
+
+
+def test_missing_database_names_cannot_satisfy_identity():
+    conn = identity_connection(dict(deployment_id=IDENTITY[0], database_id=IDENTITY[1]))
+    with pytest.raises(H.EvidenceError, match="database_identity_mismatch"):
+        H.read_snapshot(lambda: conn, ACCOUNT, IDENTITY, 25)
+
+
+def test_actual_route_through_snapshot_uses_evidence_reference_only_for_context(monkeypatch):
+    path = Path(__file__).resolve().parents[1] / "dashboards/dashboard_app.py"
+    node = next(
+        n
+        for n in ast.parse(path.read_text(encoding="utf-8")).body
+        if isinstance(n, ast.FunctionDef) and n.name == "api_trades_strategy_history"
+    )
+    node.decorator_list = []
+    pin = (*IDENTITY, "metadata-owner-fixture:sha256:" + "a" * 64)
+    assert pin[2] != DATABASE_NAME
+    conn = identity_connection(
+        dict(
+            deployment_id=IDENTITY[0],
+            database_id=IDENTITY[1],
+            database_name=DATABASE_NAME,
+            connected_database=DATABASE_NAME,
+        )
+    )
+    monkeypatch.setattr(H, "connect_current_db", lambda db: conn)
+    client = SimpleNamespace(get_account=Mock(return_value=SimpleNamespace(id=UUID(ACCOUNT))))
+    namespace = dict(
+        request=request,
+        _parse_positive_int=lambda *a, **kw: 25,
+        _dashboard_broker_context=lambda: (client, "configured_paper_broker"),
+        _dashboard_read_policy_identity=lambda: IDENTITY,
+        db=SimpleNamespace(_PAPER_DISPOSITION_BINDING=pin),
+        _json_no_store=lambda value: value,
+    )
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), namespace)
+    with Flask(__name__).test_request_context("/api/trades/strategy-history"):
+        result = namespace[node.name]()
+    assert result["ok"] is True and result["status"] == "empty"
+    assert result["broker_account_match"] == "verified"
+    client.get_account.assert_called_once()
+    assert conn.cursor.return_value.fetchmany.call_count == 4
+    assert pin[2] not in json.dumps(result) and DATABASE_NAME not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    "failure,expected",
+    [
+        (H.EvidenceError("database_identity_mismatch"), "database_identity_mismatch"),
+        (RuntimeError("private SQL/DSN/account error"), "strategy_history_unavailable"),
+    ],
+)
+def test_failure_diagnostics_are_fixed_codes_without_private_exception(
+    monkeypatch, failure, expected
+):
+    monkeypatch.setattr(H, "read_snapshot", Mock(side_effect=failure))
+    client = SimpleNamespace(get_account=lambda: SimpleNamespace(id=UUID(ACCOUNT)))
+    result = H.snapshot(Mock(), client, IDENTITY, read=lambda fn, **kw: fn())
+    assert result["reason"] == expected and result["failure_stage"] == "database_history_read"
+    assert "private" not in json.dumps(result)
