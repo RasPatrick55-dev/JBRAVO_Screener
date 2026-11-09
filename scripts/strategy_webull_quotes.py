@@ -223,7 +223,7 @@ def execution_components(NativeBroker, NativeEngine, *, quote_factory):
     class WebullPaperBroker(NativeBroker):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)  # Original paper/account context.
-            self.quote_feed = FEED
+            self.quote_feed = FEED if self.market_data else None
             self.webull_quotes = None
             self.quote_failures = {}
             # Defer optional provider construction so loss of data entitlement or
@@ -234,6 +234,9 @@ def execution_components(NativeBroker, NativeEngine, *, quote_factory):
             if not symbols:
                 return {}
             try:
+                # Preserve the native entry-only broker's market-data boundary.
+                # Supplying this class must not widen market_data=False scope.
+                need(self.market_data is True, 'QUOTE_FORBIDDEN')
                 if self.webull_quotes is None:
                     candidate = quote_factory()
                     need(isinstance(candidate, WebullQuotes))
