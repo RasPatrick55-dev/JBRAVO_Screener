@@ -8854,7 +8854,14 @@ def api_execute_state():
 
 @server.route("/api/execute/state/stream")
 def api_execute_state_stream():
-    return _execute_sse_response(_execute_state_payload, interval_seconds=5.0)
+    # Cached clients still know this URL. HTTP 204 tells EventSource not to
+    # reconnect; merely ending a stream would repeatedly occupy WSGI workers.
+    # The existing finite /api/execute/state fallback remains available.
+    response = Response(status=204)
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @server.route("/api/execute/audit")

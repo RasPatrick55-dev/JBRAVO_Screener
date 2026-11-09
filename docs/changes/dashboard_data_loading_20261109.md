@@ -54,6 +54,23 @@ queueing, network transfer and deferred streaming work. Streaming and non-API
 responses omit it. It contains no request parameters, SQL, exception text,
 credentials, account identifiers or source paths.
 
+## Retire the legacy aggregate stream
+
+Only `/api/execute/state/stream` now returns an empty HTTP 204 response with
+no-store headers, without constructing its payload or starting a generator.
+EventSource treats HTTP 204 as a permanent stop instead of reconnecting. Merely
+limiting stream duration or iterations would reconnect cached clients and could
+increase load while their separate fallback polling continued.
+
+The finite `/api/execute/state` route and all other routes remain unchanged.
+The release009 client already responds to EventSource errors by starting its
+finite fallback, and independently polls every 20 seconds. Its old 15-second
+deadline remains a limitation for cached clients; updating the frontend is still
+needed to obtain the new loading behavior. This endpoint retirement is an
+explicit compatibility change for any other consumer of the aggregate stream.
+It prevents that stream from retaining a worker but does not prove it caused
+every observed timeout or guarantee a particular queue delay.
+
 ## Preserved limits and unresolved evidence
 
 No native source or financial-reader change is part of this patch. The source
@@ -76,6 +93,9 @@ Offline tests extract only the changed handlers and use synthetic payloads and
 a local Flask test client. They prove zero telemetry database calls, unchanged
 ready/held financial fields, truthful acknowledgement, request-scoped timing,
 and omission for streaming, non-API, missing-start and invalid-clock cases.
+Separate route tests prove the retired endpoint returns an empty no-store 204
+without invoking its payload factory, stream helper, database or provider, and
+the finite route still returns its exact financial payload from one factory call.
 
 This commit is preparation only. It does not upload source, reload the web app,
 change WSGI, run jobs, change schedules or alter trading. A release009-style

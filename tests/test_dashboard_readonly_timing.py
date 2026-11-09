@@ -144,3 +144,48 @@ def test_flask_hooks_are_registered():
         node = next(node for node in TREE.body if isinstance(node, ast.FunctionDef)
                     and node.name == name)
         assert [ast.unparse(value) for value in node.decorator_list] == [f"server.{decorator}"]
+
+
+def test_retired_state_stream_is_empty_no_store_without_loading_sources():
+    factory = Mock(side_effect=AssertionError("retired stream loaded sources"))
+    stream = Mock(side_effect=AssertionError("retired stream created a generator"))
+    database = Mock(side_effect=AssertionError("retired stream queried database"))
+    provider = Mock(side_effect=AssertionError("retired stream queried provider"))
+    namespace = helpers("api_execute_state_stream", _execute_state_payload=factory,
+        _execute_sse_response=stream, db=database, _alpaca_rest_get_json=provider,
+        _pythonanywhere_api_get_json=provider)
+    app = Flask(__name__)
+    app.add_url_rule("/api/execute/state/stream",
+                     view_func=namespace["api_execute_state_stream"])
+    response = app.test_client().get("/api/execute/state/stream")
+    assert response.status_code == 204
+    assert response.data == b""
+    assert response.headers["Cache-Control"] == "no-store, max-age=0"
+    assert response.headers["Pragma"] == "no-cache"
+    assert response.headers["Expires"] == "0"
+    for dependency in (factory, stream, database, provider):
+        assert dependency.mock_calls == []
+
+
+def test_finite_state_route_still_loads_exact_payload_once():
+    payload = {"ok": True, "summary": {"performance_status": "HELD_OR_UNKNOWN"},
+               "orders": {"rows": []}, "trailing_stops": {"rows": []}}
+    factory = Mock(return_value=payload)
+    stream = Mock(side_effect=AssertionError("finite route created a stream"))
+    namespace = helpers("api_execute_state", "_json_no_store", jsonify=jsonify,
+        _execute_state_payload=factory, _execute_sse_response=stream)
+    app = Flask(__name__)
+    app.add_url_rule("/api/execute/state", view_func=namespace["api_execute_state"])
+    response = app.test_client().get("/api/execute/state")
+    assert response.status_code == 200
+    assert response.get_json() == payload
+    assert "no-store" in response.headers["Cache-Control"]
+    factory.assert_called_once_with()
+    stream.assert_not_called()
+
+
+def test_retirement_keeps_exact_existing_route_registration():
+    node = next(node for node in TREE.body if isinstance(node, ast.FunctionDef)
+                and node.name == "api_execute_state_stream")
+    assert [ast.unparse(value) for value in node.decorator_list] == [
+        "server.route('/api/execute/state/stream')"]
