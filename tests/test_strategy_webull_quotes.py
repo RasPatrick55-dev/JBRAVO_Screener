@@ -3,6 +3,8 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
 import socket
+import subprocess
+import sys
 
 import pytest
 
@@ -13,6 +15,13 @@ from tests.test_strategy_quote_diagnostics import modules, make_position
 pytestmark = pytest.mark.alpaca_optional
 NOW = datetime(2026, 11, 9, 14, 55, 24, 553000, tzinfo=timezone.utc)
 SECRET = 'private-sentinel-never-export-this'
+
+
+def test_adapter_imports_in_isolation_without_native_source_installation():
+    code = ('import runpy; runpy.run_path(' + repr(webull.__file__) + ')')
+    result = subprocess.run([sys.executable, '-I', '-B', '-c', code],
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0 and result.stdout == '' and result.stderr == ''
 
 
 @pytest.fixture(autouse=True)
