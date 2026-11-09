@@ -22,6 +22,7 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 ## How-To
 
 - [Entry-only placement and Monitor Positions ownership candidate](how-to/entry_monitor_ownership.md)
+- [Bounded initial entry preflight rechecks](how-to/entry_preflight_rechecks.md)
 - [Pending stop replacement isolation](how-to/pending_stop_replacement.md)
 
 - [Complete strategy preparation, blocked reporting and unified handoff](how-to/strategy_runtime_recovery.md)

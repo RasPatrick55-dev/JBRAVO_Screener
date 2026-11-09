@@ -4,6 +4,7 @@ This module is inert on import. A reviewed launcher supplies the pinned native
 runtime and Engine. Pipeline prices and historical handoffs remain unchanged.
 Monitor Positions owns fill reconciliation, protective stops and close cleanup.
 """
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 import time
@@ -16,8 +17,8 @@ def require(value, reason):
 
 class EntryOnlyBroker:
     """Deny lifecycle mutations even if a native entry method changes later."""
-    def __init__(self, broker):
-        self.broker = broker
+    def __init__(self, broker, *, before_submit=None):
+        self.broker, self.before_submit = broker, before_submit
 
     def __getattr__(self, name):
         return getattr(self.broker, name)
@@ -27,6 +28,8 @@ class EntryOnlyBroker:
                 and request.get('time_in_force') == 'day'
                 and request.get('extended_hours') is True,
                 'entry_only_buy_limit_required')
+        if self.before_submit is not None:
+            self.before_submit()
         return self.broker.submit_order(request)
 
     def cancel_order(self, *args, **kwargs):
@@ -81,15 +84,49 @@ def entry_engine(NativeEngine):
     return EntryEngine
 
 
+@contextmanager
+def admitted_entry_lease(runtime, store, opening, *, check_window, wait,
+                         revalidate, preflight, progress):
+    """Recheck only read-only admission, never the body that may place orders.
+
+    Release the account lease before every pause so Monitor Positions can
+    reconcile replacement stops. The source lease remains shared with it.
+    """
+    for attempt in range(1, 11):
+        check_window()
+        with runtime.entry_lease(store, opening, wait=wait):
+            check_window()
+            if attempt > 1:
+                revalidate()
+                check_window()
+            progress['preflight_attempts'] = attempt
+            try:
+                proof = preflight()
+            except ValueError as error:
+                # Other errors, including timeouts and ambiguous outcomes, are
+                # never retryable. The pinned preflight is GET/SELECT-only.
+                if (str(error) != 'ENTRY_PREFLIGHT_STOP_COVERAGE_UNCONFIRMED'
+                        or attempt == 10):
+                    raise
+            else:
+                check_window()
+                # Deliberately outside the exception handler: once yielded,
+                # no downstream failure can restart admission or the batch.
+                yield dict(proof, admission_attempts=attempt)
+                return
+        wait(2.)
+
+
 def run_entry_only(config, *, runtime, NativeEngine, calendar_reader,
                    marker_for, preflight, base_dir, wait=None, progress,
-                   now=None, broker_factory=None):
+                   now=None, broker_factory=None, monotonic=None):
     """Place the published batch at 04:00 NY, release the lease, then return.
 
     Fresh direct broker state gates existing owned exposure. Monitor health is
     not read. A successful receipt means accepted entries, never confirmed stops.
     """
     observe = now or (lambda: datetime.now(timezone.utc))
+    elapsed = monotonic or time.monotonic
     from scripts.setup_selection import contract as selection_contract
     runtime.load_config(base_dir)
     require(config.paper_research_entries is True and config.source == 'db'
@@ -125,8 +162,32 @@ def run_entry_only(config, *, runtime, NativeEngine, calendar_reader,
         verified = runtime.unified_handoff(env, handoff, base_dir=base_dir)
         queue = runtime.pipeline_execution_queue(verified)
         opening = runtime.rules.utc(handoff['execution_policy']['entry_open_at'])
-        require(opening <= observe() < opening + timedelta(seconds=60),
-                'entry_only_premarket_submission_window_closed')
+        deadline = opening + timedelta(seconds=60)
+        monotonic_deadline = elapsed() + max(0., (deadline - observe()).total_seconds())
+
+        def check_window():
+            current = observe()
+            remaining = min((deadline - current).total_seconds(), monotonic_deadline - elapsed())
+            require(opening <= current and remaining > 0,
+                    'entry_only_premarket_submission_window_closed')
+            return remaining
+
+        def bounded_wait(seconds):
+            sleeper(min(seconds, check_window()))
+            check_window()
+
+        check_window()
+        admission_binding = deepcopy((handoff, verified['record'], queue))
+
+        def revalidate():
+            current = runtime.readonly_handoff(env, base_dir=base_dir, pipeline_limits=True)
+            runtime.source_guard(current, base_dir=base_dir)
+            selection = runtime.unified_handoff(env, current, base_dir=base_dir)
+            current_queue = runtime.pipeline_execution_queue(selection)
+            require((current, selection['record'], current_queue) == admission_binding,
+                    'entry_only_admission_binding_changed')
+            runtime.entry_account(broker, env)
+
         calendar = calendar_reader(env, day=date.fromisoformat(handoff['session']['next_session']))
         # Freeze one calendar-derived close for the whole batch. No fallback to
         # a guessed16:00 when the exchange is closed or calendar is unavailable.
@@ -147,30 +208,35 @@ def run_entry_only(config, *, runtime, NativeEngine, calendar_reader,
         try:
             runtime.entry_account(broker, env)
             conn, store = runtime.store_connection(env, broker)
-            with runtime.entry_lease(store, opening, wait=sleeper):
+            def admission():
+                return preflight(runtime, NativeEngine, store, broker, base_dir=base_dir,
+                    handoff=handoff, proposed_symbols={s['proposal']['symbol'] for s in queue})
+
+            with admitted_entry_lease(runtime, store, opening, check_window=check_window,
+                    wait=bounded_wait, revalidate=revalidate, preflight=admission,
+                    progress=progress) as proof:
                 before = {s['signal_id'] for s in store.signals(active=False)}
                 existing_orders = {r['client_order_id'] for s in store.signals(active=False)
                                    for r in store.orders(s['signal_id'])}
-                proof = preflight(runtime, NativeEngine, store, broker, base_dir=base_dir,
-                    handoff=handoff, proposed_symbols={s['proposal']['symbol'] for s in queue})
                 scoped = EntryOnlyStore(store, calendar, marker_for)
                 core_guard = runtime.guard_for(env, base_dir=base_dir)
 
                 def guard(kind, signal):
                     require(kind == 'entry', 'entry_only_lifecycle_guard_forbidden')
-                    require(opening <= observe() < opening + timedelta(seconds=60),
-                            'entry_only_premarket_submission_window_closed')
+                    check_window()
                     require(signal['payload'].get('entry_lifecycle') ==
                             marker_for(signal['payload']['handoff'], calendar),
                             'entry_only_lifecycle_binding_changed')
-                    return core_guard(kind, signal)
+                    result = core_guard(kind, signal)
+                    check_window()
+                    return result
 
-                engine = entry_engine(NativeEngine)(scoped, EntryOnlyBroker(broker),
+                engine = entry_engine(NativeEngine)(scoped,
+                    EntryOnlyBroker(broker, before_submit=check_window),
                     guard=guard, pipeline_orders=True, now=observe)
                 progress['phase'] = 'STRATEGY_PAPER_ENTRY'
                 for setup in queue:
-                    require(opening <= observe() < opening + timedelta(seconds=60),
-                            'entry_only_premarket_submission_window_closed')
+                    check_window()
                     origin = setup['handoff']
                     runtime.source_guard(origin, base_dir=base_dir)
                     current = {s['signal_id'] for s in store.signals(active=False)}
