@@ -6118,7 +6118,7 @@ def api_trades_strategy_history():
     from dashboards import strategy_trade_history
     limit = _parse_positive_int(request.args.get("limit"), default=25, minimum=1, maximum=50)
     client, _context = _dashboard_broker_context()
-    identity = db._PAPER_DISPOSITION_BINDING if _dashboard_read_policy_identity() is not None else None
+    identity = _dashboard_read_policy_identity()
     return _json_no_store(strategy_trade_history.snapshot(
         lambda: strategy_trade_history.connect_current_db(db), client, identity, limit=limit))
 
