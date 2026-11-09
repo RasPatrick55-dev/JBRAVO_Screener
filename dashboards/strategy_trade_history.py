@@ -12,6 +12,7 @@ import json
 import re
 import time
 from uuid import UUID
+from threading import Event
 
 from dashboards.source_contracts import bounded_read, timestamp
 
@@ -595,16 +596,19 @@ def snapshot(
     if client is None or type(expected_identity) is not tuple or len(expected_identity) != 2:
         return unavailable(base, "paper_read_context_unavailable")
     failure_stage = "broker_account_read"
+    database_task_entered = Event()
     try:
         account = read(client.get_account, seconds=2)
         need(type(account.id) in (str, UUID), "broker_account_identity_invalid")
         account_id = text(str(account.id))
         need(str(UUID(account_id)) == account_id, "broker_account_identity_invalid")
         failure_stage = "database_history_read"
-        signals, records, overlap, has_more = read(
-            lambda: read_snapshot(connection_factory, account_id, expected_identity, limit),
-            seconds=7,
-        )
+
+        def read_database():
+            database_task_entered.set()
+            return read_snapshot(connection_factory, account_id, expected_identity, limit)
+
+        signals, records, overlap, has_more = read(read_database, seconds=7)
     except Exception as error:
         # Fixed phases/codes only. Never return SQL/provider exception text,
         # configuration, account IDs, database names or evidence references.
@@ -620,7 +624,15 @@ def snapshot(
             if type(error) is EvidenceError and str(error) in known
             else "strategy_history_unavailable"
         )
-        return dict(unavailable(base, reason), failure_stage=failure_stage)
+        if type(error) is RuntimeError and str(error) in {"source_busy", "source_timeout"}:
+            reason = str(error)
+        # This is the observed state at response time, not a promise that a
+        # timed-out worker cannot subsequently start or finish its bounded read.
+        return dict(
+            unavailable(base, reason),
+            failure_stage=failure_stage,
+            database_task_entered=database_task_entered.is_set(),
+        )
     base["broker_account_match"] = "verified"
     legacy_ids = {
         r.get(k) for r in overlap for k in ("entry_order_id", "exit_order_id") if r.get(k)

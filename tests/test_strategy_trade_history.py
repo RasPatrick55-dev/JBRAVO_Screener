@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import UUID
+import threading
 
 import pytest
 from flask import Flask, request
@@ -725,4 +726,93 @@ def test_failure_diagnostics_are_fixed_codes_without_private_exception(
     client = SimpleNamespace(get_account=lambda: SimpleNamespace(id=UUID(ACCOUNT)))
     result = H.snapshot(Mock(), client, IDENTITY, read=lambda fn, **kw: fn())
     assert result["reason"] == expected and result["failure_stage"] == "database_history_read"
+    assert result["database_task_entered"] is True
     assert "private" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("code", ["source_busy", "source_timeout"])
+@pytest.mark.parametrize(
+    "failed_read,stage", [(1, "broker_account_read"), (2, "database_history_read")]
+)
+def test_bounded_admission_failures_retain_only_fixed_codes(code, failed_read, stage):
+    calls = []
+    client = SimpleNamespace(get_account=lambda: SimpleNamespace(id=UUID(ACCOUNT)))
+    factory = Mock()
+
+    def read(function, **kwargs):
+        calls.append(kwargs["seconds"])
+        if len(calls) == failed_read:
+            raise RuntimeError(code)
+        return function()
+
+    result = H.snapshot(factory, client, IDENTITY, read=read)
+    assert result["reason"] == code and result["failure_stage"] == stage
+    assert result["database_task_entered"] is False
+    assert result["ok"] is False and result["status"] == "unavailable"
+    assert result["broker_account_match"] == "unavailable" and result["rows"] == []
+    assert calls == ([2] if failed_read == 1 else [2, 7])
+    factory.assert_not_called()
+
+
+def test_second_admission_can_fail_before_first_completion_callback_releases_slot(monkeypatch):
+    """Deterministically reproduce a possible admission race, not a live diagnosis."""
+    from dashboards import source_contracts as S
+
+    slots = threading.BoundedSemaphore(4)
+    for _ in range(3):
+        assert slots.acquire(blocking=False)
+    pending = []
+
+    class DelayedCallbackFuture:
+        def __init__(self, function):
+            self.function = function
+            self.callback = None
+
+        def add_done_callback(self, callback):
+            self.callback = callback
+
+        def result(self, timeout):
+            # Hold the scheduling gap between result visibility and callback.
+            value = self.function()
+            pending.append(self)
+            return value
+
+    executor = SimpleNamespace(submit=Mock(side_effect=DelayedCallbackFuture))
+    monkeypatch.setattr(S, "_slots", slots)
+    monkeypatch.setattr(S, "_workers", executor)
+    client = SimpleNamespace(get_account=Mock(return_value=SimpleNamespace(id=UUID(ACCOUNT))))
+    factory = Mock()
+    result = H.snapshot(factory, client, IDENTITY, read=S.bounded_read)
+    assert result["reason"] == "source_busy" and result["failure_stage"] == "database_history_read"
+    assert result["database_task_entered"] is False
+    assert executor.submit.call_count == 1
+    client.get_account.assert_called_once()
+    factory.assert_not_called()
+    for future in pending:
+        future.callback(future)
+    for _ in range(3):
+        slots.release()
+    assert all(slots.acquire(blocking=False) for _ in range(4))
+    assert not slots.acquire(blocking=False)
+
+
+def test_arbitrary_runtime_exception_is_not_exposed():
+    def read(function, **kwargs):
+        raise RuntimeError("private pool details and credentials")
+
+    client = SimpleNamespace(get_account=Mock())
+    result = H.snapshot(Mock(), client, IDENTITY, read=read)
+    assert result["reason"] == "strategy_history_unavailable"
+    assert result["database_task_entered"] is False
+    assert "private" not in json.dumps(result)
+
+
+def test_timeout_after_database_task_entry_is_distinct(monkeypatch):
+    def fail(*args):
+        raise RuntimeError("source_timeout")
+
+    monkeypatch.setattr(H, "read_snapshot", fail)
+    client = SimpleNamespace(get_account=lambda: SimpleNamespace(id=UUID(ACCOUNT)))
+    result = H.snapshot(Mock(), client, IDENTITY, read=lambda function, **kwargs: function())
+    assert result["reason"] == "source_timeout"
+    assert result["database_task_entered"] is True
