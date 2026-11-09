@@ -96,10 +96,11 @@ export default function TradesPerformanceBoard({
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="font-arimo text-xs font-semibold uppercase tracking-[0.08em] text-secondary">{row.label}</h3>
                   <span className="font-cousine text-xs font-semibold tabular-nums text-primary">
-                    {numberFormatter.format(row.tradesCount)} TRADES
+                    {row.tradesCount === null ? unknownLabel : numberFormatter.format(row.tradesCount)} TRADES
                   </span>
                 </div>
 
+                {row.periodLabel ? <p className="text-xs text-secondary">{row.periodLabel}</p> : null}
                 {gross && row.coverage ? <p className="text-xs text-secondary">{row.coverage.included} included / {row.coverage.excluded} excluded / {row.coverage.unknown} unknown</p> : null}
                 <div className="mt-2 grid grid-cols-2 gap-2">
                   <MobileMetric label={gross ? "Gross Win Rate (known)" : "Win Rate"} value={row.winRatePct === null ? unknownLabel : `${percentFormatter.format(row.winRatePct)}%`} />
@@ -194,6 +195,7 @@ export default function TradesPerformanceBoard({
                         className="font-arimo px-2 py-2.5 text-center text-xs font-semibold uppercase tracking-[0.08em] text-secondary"
                       >
                         {row.label}
+                        {row.periodLabel ? <p className="mt-1 text-[10px] font-normal normal-case text-secondary">{row.periodLabel}</p> : null}
                       </th>
                       <td className="px-2 py-2.5 text-center">
                         {!gross ? <p className={metricLabelClass}>Win Rate</p> : null}
@@ -223,8 +225,9 @@ export default function TradesPerformanceBoard({
                       </td>
                       <td className="font-cousine px-2 py-2.5 text-center text-sm font-bold text-primary tabular-nums">
                         {!gross ? <p className={metricLabelClass}>Trades</p> : null}
-                        <p className={gross ? undefined : "mt-1"}>{numberFormatter.format(row.tradesCount)}</p>
-                        {gross && row.coverage ? <small className="text-secondary">{row.coverage.excluded} excluded / {row.coverage.unknown} unknown</small> : null}
+                        <p className={gross ? undefined : "mt-1"}>{row.tradesCount === null ? unknownLabel : numberFormatter.format(row.tradesCount)}</p>
+                        {row.periodLabel ? <p className="text-xs text-secondary">{row.periodLabel}</p> : null}
+                {gross && row.coverage ? <small className="text-secondary">{row.coverage.excluded} excluded / {row.coverage.unknown} unknown</small> : null}
                       </td>
                     </tr>
                   );

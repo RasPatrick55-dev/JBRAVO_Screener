@@ -17,7 +17,7 @@ export default function CombinedTradesView({result,onSyncStateChange}:{result:So
   const page=available && pagination.cohort === view.cohortId ? pagination.page : 0;
   const rows=view?.rows.slice(page*25,(page+1)*25) ?? [];
   const selected=view?.stats.find(row=>row.key === range);
-  const partial=result.validity === "partial" || !!view?.coverage.unknown;
+  const partial=result.validity === "partial" || !!view?.coverage.unknown || !!view?.stats.some(row=>row.periodUnavailable);
   useEffect(()=>onSyncStateChange?.(loading ? "loading" : !available || stale || partial ? "error" : "ready"),[loading,available,stale,partial,onSyncStateChange]);
   const lifecycle=view ? {...view.strategy,kind:stale ? "stale" as const : view.strategy.kind} : {
     rows:[],kind:loading ? "loading" as const : "unavailable" as const,error:loading ? null : "Strategy history unavailable with the combined observation. Count and financial results are unknown.",
@@ -49,7 +49,7 @@ export default function CombinedTradesView({result,onSyncStateChange}:{result:So
           {sourceCounts ? <>{["legacy","strategy"].map(source=><p key={source}>{source === "legacy" ? "Legacy" : "Strategy"}: {sourceCounts[source].included} included / {sourceCounts[source].excluded} excluded / {sourceCounts[source].unknown} unknown.</p>)}</> : null}
           {view ? <p>{view.coverage.deduplicated} duplicate representations excluded; {view.coverage.strategyNotClosed} strategy signals are not closed realized candidates.</p> : null}
           <p>One bounded complete source population supplies all realized candidates, the five summaries and every symbol ranking. Unknown or excluded candidates are disclosed, not assumed to be zero. If population bounds or source validation fail, the combined result is unavailable.</p>
-          <p>Summary windows use rolling UTC 1, 7, 30 and 365 days plus ALL, based on included exits. Leaderboard controls select those precomputed windows without another data read. Rankings aggregate all eligible symbol contributions before the top 12 limit.</p>
+          <p>Weekly covers open US equity trading dates in the current Monday-Friday week; monthly covers the first through last open trading date of the current calendar month, in America/New_York. Both include only exits through this observation (period-to-date), including pre/postmarket on open dates. Daily and yearly remain rolling UTC 1 and 365 days; ALL has no date cutoff. The list retains all realized candidates. Leaderboard controls select those precomputed windows without another data read. Rankings aggregate all eligible symbol contributions before the top 12 limit.</p>
           <p>Legacy gross uses matched execution evidence; strategy gross uses validated stored cumulative order averages. Original recorded ledger P/L is separately labeled in row details. Gross win rate is a closed-contribution statistic, not a portfolio return or qualified strategy performance.</p>
           <p>Open and unfilled strategy signals remain lifecycle observations. Historical ownership labels do not establish current management authority. Account equity charts and trading permissions are unchanged.</p>
           {view ? <p className="break-all">Cohort: {view.cohortId}</p> : null}
@@ -63,8 +63,8 @@ export default function CombinedTradesView({result,onSyncStateChange}:{result:So
         <div className="order-3 min-w-0"><CombinedLatestTrades rows={rows} isLoading={loading} available={available} stale={stale && available} page={page} totalRows={view?.rows.length ?? 0} onPageChange={next=>setPagination({cohort:view?.cohortId ?? "",page:next})}/></div>
       </div>
       <div className="order-2 xl:order-none xl:col-span-1 xl:h-full xl:min-h-0 min-w-0"><TradesLeaderboard gross rows={view?.rankings[range][mode] ?? []} selectedRange={range} onRangeChange={setRange} mode={mode} onModeChange={setMode}
-        isLoading={loading} errorMessage={!available && !loading ? "Leaderboard unavailable; ranking is unknown." : null}
-        sourceNote={`${stale && available ? "Stale cohort. " : ""}Combined known gross before fees.${selected?.coverage ? ` ${selected.coverage.included} included / ${selected.coverage.excluded} excluded / ${selected.coverage.unknown} unknown in this range.` : " Coverage unknown."} Unresolved records may change ranks.`}
+        isLoading={loading} errorMessage={selected?.periodUnavailable ? "Trading calendar unavailable; selected period ranking is unknown." : !available && !loading ? "Leaderboard unavailable; ranking is unknown." : null}
+        sourceNote={`${stale && available ? "Stale cohort. " : ""}Combined known gross before fees. ${selected?.periodLabel ?? ""}${selected?.coverage ? ` ${selected.coverage.included} included / ${selected.coverage.excluded} excluded / ${selected.coverage.unknown} unknown in this range.` : " Coverage unknown."} Unresolved records may change ranks.`}
         emptyMessage={selected?.coverage?.unknown ? "No known gross results in this range; unresolved records may change the ranking." : `No ${mode === "winners" ? "positive" : "negative"} known gross symbol totals in this stored range.`}/></div>
     </div>
   </section>;

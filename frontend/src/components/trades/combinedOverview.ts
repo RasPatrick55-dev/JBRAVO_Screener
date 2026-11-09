@@ -116,6 +116,33 @@ export function combinedOverview(payload: ObjectValue | null): CombinedOverview 
   const stats:RangeRowMetrics[] = [], seenRanges = new Set<string>();
   for (const value of payload.stats) {
     const row = object(value), cov = coverage(row?.coverage), top = object(row?.topTrade), worst = object(row?.worstLoss);
+    const period = object(row?.period);
+    const calendarKey = row?.key === "w" || row?.key === "m";
+    if (calendarKey) {
+      if (!period || period.source !== "alpaca_calendar" || period.timezone !== "America/New_York" ||
+          period.as_of !== payload.observed_at || typeof period.label !== "string" || !period.label || period.label.length > 256 ||
+          !["ready", "unavailable"].includes(String(period.status))) return null;
+      if (period.status === "unavailable") {
+        if (seenRanges.has(String(row!.key)) || payload.status !== "partial" || row!.label !== (row!.key === "w" ? "WEEKLY" : "MONTHLY") ||
+            row!.tradesCount !== null || row!.coverage !== null || row!.totalPL !== null || row!.winRatePct !== null ||
+            !top || !worst || top.symbol !== "--" || worst.symbol !== "--" || top.pl !== null || worst.pl !== null) return null;
+        const key = row!.key as RangeKey;
+        seenRanges.add(key);
+        stats.push({key, label:row!.label as RangeRowMetrics["label"], tradesCount:null, totalPL:null, winRatePct:null,
+          topTrade:{symbol:"--",pl:null}, worstLoss:{symbol:"--",pl:null}, periodLabel:period.label, periodUnavailable:true});
+        continue;
+      }
+      const days=period.session_dates;
+      const dateKey = (value:unknown):value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && combinedTimestamp(`${value}T00:00:00Z`);
+      if (period.coverage_basis !== "PROVIDER_RETURNED_UNPAGINATED_CALENDAR" || !dateKey(period.request_start_date) ||
+          !dateKey(period.request_end_date) || period.request_start_date > period.request_end_date ||
+          (Date.parse(period.request_end_date) - Date.parse(period.request_start_date)) / 86400000 > 36) return null;
+      if (period.basis !== "US_EQUITY_OPEN_DATES" || !Array.isArray(days) || days.length > 31 ||
+          !days.every((day,index)=>typeof day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(day) && combinedTimestamp(`${day}T00:00:00Z`) &&
+            day >= String(period.request_start_date) && day <= String(period.request_end_date) &&
+            ![0,6].includes(new Date(`${day}T12:00:00Z`).getUTCDay()) && (index === 0 || day > days[index-1])) ||
+          period.start_date !== (days[0] ?? null) || period.end_date !== (days[days.length-1] ?? null)) return null;
+    }
     if (!row || !RANGES.includes(row.key as RangeKey) || seenRanges.has(String(row.key)) || !cov || !top || !worst ||
         !count(row.tradesCount) || row.tradesCount !== cov.included || !nullableAmount(row.totalPL) ||
         !(row.winRatePct === null || typeof row.winRatePct === "number" && Number.isFinite(row.winRatePct) && row.winRatePct >= 0 && row.winRatePct <= 100) ||
@@ -131,12 +158,17 @@ export function combinedOverview(payload: ObjectValue | null): CombinedOverview 
     }
     if (cov.included > 0 && (!includedSymbols.has(String(top.symbol)) || !includedSymbols.has(String(worst.symbol)))) return null;
     seenRanges.add(key);
-    stats.push({key,label,coverage:cov,tradesCount:row.tradesCount,totalPL:amount(row.totalPL),winRatePct:row.winRatePct as number|null,
+    stats.push({key,label,periodLabel:calendarKey ? period!.label as string : undefined,coverage:cov,tradesCount:row.tradesCount,totalPL:amount(row.totalPL),winRatePct:row.winRatePct as number|null,
       topTrade:{symbol:top.symbol as string ?? "--",pl:amount(top.pl)},worstLoss:{symbol:worst.symbol as string ?? "--",pl:amount(worst.pl)}});
   }
   const rankings = {} as CombinedOverview["rankings"], ranks = object(payload.rankings);
   if (!ranks) return null;
   for (const range of RANGES) {
+    if (stats.find(row=>row.key === range)?.periodUnavailable) {
+      if (ranks[range] !== null) return null;
+      rankings[range] = {winners:[],losers:[]};
+      continue;
+    }
     const group = object(ranks[range]); if (!group) return null;
     rankings[range] = {winners:[],losers:[]};
     for (const mode of ["winners","losers"] as const) {

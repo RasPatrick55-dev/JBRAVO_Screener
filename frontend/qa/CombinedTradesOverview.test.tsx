@@ -9,6 +9,7 @@ import CombinedTradesView from "../src/components/trades/CombinedTradesView";
 import { combinedOverview, combinedGrossReadPolicy, combinedTimestamp, COMBINED_GROSS_PATH } from "../src/components/trades/combinedOverview";
 import { watchSource, type SourceResult } from "../src/components/ui/sourceState";
 import wire from "./fixtures/combinedGrossWire.synthetic.json";
+import calendarUnavailableWire from "./fixtures/combinedGrossCalendarUnavailable.synthetic.json";
 import { combinedGrossPaginationFixture } from "./fixtures/combinedGrossFixture";
 
 type Obj=Record<string,any>;
@@ -37,7 +38,7 @@ describe("actual combined Trades contract and presentation",()=>{
     const p=fixture(),before=JSON.stringify(p),v=combinedOverview(p);expect(v).not.toBeNull();
     expect(v!.rows.length).toBe(p.rows.length);expect(v!.stats).toHaveLength(5);
     const html=markup(source(p));
-    for(const text of ["Combined stored gross","Strategy Trade History","Latest Trades","TOP GROSS WINNERS","Legacy account binding: unverified","Fees and net P/L are unknown","accounting qualification is not established","rolling UTC 1, 7, 30 and 365 days","Original Recorded P/L","Gross cohort:"])expect(html).toContain(text);
+    for(const text of ["Combined stored gross","Strategy Trade History","Latest Trades","TOP GROSS WINNERS","Legacy account binding: unverified","Fees and net P/L are unknown","accounting qualification is not established","rolling UTC 1 and 365 days","Original Recorded P/L","Gross cohort:"])expect(html).toContain(text);
     expect(html).not.toContain("These rows are not added");expect(html).not.toContain("observed-cost net");
     expect(JSON.stringify(p)).toBe(before);expect(markup(source(p))).toBe(html);
   });
@@ -146,7 +147,7 @@ describe("independent review cross-field admission regressions",()=>{
     expect(combinedOverview(p)).toBeNull();
   });
   it.each(["d","w","m","y","all"])("requires %s leaderboard symbols to belong to the included population",range=>{
-    for(const mode of ["winners","losers"]){const p=fixture();p.rankings[range][mode][0].symbol="NEVER";expect(combinedOverview(p)).toBeNull();}
+    for(const mode of ["winners","losers"]){const p=fixture();p.rankings[range][mode]=[{rank:1,symbol:"NEVER",pl:mode === "winners" ? "1" : "-1"}];expect(combinedOverview(p)).toBeNull();}
   });
   it("does not allow an excluded or unknown symbol to stand in for an included rank",()=>{
     for(const inclusion of ["POLICY_EXCLUDED","UNKNOWN"]){const p=fixture();p.rankings.all.winners[0].symbol=p.rows.find((row:Obj)=>row.inclusion===inclusion).symbol;expect(combinedOverview(p)).toBeNull();}
@@ -218,7 +219,7 @@ describe("actual TradesTab coherent controls and read lifecycle",()=>{
     vi.useFakeTimers();vi.setSystemTime(new Date(wire.observed_at));vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);
     const fetcher=vi.fn().mockImplementationOnce(()=>Promise.resolve(new Response(JSON.stringify(fixture()))))
       .mockImplementationOnce((_url,init)=>new Promise((_resolve,reject)=>init.signal.addEventListener("abort",()=>reject(new Error("timeout")))))
-      .mockImplementation(()=>{const p=emptyFixture();p.observed_at=new Date().toISOString();p.strategy_history.observed_at=p.observed_at;return Promise.resolve(new Response(JSON.stringify(p)));});vi.stubGlobal("fetch",fetcher);mount();await act(settle);
+      .mockImplementation(()=>{const p=emptyFixture();p.observed_at=new Date().toISOString();p.strategy_history.observed_at=p.observed_at;p.stats.forEach((row:Obj)=>{if(row.period)row.period.as_of=p.observed_at;});return Promise.resolve(new Response(JSON.stringify(p)));});vi.stubGlobal("fetch",fetcher);mount();await act(settle);
     await act(async()=>{await vi.advanceTimersByTimeAsync(20000);});expect(container!.textContent).toContain("Original Recorded P/L");expect(fetcher).toHaveBeenCalledTimes(2);
     await act(async()=>{await vi.advanceTimersByTimeAsync(45001);});expect(container!.textContent).toContain("Showing one retained cohort");
     await act(async()=>{await vi.advanceTimersByTimeAsync(20000);});expect(container!.textContent).toContain("No realized trade candidates");expect(container!.textContent).not.toContain("Original Recorded P/L:");
@@ -243,5 +244,58 @@ describe("combined cohort narrowly scoped retention",()=>{
   it.each(["population_overflow","cohort_changed","combined_gross_unavailable","paper_context_unavailable","invalid_account_identity","database_unavailable"])("never treats %s as transient retained success",reason=>expect(combinedGrossReadPolicy.retainUnavailable(unavailable(reason))).toBe(false));
   it.each(["source","schema_version","fees","population_complete","rows","cohort_id","strategy_history","failure_stage","extra"])("refuses changed transient envelope field %s",field=>{
     const p=unavailable();p[field]="unexpected";expect(combinedGrossReadPolicy.retainUnavailable(p)).toBe(false);
+  });
+});
+
+
+describe("current trading calendar ranges",()=>{
+  function missingCalendar(){
+    const p=fixture(); p.status="partial";
+    for(const key of ["w","m"]){
+      const row=p.stats.find((s:Obj)=>s.key===key);
+      Object.assign(row,{tradesCount:null,totalPL:null,winRatePct:null,coverage:null,
+        topTrade:{symbol:"--",pl:null},worstLoss:{symbol:"--",pl:null},
+        period:{status:"unavailable",source:"alpaca_calendar",timezone:"America/New_York",as_of:p.observed_at,label:"Trading calendar unavailable; period results unknown"}});
+      p.rankings[key]=null;
+    }
+    return p;
+  }
+  it("shows exact calendar dates and keeps daily/yearly rolling semantics",()=>{
+    const html=markup();
+    expect(html).toContain("2001-01-29 to 2001-02-02");
+    expect(html).toContain("2001-02-01 to 2001-02-28");
+    expect(html).toContain("America/New_York | period-to-date through");
+    expect(html).not.toContain("rolling UTC 1, 7, 30");
+  });
+  it("accepts the exact Python-produced unavailable-calendar wire",()=>{
+    expect(combinedOverview(calendarUnavailableWire)).not.toBeNull();
+  });
+  it("missing calendar retains history and other ranges but W/M are unknown, never zero",()=>{
+    const p=missingCalendar(), view=combinedOverview(p)!;
+    expect(view).not.toBeNull(); expect(view.rows.length).toBe(wire.rows.length);
+    for(const key of ["d","y","all"])expect(view.stats.find(r=>r.key===key)?.totalPL).toBe(combinedOverview(fixture())!.stats.find(r=>r.key===key)?.totalPL);
+    for(const key of ["w","m"])expect(view.stats.find(r=>r.key===key)?.tradesCount).toBeNull();
+    const html=markup(source(p));expect(html).toContain("Unknown TRADES");expect(html).toContain("Original Recorded P/L");
+  });
+  it("calendar outage/recovery preserves all controls and no stale weekly rank",async()=>{
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);
+    container=document.createElement("div");document.body.append(container);root=createRoot(container);
+    act(()=>root!.render(<CombinedTradesView result={source(missingCalendar())}/>));
+    for(const key of ["W","M","W"]){click(key);expect(container!.textContent).toContain("selected period ranking is unknown");}
+    click("ALL");expect(container!.textContent).not.toContain("selected period ranking is unknown");
+    click("W");act(()=>root!.render(<CombinedTradesView result={source()}/>));
+    expect(container!.textContent).not.toContain("Trading calendar unavailable");
+    expect(container!.textContent).toContain("2001-01-29 to 2001-02-02");
+  });
+  it.each(["missing","wrong timezone","wrong asof","reversed dates","unavailable zeros","unavailable ranks"])("rejects malformed calendar contract: %s",kind=>{
+    const p=kind.startsWith("unavailable") ? missingCalendar() : fixture();
+    const row=p.stats.find((s:Obj)=>s.key==="w");
+    if(kind==="missing")delete row.period;
+    if(kind==="wrong timezone")row.period.timezone="UTC";
+    if(kind==="wrong asof")row.period.as_of="2026-11-09T17:00:00Z";
+    if(kind==="reversed dates")row.period.session_dates.reverse();
+    if(kind==="unavailable zeros")row.tradesCount=0;
+    if(kind==="unavailable ranks")p.rankings.w={winners:[],losers:[]};
+    expect(combinedOverview(p)).toBeNull();
   });
 });

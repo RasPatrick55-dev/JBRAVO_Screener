@@ -21,6 +21,14 @@ from sql_transport_fixture import Cursor
 pytestmark = pytest.mark.alpaca_optional
 
 
+def calendar_response():
+    # Explicit synthetic provider response for the fixed 2001-02-03 observation.
+    from alpaca.trading.models import Calendar
+    dates = ["2001-01-29", "2001-01-30", "2001-01-31"] + [
+        f"2001-02-{day:02}" for day in (1,2,5,6,7,8,9,12,13,14,15,16,20,21,22,23,26,27,28)]
+    return [Calendar(date=day, open="09:30", close="16:00") for day in dates]
+
+
 def strategy(sid=S.SID, state="CLOSED", symbol="SYNTH"):
     signal = S.signal()
     signal.update(
@@ -50,7 +58,7 @@ def strategy(sid=S.SID, state="CLOSED", symbol="SYNTH"):
     return signal, records
 
 
-def cohort(*, signals=None, orders=None, records=None, fills=None, claims=None, p=None):
+def cohort(*, signals=None, orders=None, records=None, fills=None, claims=None, p=None, calendar_available=True):
     row, fs, owner = inputs()
     signal, os = strategy()
     p = p or policy()
@@ -72,6 +80,7 @@ def cohort(*, signals=None, orders=None, records=None, fills=None, claims=None, 
         NOW,
         "a" * 64,
         legacy_fills=fills,
+        periods=C.P.validate(calendar_response(), NOW) if calendar_available else None,
     )
 
 
@@ -330,7 +339,7 @@ def wire(monkeypatch, conn):
     # The fixture's SQL catalog uses E.READ_PLANS; only the test catalog grows.
     monkeypatch.setattr(C.E, "READ_PLANS", {**C.E.READ_PLANS, **C.PLANS})
     monkeypatch.setattr(C.D, "read_policy", lambda *a, **kw: policy())
-    client = SimpleNamespace(get_account=lambda: SimpleNamespace(id=S.ACCOUNT))
+    client = SimpleNamespace(get_account=lambda: SimpleNamespace(id=S.ACCOUNT), get_calendar=lambda request: calendar_response())
     return C.snapshot(lambda: conn, client, IDENTITY, now=NOW, read=lambda fn, **kw: fn())
 
 
@@ -410,7 +419,7 @@ def test_real_canonical_policy_reader_and_replay_remain_in_combined_wire(monkeyp
     monkeypatch.setattr(C.E, "READ_PLANS", {**C.E.READ_PLANS, **C.PLANS})
     result = C.snapshot(
         lambda: conn,
-        SimpleNamespace(get_account=lambda: SimpleNamespace(id=S.ACCOUNT)),
+        SimpleNamespace(get_account=lambda: SimpleNamespace(id=S.ACCOUNT), get_calendar=lambda request: calendar_response()),
         IDENTITY,
         now=NOW,
         read=lambda fn, **kw: fn(),
@@ -426,7 +435,7 @@ def test_policy_or_native_version_drift_withholds_entire_cohort(monkeypatch, dri
     monkeypatch.setattr(C.E, "READ_PLANS", {**C.E.READ_PLANS, **C.PLANS})
     result = C.snapshot(
         lambda: conn,
-        SimpleNamespace(get_account=lambda: SimpleNamespace(id=S.ACCOUNT)),
+        SimpleNamespace(get_account=lambda: SimpleNamespace(id=S.ACCOUNT), get_calendar=lambda request: calendar_response()),
         IDENTITY,
         now=NOW,
         read=lambda fn, **kw: fn(),
@@ -467,7 +476,7 @@ def test_only_fixed_admission_failure_codes_are_public(code):
 
     result = C.snapshot(
         Mock(),
-        SimpleNamespace(get_account=lambda: SimpleNamespace(id=S.ACCOUNT)),
+        SimpleNamespace(get_account=lambda: SimpleNamespace(id=S.ACCOUNT), get_calendar=lambda request: calendar_response()),
         IDENTITY,
         now=NOW,
         read=read,
@@ -617,7 +626,7 @@ def test_sum_and_symbol_ranking_keep_exact_widely_separated_decimal_scales():
         )
         rows.append(row)
         economics[row["row_id"]] = amount
-    result = C.summarize(rows, economics, [], 0, 0, NOW, "a" * 64)
+    result = C.summarize(rows, economics, [], 0, 0, NOW, "a" * 64, C.P.validate(calendar_response(), NOW))
     assert result["stats"][-1]["totalPL"] == "0.00000000000000000001"
     assert result["rankings"]["all"]["winners"] == [
         dict(rank=1, symbol="SYNTH", pl="0.00000000000000000001")
@@ -660,13 +669,13 @@ def test_original_strategy_history_wire_has_no_private_exact_fields(monkeypatch)
     assert enriched.pop("_exact")["gross"] == Decimal(80)
     assert expected == enriched and "_exact" not in expected
     monkeypatch.setattr(C.H, "read_snapshot", lambda *args: ([signal], orders, [], False))
-    client = SimpleNamespace(get_account=lambda: SimpleNamespace(id=S.ACCOUNT))
+    client = SimpleNamespace(get_account=lambda: SimpleNamespace(id=S.ACCOUNT), get_calendar=lambda request: calendar_response())
     result = C.H.snapshot(Mock(), client, IDENTITY, now=NOW, read=lambda fn, **kw: fn())
     assert result["rows"] == [expected]
     assert "_exact" not in json.dumps(result)
 
 
-def synthetic_wire():
+def synthetic_wire(calendar_available=True):
     """Reproducible fictional wire fixture shared with real-component UI tests."""
     positive, positive_orders = strategy()
     negative, negative_orders = strategy(sid="8" * 64, symbol="DECLINE")
@@ -696,6 +705,7 @@ def synthetic_wire():
         fills=first_fills + excluded_fills,
         claims=[first_owner, excluded_owner],
         p=policy((9002,)),
+        calendar_available=calendar_available,
     )
 
 
@@ -707,6 +717,8 @@ def test_synthetic_wire_is_exact_shared_frontend_contract():
     fixture = Path("frontend/qa/fixtures/combinedGrossWire.synthetic.json")
     if fixture.exists():
         assert json.loads(fixture.read_text(encoding="utf8")) == result
+    unavailable_fixture = Path("frontend/qa/fixtures/combinedGrossCalendarUnavailable.synthetic.json")
+    assert json.loads(unavailable_fixture.read_text(encoding="utf8")) == synthetic_wire(False)
 
 
 @pytest.mark.parametrize("conflict", ["symbol", "cash", "date", "raw_nanosecond"])

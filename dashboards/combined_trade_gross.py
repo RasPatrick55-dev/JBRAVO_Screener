@@ -17,6 +17,7 @@ from uuid import UUID
 from dashboards import execution_gross_projection as E
 from dashboards import execution_read_transport as T
 from dashboards import recorded_trade_analytics as R
+from dashboards import reporting_periods as P
 from dashboards import strategy_trade_history as H
 from scripts import gross_paper_accounting as G, trade_disposition as D
 
@@ -581,6 +582,7 @@ def project(
     cohort_id,
     *,
     legacy_fills=None,
+    periods=None,
 ):
     H.need(
         len(signals) <= MAX_SIGNALS and len(orders) <= MAX_ORDERS and len(claims) <= MAX_CLAIMS,
@@ -692,14 +694,17 @@ def project(
         ):
             row.update(inclusion="UNKNOWN", reason="COMPETING_STRATEGY_ORDER_CLAIM", gross_pnl=None)
             economics.pop(row["row_id"], None)
-    return summarize(rows, economics, source_rows, not_closed, deduplicated, now, cohort_id)
+    return summarize(rows, economics, source_rows, not_closed, deduplicated, now, cohort_id, periods)
 
 
-def summarize(rows, economics, source_rows, not_closed, deduplicated, now, cohort_id):
+def summarize(rows, economics, source_rows, not_closed, deduplicated, now, cohort_id, periods):
+    H.need(periods is None or type(periods) is P.Periods and periods.now == now, "reporting_calendar_invalid")
     def selected(row, key):
         if key == "all":
             return True
         stamp = row["exit_time"] if row["inclusion"] == "INCLUDED" else None
+        if key in ("w", "m"):
+            return stamp is None or periods.selected(stamp, key)
         return stamp is None or H.instant(now - timedelta(days=R.PERIODS[key])) <= H.instant(
             stamp
         ) <= H.instant(now)
@@ -727,6 +732,15 @@ def summarize(rows, economics, source_rows, not_closed, deduplicated, now, cohor
 
     stats, rankings = [], {}
     for key in R.PERIODS:
+        if key in ("w", "m") and periods is None:
+            stats.append(dict(key=key, label=R.LABELS[key], tradesCount=None, totalPL=None,
+                              winRatePct=None, topTrade=dict(symbol="--", pl=None),
+                              worstLoss=dict(symbol="--", pl=None), coverage=None,
+                              period=dict(status="unavailable", source="alpaca_calendar",
+                                          timezone="America/New_York", as_of=now.isoformat(),
+                                          label="Trading calendar unavailable; period results unknown")))
+            rankings[key] = None
+            continue
         group = [row for row in rows if selected(row, key)]
         known = [row for row in group if row["inclusion"] == "INCLUDED"]
         covered = coverage(group)
@@ -752,6 +766,7 @@ def summarize(rows, economics, source_rows, not_closed, deduplicated, now, cohor
                 topTrade=extreme(ordered[-1] if ordered else None),
                 worstLoss=extreme(ordered[0] if ordered else None),
                 coverage=covered,
+                **({"period": periods.metadata(key)} if key in ("w", "m") else {}),
             )
         )
         rankings[key] = {}
@@ -788,7 +803,7 @@ def summarize(rows, economics, source_rows, not_closed, deduplicated, now, cohor
     result = envelope(now)
     result.update(
         ok=True,
-        status="partial" if covered["unknown"] else "ready" if rows else "empty",
+        status="partial" if covered["unknown"] or periods is None else "ready" if rows else "empty",
         cohort_id=cohort_id,
         population_complete=True,
         coverage=covered,
@@ -895,6 +910,13 @@ def snapshot(connection_factory, client, identity, *, now=None, read=H.bounded_r
         stage = "database_cohort_read"
         cohort = read(lambda: read_cohort(connection_factory, identity, account), seconds=10)
         policy, records, execution, signals, orders, claims, legacy_fills, cohort_id = cohort
+        stage = "reporting_calendar_read"
+        try:
+            periods = read(lambda: P.read_calendar(client, now), seconds=2)
+        except Exception:
+            # Only calendar failures degrade W/M. Policy/cohort/identity failures
+            # above still withhold every financial result, with no stale fallback.
+            periods = None
         stage = "cohort_projection"
         return project(
             policy,
@@ -908,6 +930,7 @@ def snapshot(connection_factory, client, identity, *, now=None, read=H.bounded_r
             now,
             cohort_id,
             legacy_fills=legacy_fills,
+            periods=periods,
         )
     except Exception as error:
         code = str(error)
@@ -928,6 +951,7 @@ def snapshot(connection_factory, client, identity, *, now=None, read=H.bounded_r
                 "paper_context_unavailable",
                 "invalid_account_identity",
                 "database_unavailable",
+                "reporting_calendar_invalid",
             }
             else "combined_gross_unavailable",
             failure_stage=stage,
