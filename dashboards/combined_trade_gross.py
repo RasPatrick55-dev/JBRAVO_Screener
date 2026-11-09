@@ -48,7 +48,26 @@ CLAIMS_SQL = E.guarded(
     "'status',status,'entry_order_id',entry_order_id::text,'exit_order_id',exit_order_id::text),"
     "'version',xmin::text)::text AS body FROM ONLY public.trades ORDER BY trade_id LIMIT 1001"
 )
+# Batch only the four candidate-owned reads. Native policy readers and their
+# final canonical replay remain untouched; the two full cohort passes remain.
+STRATEGY_COHORT_SQL = (
+    "WITH visibility(relname,relkind,relrowsecurity,relforcerowsecurity,relispartition,inherits,selectable) AS MATERIALIZED ("
+    + STRATEGY_VISIBILITY_SQL
+    + "), "
+    "signals(body) AS MATERIALIZED (" + SIGNALS_SQL + "), "
+    "orders(body) AS MATERIALIZED (" + ORDERS_SQL + "), "
+    "claims(body) AS MATERIALIZED (" + CLAIMS_SQL + ") "
+    "SELECT 'visibility'::text AS section,pg_catalog.row_number() OVER (ORDER BY relname)::text AS ordinal,"
+    "pg_catalog.json_build_array(relname,relkind,relrowsecurity,relforcerowsecurity,relispartition,"
+    "inherits,selectable)::text AS body FROM visibility UNION ALL "
+    "SELECT 'signals',pg_catalog.row_number() OVER (ORDER BY body::jsonb->'row'->>'signal_id')::text,body FROM signals UNION ALL "
+    "SELECT 'orders',pg_catalog.row_number() OVER (ORDER BY body::jsonb->'row'->>'client_order_id')::text,body FROM orders UNION ALL "
+    "SELECT 'claims',pg_catalog.row_number() OVER (ORDER BY (body::jsonb->'row'->>'trade_id')::bigint)::text,body FROM claims"
+)
+
+
 PLANS = {
+    STRATEGY_COHORT_SQL: dict(kind="canonical", arity=3, order="q.c0,q.c1::bigint"),
     STRATEGY_VISIBILITY_SQL: dict(kind="canonical", arity=7, order="q.c0"),
     SIGNALS_SQL: dict(kind="canonical", arity=1, order="q.c0::jsonb->'row'->>'signal_id'"),
     ORDERS_SQL: dict(kind="canonical", arity=1, order="q.c0::jsonb->'row'->>'client_order_id'"),
@@ -74,6 +93,38 @@ def strategy_documents(cursor, sql, params, cap):
     return [json.loads(row[0]) for row in wire]
 
 
+def strategy_cohort(cursor, account):
+    cursor.execute(STRATEGY_COHORT_SQL, (account,))
+    groups = {name: [] for name in ("visibility", "signals", "orders", "claims")}
+    caps = dict(visibility=3, signals=MAX_SIGNALS, orders=MAX_ORDERS, claims=MAX_CLAIMS)
+    for row in cursor.fetchall():
+        H.need(
+            len(row) == 3
+            and row[0] in groups
+            and type(row[1]) is str
+            and row[1].isascii()
+            and row[1].isdigit()
+            and len(row[1]) <= 4
+            and type(row[2]) is str,
+            "strategy_cohort_wire_invalid",
+        )
+        section, ordinal, body = row
+        H.need(int(ordinal) == len(groups[section]) + 1, "strategy_cohort_order_invalid")
+        H.need(len(groups[section]) < caps[section], "population_overflow")
+        # Keep strategy request numeric types; legacy claim normalization stays
+        # identical to E.documents. Null/oversize SQL sentinels fail above.
+        groups[section].append(D.document(body) if section == "claims" else json.loads(body))
+    H.need(
+        groups["visibility"]
+        == [
+            ["strategy_execution_orders_app", "r", False, False, False, False, True],
+            ["strategy_execution_signals_app", "r", False, False, False, False, True],
+        ],
+        "strategy_source_visibility_unavailable",
+    )
+    return groups["signals"], groups["orders"], groups["claims"]
+
+
 class LegacyInputCapture:
     """Retain the already-bounded fill evidence without another SQL read."""
 
@@ -97,7 +148,7 @@ class LegacyInputCapture:
 def read_cohort(connection_factory, identity, account):
     """Same transaction and finite transport budget as native execution gross.
 
-    Eighteen fixed cohort SELECTs plus the existing finite canonical policy plan
+    Twelve fixed cohort SELECTs plus the existing finite canonical policy plan
     and final replay. Every population/version is compared before returning.
     """
     connection = None
@@ -125,18 +176,7 @@ def read_cohort(connection_factory, identity, account):
                 capture = LegacyInputCapture(cursor)
                 records, execution = E.read_inputs(capture, policy)
                 H.need(capture.fills is not None, "legacy_fill_capture_unavailable")
-                cursor.execute(STRATEGY_VISIBILITY_SQL)
-                H.need(
-                    cursor.fetchall()
-                    == [
-                        ("strategy_execution_orders_app", "r", False, False, False, False, True),
-                        ("strategy_execution_signals_app", "r", False, False, False, False, True),
-                    ],
-                    "strategy_source_visibility_unavailable",
-                )
-                signals = strategy_documents(cursor, SIGNALS_SQL, (account,), MAX_SIGNALS)
-                orders = strategy_documents(cursor, ORDERS_SQL, None, MAX_ORDERS)
-                claims = E.documents(cursor, CLAIMS_SQL, None, MAX_CLAIMS)
+                signals, orders, claims = strategy_cohort(cursor, account)
                 # split_versions also validates the mandatory xmin envelope.
                 signal_rows, _ = E.split_versions(signals, "signal_id")
                 order_rows, _ = E.split_versions(orders, "client_order_id")

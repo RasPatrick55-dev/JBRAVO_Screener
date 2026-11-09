@@ -258,6 +258,18 @@ def test_strategy_decimal_gross_is_not_roundtripped_through_public_float():
 
 class CombinedCursor(Cursor):
     def native(self, sql, params):
+        if sql == C.STRATEGY_COHORT_SQL:
+            output = []
+            for section, query in (
+                ("visibility", C.STRATEGY_VISIBILITY_SQL),
+                ("signals", C.SIGNALS_SQL),
+                ("orders", C.ORDERS_SQL),
+                ("claims", C.CLAIMS_SQL),
+            ):
+                for index, row in enumerate(self.native(query, params), 1):
+                    body = json.dumps(list(row)) if section == "visibility" else row[0]
+                    output.append((section, str(index), body))
+            return sorted(output, key=lambda row: (row[0], int(row[1])))
         if sql == C.STRATEGY_VISIBILITY_SQL:
             return getattr(
                 self.conn,
