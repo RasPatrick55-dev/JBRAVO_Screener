@@ -9,10 +9,9 @@ records. Importing the module does nothing external.
 
 - A production Webull MCP read at 14:55 UTC returned ARDT and SPY positive bid/ask
   books with provider Quote Time values. This is regular-session evidence only.
-- The observed SPY quote time was `1794236124260`, Unix milliseconds, with bid
-  747.23 x 21 and ask 747.26 x 95. The local fixture reconstructs the SDK's documented
-  dictionary shape from those formatted observations; it is **not** a captured
-  native JSON response.
+- Actual subscription observations remain private qualification evidence. The
+  public fixture uses synthetic prices and sizes in the SDK's documented
+  dictionary shape; it is **not** a captured native JSON response.
 - The installed desktop Webull MCP 1.2.6 formatter documents `symbol`,
   `quote_time`, `bids` and `asks`, each side containing `price` and `size`.
   Its SDK 3.0.4 uses GET `/market-data/stocks/depths/list`, version v3.
