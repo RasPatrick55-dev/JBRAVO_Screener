@@ -6113,6 +6113,16 @@ def api_trades_history():
     return _json_no_store(source_contracts.physical_history(db.get_db_conn, limit=limit, before=before, derived_identity=derived_identity))
 
 
+@server.route("/api/trades/strategy-history")
+def api_trades_strategy_history():
+    from dashboards import strategy_trade_history
+    limit = _parse_positive_int(request.args.get("limit"), default=25, minimum=1, maximum=50)
+    client, _context = _dashboard_broker_context()
+    identity = db._PAPER_DISPOSITION_BINDING if _dashboard_read_policy_identity() is not None else None
+    return _json_no_store(strategy_trade_history.snapshot(
+        lambda: strategy_trade_history.connect_current_db(db), client, identity, limit=limit))
+
+
 def _execution_gross_db_conn():
     from dashboards.execution_gross_projection import connect_current_db
     return connect_current_db(db)
