@@ -81,41 +81,59 @@ def text(value, maximum=128):
     return value
 
 
-def timestamp(value):
-    """Normalize explicit zones without losing PostgreSQL microsecond precision.
+def parsed_timestamp(value):
+    """Return UTC text and exact integer nanoseconds since the Unix epoch.
 
-    PostgreSQL JSON trims trailing fractional zeroes. Python 3.10 accepts only
-    three or six fractional digits, so pad (never truncate) before parsing.
-    Naive values are not evidence of a UTC instant and remain unavailable.
+    Native observations retain Alpaca's 1-9 fractional digits. Parse only whole
+    seconds with datetime (including on Python 3.10), and keep the fraction as
+    an integer. Never round/truncate it or infer a zone for a naive value.
     """
     try:
         if isinstance(value, datetime):
-            parsed = value
+            if value.tzinfo is None or value.utcoffset() is None:
+                return None
+            parsed = value.astimezone(timezone.utc)
+            fraction = f"{parsed.microsecond:06d}" if parsed.microsecond else ""
+            parsed = parsed.replace(microsecond=0)
         elif type(value) is str:
             match = re.fullmatch(
                 r"([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2})"
-                r"(?:\.([0-9]{1,6}))?(Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])",
+                r"(?:\.([0-9]{1,9}))?(Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])",
                 value,
             )
             if match is None:
                 return None
             main, fraction, offset = match.groups()
-            if fraction is not None:
-                main += "." + fraction.ljust(6, "0")
             parsed = datetime.fromisoformat(main + ("+00:00" if offset == "Z" else offset))
+            parsed = parsed.astimezone(timezone.utc)
+            fraction = fraction or ""
         else:
             return None
-        if parsed.tzinfo is None or parsed.utcoffset() is None:
-            return None
-        return parsed.astimezone(timezone.utc).isoformat()
+        nanos = int(fraction.ljust(9, "0")) if fraction else 0
+        seconds = (
+            (parsed.toordinal() - datetime(1970, 1, 1).toordinal()) * 86400
+            + parsed.hour * 3600
+            + parsed.minute * 60
+            + parsed.second
+        )
+        # Keep the existing microsecond wire shape and every higher-precision
+        # source digit. An explicit offset is converted, not silently dropped.
+        suffix = "." + fraction.ljust(6, "0") if nanos or len(fraction) > 6 else ""
+        stamp = parsed.isoformat(timespec="seconds")[:-6] + suffix + "+00:00"
+        return stamp, seconds * 1_000_000_000 + nanos
     except (ValueError, TypeError, OverflowError):
         return None
 
 
+def timestamp(value):
+    parsed = parsed_timestamp(value)
+    return parsed[0] if parsed is not None else None
+
+
 def instant(value):
-    stamp = timestamp(value)
-    need(stamp is not None, "invalid_timestamp")
-    return datetime.fromisoformat(stamp)
+    parsed = parsed_timestamp(value)
+    need(parsed is not None, "invalid_timestamp")
+    return parsed[1]
 
 
 def digest(value):
@@ -392,7 +410,7 @@ def project_signal(signal, records, account, now):
             )
             price = exact(observation["filled_avg_price"], positive=True) if filled else None
             updated = instant(observation["updated_at"])
-            need(updated <= now + timedelta(seconds=5), "future_observation")
+            need(updated <= instant(now + timedelta(seconds=5)), "future_observation")
             if observation.get("filled_at") is not None:
                 need(
                     filled > 0 and instant(observation["filled_at"]) <= updated,
@@ -540,7 +558,8 @@ def project_signal(signal, records, account, now):
                 entry_time is not None
                 and all(exit_times)
                 and all(
-                    instant(t) >= instant(entry_time) and instant(t) <= now + timedelta(seconds=5)
+                    instant(t) >= instant(entry_time)
+                    and instant(t) <= instant(now + timedelta(seconds=5))
                     for t in exit_times
                 ),
                 "fill_timestamp_missing_or_invalid",
@@ -557,7 +576,7 @@ def project_signal(signal, records, account, now):
             entry_avg_price=float(entry["_price"]),
             exit_avg_price=exit_average,
             entry_time=entry_time,
-            exit_time=max(exit_times) if closed else None,
+            exit_time=max(exit_times, key=instant) if closed else None,
             entry_order_ids=[entry["id"]],
             exit_order_ids=sorted(o["id"] for o in sells),
             status="partial",
@@ -679,7 +698,7 @@ def snapshot(
             continue
         rows.append(row)
     stamps = [timestamp(r.get("updated_at")) for r in signals + records]
-    base["source_as_of"] = max((s for s in stamps if s), default=None)
+    base["source_as_of"] = max((s for s in stamps if s), key=instant, default=None)
     partial = any(
         r["status"] == "incomplete" or r["reason"] == "native_state_reconciliation_required"
         for r in rows

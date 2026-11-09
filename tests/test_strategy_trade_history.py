@@ -823,7 +823,11 @@ def python310_fraction_parser(monkeypatch):
     """Compatibility shim, not a claim that these tests run on Python 3.10."""
     from dashboards import source_contracts as S
 
-    class Python310DateTime(datetime):
+    class DateTimeMeta(type):
+        def __instancecheck__(cls, value):
+            return isinstance(value, datetime)
+
+    class Python310DateTime(datetime, metaclass=DateTimeMeta):
         @classmethod
         def fromisoformat(cls, value):
             fraction = re.search(r"[0-9]{2}:[0-9]{2}:[0-9]{2}\.([0-9]+)", value)
@@ -845,7 +849,7 @@ def test_zoned_fraction_precision_survives_python310_grammar(monkeypatch, fracti
     if len(fraction) in (2, 3, 5, 6):
         assert S.timestamp(source) is None  # Reproduce the old helper's rejection.
     assert H.timestamp(source) == expected.isoformat()
-    assert H.instant(source) == expected
+    assert H.instant(source) == H.instant(expected)
 
 
 class UnknownOffset(tzinfo):
@@ -864,8 +868,8 @@ class UnknownOffset(tzinfo):
         "2026-10-05T10:00:00",
         "2026-10-05T10:00:00.12345",
         "2026-10-05T10:00:00.Z",
-        "2026-10-05T10:00:00.1234567Z",
-        "2026-10-05T10:00:00.123456789+00:00",
+        "2026-10-05T10:00:00.1234567890Z",
+        "2026-10-05T10:00:00.12345678901+00:00",
         "2026-10-05T10:00:00.12345+24:00",
         "2026-10-05T10:00:00.12345+01:60",
         "2026-10-05T10:00:00.12345+0000",
@@ -895,8 +899,9 @@ def test_aware_datetime_and_postgresql_separator_preserve_instant():
 
 
 @pytest.mark.parametrize("bad_signal_time", [False, True])
+@pytest.mark.parametrize("nanosecond_observations", [False, True])
 def test_wire_reader_through_projection_uses_same_strict_timestamp_contract(
-    monkeypatch, bad_signal_time
+    monkeypatch, bad_signal_time, nanosecond_observations
 ):
     s, records = signal(), orders()
     s["updated_at"] = "2026-10-05T10:00:00.12345" + ("" if bad_signal_time else "+00:00")
@@ -908,6 +913,15 @@ def test_wire_reader_through_projection_uses_same_strict_timestamp_contract(
     records[1]["observation"].update(
         updated_at="2026-10-05T06:00:00.12-04:00", filled_at="2026-10-05T10:00:00.12Z"
     )
+    if nanosecond_observations:
+        records[0]["observation"].update(
+            updated_at="2026-10-01T15:30:00.000000002+05:30",
+            filled_at="2026-10-01T10:00:00.000000001Z",
+        )
+        records[1]["observation"].update(
+            updated_at="2026-10-05T06:00:00.12345679-04:00",
+            filled_at="2026-10-05T10:00:00.123456789Z",
+        )
     policy = dict(
         deployment_id=IDENTITY[0],
         database_id=IDENTITY[1],
@@ -934,9 +948,162 @@ def test_wire_reader_through_projection_uses_same_strict_timestamp_contract(
         row = result["rows"][0]
         assert row["status"] == "complete" and row["gross_realized_pnl"] == 80.0
         assert row["updated_at"] == result["source_as_of"]
-        assert row["entry_time"] == "2026-10-01T10:00:00.100000+00:00"
-        assert row["exit_time"] == "2026-10-05T10:00:00.120000+00:00"
+        assert row["entry_time"] == (
+            "2026-10-01T10:00:00.000000001+00:00"
+            if nanosecond_observations
+            else "2026-10-01T10:00:00.100000+00:00"
+        )
+        assert row["exit_time"] == (
+            "2026-10-05T10:00:00.123456789+00:00"
+            if nanosecond_observations
+            else "2026-10-05T10:00:00.120000+00:00"
+        )
         assert conn.cursor.return_value.fetchmany.call_count == 4
     conn.rollback.assert_called_once()
     conn.close.assert_called_once()
     conn.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "fraction", ["1234567", "12345678", "123456789", "000000001", "123456000", "000000000"]
+)
+@pytest.mark.parametrize(
+    "clock,offset", [("10:00:00", "Z"), ("15:30:00", "+05:30"), ("06:00:00", "-04:00")]
+)
+def test_broker_nanoseconds_are_preserved_on_python310(monkeypatch, fraction, clock, offset):
+    source = f"2026-10-05T{clock}.{fraction}{offset}"
+    S = python310_fraction_parser(monkeypatch)
+    assert S.timestamp(source) is None
+    canonical = f"2026-10-05T10:00:00.{fraction}+00:00"
+    assert H.timestamp(source) == canonical
+    assert H.instant(source) == H.instant(canonical)
+    assert H.instant(source) - H.instant("2026-10-05T10:00:00Z") == int(fraction.ljust(9, "0"))
+    assert type(H.instant(source)) is int
+
+
+@pytest.mark.parametrize(
+    "stamp,nanos",
+    [
+        ("1970-01-01T00:00:00Z", 0),
+        ("1970-01-01T00:00:00.000000001Z", 1),
+        ("1969-12-31T23:59:59.999999999Z", -1),
+        ("1970-01-01T00:30:00.000000001+00:30", 1),
+        ("1969-12-31T23:30:00.000000001-00:30", 1),
+    ],
+)
+def test_integer_epoch_key_crosses_seconds_days_and_offsets_without_rounding(stamp, nanos):
+    assert H.instant(stamp) == nanos
+    assert H.instant(H.timestamp(stamp)) == nanos
+
+
+def test_microsecond_and_nanosecond_spellings_have_exact_instant_equality():
+    assert H.instant("2026-10-05T10:00:00.123456Z") == H.instant(
+        "2026-10-05T15:30:00.123456000+05:30"
+    )
+    assert H.instant("2026-10-05T10:00:00.123456001Z") > H.instant("2026-10-05T10:00:00.123456Z")
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_fill_one_nanosecond_after_observation_is_rejected(index):
+    records = orders()
+    day = "01" if index == 0 else "05"
+    records[index]["observation"].update(
+        updated_at=f"2026-10-{day}T10:00:00.123456788Z",
+        filled_at=f"2026-10-{day}T10:00:00.123456789Z",
+    )
+    row = project(records=records)
+    assert row["status"] == "incomplete" and row["reason"] == "fill_timestamp_after_observation"
+    assert row["gross_realized_pnl"] is None
+
+
+@pytest.mark.parametrize("later", [False, True])
+def test_exit_one_nanosecond_before_entry_is_not_completed(later):
+    records = orders()
+    entry = "2026-10-05T10:00:00.123456788Z"
+    exit_time = "2026-10-05T10:00:00." + ("123456789Z" if later else "123456787Z")
+    records[0]["observation"].update(updated_at=entry, filled_at=entry)
+    records[1]["observation"].update(updated_at=exit_time, filled_at=exit_time)
+    row = project(records=records)
+    if later:
+        assert row["status"] == "complete" and row["gross_realized_pnl"] == 80.0
+    else:
+        assert (
+            row["status"] == "incomplete" and row["reason"] == "fill_timestamp_missing_or_invalid"
+        )
+        assert row["gross_realized_pnl"] is None
+
+
+@pytest.mark.parametrize("after_grace", [False, True])
+def test_future_observation_grace_boundary_is_exact_to_one_nanosecond(after_grace):
+    records = orders()
+    records[1]["observation"]["updated_at"] = (
+        "2026-11-09T17:00:05.000000001Z" if after_grace else "2026-11-09T17:00:05.000000000Z"
+    )
+    row = project(records=records)
+    assert row["status"] == ("incomplete" if after_grace else "complete")
+    assert row["reason"] == ("future_observation" if after_grace else None)
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_cancel_cannot_hide_one_nanosecond_fill_clock_change(changed):
+    records = orders()
+    records[1]["observation"].update(
+        updated_at="2026-10-05T10:00:00.123456790Z", filled_at="2026-10-05T10:00:00.123456788Z"
+    )
+    cancel = claim("cancel", operation="DELETE", target=records[1]["observation"]["id"])
+    cancel["observation"] = deepcopy(records[1]["observation"])
+    cancel["observation"].update(
+        updated_at="2026-10-05T10:00:00.123456791Z",
+        filled_at="2026-10-05T06:00:00." + ("123456789-04:00" if changed else "123456788-04:00"),
+    )
+    row = project(records=records + [cancel])
+    assert row["status"] == ("incomplete" if changed else "complete")
+    assert row["reason"] == ("cumulative_fill_conflict" if changed else None)
+
+
+def test_new_cumulative_fill_one_nanosecond_later_is_not_equal_clock_conflict():
+    records = orders()
+    records[1]["observation"].update(
+        updated_at="2026-10-05T10:00:00.123456788Z",
+        filled_at=None,
+        filled_qty="25",
+        status="partially_filled",
+    )
+    cancel = claim("cancel", operation="DELETE", target=records[1]["observation"]["id"])
+    cancel["observation"] = deepcopy(orders()[1]["observation"])
+    cancel["observation"].update(
+        updated_at="2026-10-05T10:00:00.123456789Z",
+        filled_at="2026-10-05T10:00:00.123456789Z",
+    )
+    row = project(records=records + [cancel])
+    assert row["status"] == "complete" and row["gross_realized_pnl"] == 80.0
+    assert row["exited_qty"] == 40 and row["exit_time"] == "2026-10-05T10:00:00.123456789+00:00"
+
+
+def test_timestamp_parser_and_comparison_keys_do_not_use_float_epoch_math():
+    tree = ast.parse(Path(H.__file__).read_text())
+    functions = [
+        n
+        for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name in {"parsed_timestamp", "timestamp", "instant"}
+    ]
+    assert len(functions) == 3
+    for function in functions:
+        for node in ast.walk(function):
+            if isinstance(node, ast.Call):
+                assert not (isinstance(node.func, ast.Name) and node.func.id == "float")
+                assert not (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr in {"timestamp", "total_seconds"}
+                )
+
+
+@pytest.mark.parametrize("field", ["updated_at", "filled_at"])
+@pytest.mark.parametrize(
+    "value", [None, "2026-10-05T10:00:00.123456789", "2026-10-05T10:00:00.1234567890Z"]
+)
+def test_invalid_observation_clock_never_becomes_completed(field, value):
+    records = orders()
+    records[1]["observation"][field] = value
+    row = project(records=records)
+    assert row["status"] == "incomplete" and row["gross_realized_pnl"] is None
