@@ -8,15 +8,26 @@ No snapshots, last trades, formatted MCP text, or alternate-feed fallback.
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 import math
+import hashlib
+import inspect
 import re
-
-from scripts import strategy_quote_diagnostics as diagnostics
+import textwrap
 
 FEED = 'webull_nasdaq_basic'
 SYMBOL = re.compile(r'[A-Z][A-Z0-9.\-]{0,15}')
 MAX_SYMBOLS = 4
 MAX_RESPONSE_BYTES = 64 * 1024
 MANAGE_SHA256 = '7c26244b97053637569daab0eccfab599c2f1b5c27408c39181813c71ddf6043'
+BROKER_METHOD_HASHES = {
+    '__init__': '4d921b5c42cc971405199fda51588358324c58ce020c4af2f08aaa44ef67bdf2',
+    'request': 'aa50ad1b914bce58de35c32202eb2ca7ae5136d8b135372f432ce11535b0e4a0',
+    'quotes': '5896abeca1c8ba878f278924e9d1a44f238ac590088cba3422d81167e387a016',
+}
+ENGINE_METHOD_HASHES = {
+    'note': '4848c31a57496891601396f13aa2c8ebfb5b1b01a63730369aa866b7e39e3c3e',
+    'tick': '2145b985643d358ea75983c3afaf0fab8e61db6ecb4139f734e05d2540d2c38e',
+    'manage': MANAGE_SHA256,
+}
 CODES = frozenset({
     'QUOTE_MISSING', 'QUOTE_INVALID', 'QUOTE_STALE_OR_FUTURE',
     'QUOTE_HTTP_ERROR', 'QUOTE_FORBIDDEN', 'QUOTE_TRANSPORT_UNAVAILABLE',
@@ -200,11 +211,13 @@ def execution_components(NativeBroker, NativeEngine, *, quote_factory):
     The separately reviewed bootstrap owns transport setup and source/permission
     pins. Do not install this factory in an existing task without that rollout.
     """
-    diagnostics._verify(NativeBroker, diagnostics.BROKER_METHOD_HASHES)
-    diagnostics._verify(NativeEngine, diagnostics.ENGINE_METHOD_HASHES)
     # Price compatibility above is deliberately bound to this exact native
     # calculation/order sequence, not an assumed future implementation.
-    diagnostics._verify(NativeEngine, {'manage': MANAGE_SHA256})
+    for cls, pins in ((NativeBroker, BROKER_METHOD_HASHES), (NativeEngine, ENGINE_METHOD_HASHES)):
+        for name, digest in pins.items():
+            source = textwrap.dedent(inspect.getsource(getattr(cls, name))).strip()
+            if hashlib.sha256(source.encode()).hexdigest() != digest:
+                raise ValueError('webull_native_interface_changed')
     need(callable(quote_factory))
 
     class WebullPaperBroker(NativeBroker):
