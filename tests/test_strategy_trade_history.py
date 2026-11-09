@@ -2,12 +2,14 @@
 
 import ast
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 import json
 from pathlib import Path
+import re
 from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import UUID
+import threading
 
 import pytest
 from flask import Flask, request
@@ -725,4 +727,383 @@ def test_failure_diagnostics_are_fixed_codes_without_private_exception(
     client = SimpleNamespace(get_account=lambda: SimpleNamespace(id=UUID(ACCOUNT)))
     result = H.snapshot(Mock(), client, IDENTITY, read=lambda fn, **kw: fn())
     assert result["reason"] == expected and result["failure_stage"] == "database_history_read"
+    assert result["database_task_entered"] is True
     assert "private" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("code", ["source_busy", "source_timeout"])
+@pytest.mark.parametrize(
+    "failed_read,stage", [(1, "broker_account_read"), (2, "database_history_read")]
+)
+def test_bounded_admission_failures_retain_only_fixed_codes(code, failed_read, stage):
+    calls = []
+    client = SimpleNamespace(get_account=lambda: SimpleNamespace(id=UUID(ACCOUNT)))
+    factory = Mock()
+
+    def read(function, **kwargs):
+        calls.append(kwargs["seconds"])
+        if len(calls) == failed_read:
+            raise RuntimeError(code)
+        return function()
+
+    result = H.snapshot(factory, client, IDENTITY, read=read)
+    assert result["reason"] == code and result["failure_stage"] == stage
+    assert result["database_task_entered"] is False
+    assert result["ok"] is False and result["status"] == "unavailable"
+    assert result["broker_account_match"] == "unavailable" and result["rows"] == []
+    assert calls == ([2] if failed_read == 1 else [2, 7])
+    factory.assert_not_called()
+
+
+def test_second_admission_can_fail_before_first_completion_callback_releases_slot(monkeypatch):
+    """Deterministically reproduce a possible admission race, not a live diagnosis."""
+    from dashboards import source_contracts as S
+
+    slots = threading.BoundedSemaphore(4)
+    for _ in range(3):
+        assert slots.acquire(blocking=False)
+    pending = []
+
+    class DelayedCallbackFuture:
+        def __init__(self, function):
+            self.function = function
+            self.callback = None
+
+        def add_done_callback(self, callback):
+            self.callback = callback
+
+        def result(self, timeout):
+            # Hold the scheduling gap between result visibility and callback.
+            value = self.function()
+            pending.append(self)
+            return value
+
+    executor = SimpleNamespace(submit=Mock(side_effect=DelayedCallbackFuture))
+    monkeypatch.setattr(S, "_slots", slots)
+    monkeypatch.setattr(S, "_workers", executor)
+    client = SimpleNamespace(get_account=Mock(return_value=SimpleNamespace(id=UUID(ACCOUNT))))
+    factory = Mock()
+    result = H.snapshot(factory, client, IDENTITY, read=S.bounded_read)
+    assert result["reason"] == "source_busy" and result["failure_stage"] == "database_history_read"
+    assert result["database_task_entered"] is False
+    assert executor.submit.call_count == 1
+    client.get_account.assert_called_once()
+    factory.assert_not_called()
+    for future in pending:
+        future.callback(future)
+    for _ in range(3):
+        slots.release()
+    assert all(slots.acquire(blocking=False) for _ in range(4))
+    assert not slots.acquire(blocking=False)
+
+
+def test_arbitrary_runtime_exception_is_not_exposed():
+    def read(function, **kwargs):
+        raise RuntimeError("private pool details and credentials")
+
+    client = SimpleNamespace(get_account=Mock())
+    result = H.snapshot(Mock(), client, IDENTITY, read=read)
+    assert result["reason"] == "strategy_history_unavailable"
+    assert result["database_task_entered"] is False
+    assert "private" not in json.dumps(result)
+
+
+def test_timeout_after_database_task_entry_is_distinct(monkeypatch):
+    def fail(*args):
+        raise RuntimeError("source_timeout")
+
+    monkeypatch.setattr(H, "read_snapshot", fail)
+    client = SimpleNamespace(get_account=lambda: SimpleNamespace(id=UUID(ACCOUNT)))
+    result = H.snapshot(Mock(), client, IDENTITY, read=lambda function, **kwargs: function())
+    assert result["reason"] == "source_timeout"
+    assert result["database_task_entered"] is True
+
+
+def python310_fraction_parser(monkeypatch):
+    """Compatibility shim, not a claim that these tests run on Python 3.10."""
+    from dashboards import source_contracts as S
+
+    class DateTimeMeta(type):
+        def __instancecheck__(cls, value):
+            return isinstance(value, datetime)
+
+    class Python310DateTime(datetime, metaclass=DateTimeMeta):
+        @classmethod
+        def fromisoformat(cls, value):
+            fraction = re.search(r"[0-9]{2}:[0-9]{2}:[0-9]{2}\.([0-9]+)", value)
+            if fraction is not None and len(fraction[1]) not in (3, 6):
+                raise ValueError("Python 3.10 fractional second grammar")
+            return datetime.fromisoformat(value)
+
+    monkeypatch.setattr(H, "datetime", Python310DateTime)
+    monkeypatch.setattr(S, "datetime", Python310DateTime)
+    return S
+
+
+@pytest.mark.parametrize("fraction", ["", ".1", ".12", ".123", ".1234", ".12345", ".123456"])
+@pytest.mark.parametrize("offset", ["Z", "+00:00", "+05:30", "-04:00"])
+def test_zoned_fraction_precision_survives_python310_grammar(monkeypatch, fraction, offset):
+    source = f"2026-10-05T10:00:00{fraction}{offset}"
+    expected = datetime.fromisoformat(source.replace("Z", "+00:00")).astimezone(timezone.utc)
+    S = python310_fraction_parser(monkeypatch)
+    if len(fraction) in (2, 3, 5, 6):
+        assert S.timestamp(source) is None  # Reproduce the old helper's rejection.
+    assert H.timestamp(source) == expected.isoformat()
+    assert H.instant(source) == H.instant(expected)
+
+
+class UnknownOffset(tzinfo):
+    def utcoffset(self, value):
+        return None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        True,
+        20261005,
+        {},
+        "2026-10-05",
+        "2026-10-05T10:00:00",
+        "2026-10-05T10:00:00.12345",
+        "2026-10-05T10:00:00.Z",
+        "2026-10-05T10:00:00.1234567890Z",
+        "2026-10-05T10:00:00.12345678901+00:00",
+        "2026-10-05T10:00:00.12345+24:00",
+        "2026-10-05T10:00:00.12345+01:60",
+        "2026-10-05T10:00:00.12345+0000",
+        "2026-10-05T10:00:00.12345UTC",
+        "2026-10-05T10:00:00.12345Z\n",
+        "2026-10-05T10:00:00,12345Z",
+        "2026-02-30T10:00:00.12345Z",
+        "2026-10-05T10:00:60.12345Z",
+        "0001-01-01T00:00:00+01:00",
+        "9999-12-31T23:59:59-01:00",
+        datetime(2026, 10, 5, 10),
+        datetime(2026, 10, 5, 10, tzinfo=UnknownOffset()),
+    ],
+)
+def test_timestamp_does_not_invent_zone_or_truncate_precision(value):
+    assert H.timestamp(value) is None
+    with pytest.raises(H.EvidenceError, match="invalid_timestamp"):
+        H.instant(value)
+
+
+def test_aware_datetime_and_postgresql_separator_preserve_instant():
+    value = datetime(2026, 10, 5, 10, 0, 0, 12000, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+    expected = "2026-10-05T04:30:00.012000+00:00"
+    assert H.timestamp(value) == expected
+    assert H.timestamp(value.isoformat(sep="T")) == expected
+    assert H.timestamp(value.isoformat(sep=" ")) == expected
+
+
+@pytest.mark.parametrize("bad_signal_time", [False, True])
+@pytest.mark.parametrize("nanosecond_observations", [False, True])
+def test_wire_reader_through_projection_uses_same_strict_timestamp_contract(
+    monkeypatch, bad_signal_time, nanosecond_observations
+):
+    s, records = signal(), orders()
+    s["updated_at"] = "2026-10-05T10:00:00.12345" + ("" if bad_signal_time else "+00:00")
+    records[0]["updated_at"] = "2026-10-01T10:00:00.1+00:00"
+    records[0]["observation"].update(
+        updated_at="2026-10-01T15:30:00.1+05:30", filled_at="2026-10-01T10:00:00.1Z"
+    )
+    records[1]["updated_at"] = "2026-10-05T10:00:00.1234+00:00"
+    records[1]["observation"].update(
+        updated_at="2026-10-05T06:00:00.12-04:00", filled_at="2026-10-05T10:00:00.12Z"
+    )
+    if nanosecond_observations:
+        records[0]["observation"].update(
+            updated_at="2026-10-01T15:30:00.000000002+05:30",
+            filled_at="2026-10-01T10:00:00.000000001Z",
+        )
+        records[1]["observation"].update(
+            updated_at="2026-10-05T06:00:00.12345679-04:00",
+            filled_at="2026-10-05T10:00:00.123456789Z",
+        )
+    policy = dict(
+        deployment_id=IDENTITY[0],
+        database_id=IDENTITY[1],
+        database_name=DATABASE_NAME,
+        connected_database=DATABASE_NAME,
+    )
+    conn = identity_connection(policy)
+    batches = [[policy], [s], records, []]
+    encoded = [[json.dumps(row) for row in batch] for batch in batches]
+    conn.cursor.return_value.fetchmany.side_effect = [
+        [(body, len(batch), sum(len(item.encode()) for item in batch)) for body in batch]
+        for batch in encoded
+    ]
+    python310_fraction_parser(monkeypatch)
+    client = SimpleNamespace(get_account=Mock(return_value=SimpleNamespace(id=UUID(ACCOUNT))))
+    result = H.snapshot(lambda: conn, client, IDENTITY, read=lambda fn, **kw: fn(), now=NOW)
+    if bad_signal_time:
+        assert result["status"] == "unavailable" and result["rows"] == []
+        assert result["failure_stage"] == "database_history_read"
+        assert conn.cursor.return_value.fetchmany.call_count == 2
+    else:
+        assert result["status"] == "ready" and result["broker_account_match"] == "verified"
+        assert result["source_as_of"] == "2026-10-05T10:00:00.123450+00:00"
+        row = result["rows"][0]
+        assert row["status"] == "complete" and row["gross_realized_pnl"] == 80.0
+        assert row["updated_at"] == result["source_as_of"]
+        assert row["entry_time"] == (
+            "2026-10-01T10:00:00.000000001+00:00"
+            if nanosecond_observations
+            else "2026-10-01T10:00:00.100000+00:00"
+        )
+        assert row["exit_time"] == (
+            "2026-10-05T10:00:00.123456789+00:00"
+            if nanosecond_observations
+            else "2026-10-05T10:00:00.120000+00:00"
+        )
+        assert conn.cursor.return_value.fetchmany.call_count == 4
+    conn.rollback.assert_called_once()
+    conn.close.assert_called_once()
+    conn.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "fraction", ["1234567", "12345678", "123456789", "000000001", "123456000", "000000000"]
+)
+@pytest.mark.parametrize(
+    "clock,offset", [("10:00:00", "Z"), ("15:30:00", "+05:30"), ("06:00:00", "-04:00")]
+)
+def test_broker_nanoseconds_are_preserved_on_python310(monkeypatch, fraction, clock, offset):
+    source = f"2026-10-05T{clock}.{fraction}{offset}"
+    S = python310_fraction_parser(monkeypatch)
+    assert S.timestamp(source) is None
+    canonical = f"2026-10-05T10:00:00.{fraction}+00:00"
+    assert H.timestamp(source) == canonical
+    assert H.instant(source) == H.instant(canonical)
+    assert H.instant(source) - H.instant("2026-10-05T10:00:00Z") == int(fraction.ljust(9, "0"))
+    assert type(H.instant(source)) is int
+
+
+@pytest.mark.parametrize(
+    "stamp,nanos",
+    [
+        ("1970-01-01T00:00:00Z", 0),
+        ("1970-01-01T00:00:00.000000001Z", 1),
+        ("1969-12-31T23:59:59.999999999Z", -1),
+        ("1970-01-01T00:30:00.000000001+00:30", 1),
+        ("1969-12-31T23:30:00.000000001-00:30", 1),
+    ],
+)
+def test_integer_epoch_key_crosses_seconds_days_and_offsets_without_rounding(stamp, nanos):
+    assert H.instant(stamp) == nanos
+    assert H.instant(H.timestamp(stamp)) == nanos
+
+
+def test_microsecond_and_nanosecond_spellings_have_exact_instant_equality():
+    assert H.instant("2026-10-05T10:00:00.123456Z") == H.instant(
+        "2026-10-05T15:30:00.123456000+05:30"
+    )
+    assert H.instant("2026-10-05T10:00:00.123456001Z") > H.instant("2026-10-05T10:00:00.123456Z")
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_fill_one_nanosecond_after_observation_is_rejected(index):
+    records = orders()
+    day = "01" if index == 0 else "05"
+    records[index]["observation"].update(
+        updated_at=f"2026-10-{day}T10:00:00.123456788Z",
+        filled_at=f"2026-10-{day}T10:00:00.123456789Z",
+    )
+    row = project(records=records)
+    assert row["status"] == "incomplete" and row["reason"] == "fill_timestamp_after_observation"
+    assert row["gross_realized_pnl"] is None
+
+
+@pytest.mark.parametrize("later", [False, True])
+def test_exit_one_nanosecond_before_entry_is_not_completed(later):
+    records = orders()
+    entry = "2026-10-05T10:00:00.123456788Z"
+    exit_time = "2026-10-05T10:00:00." + ("123456789Z" if later else "123456787Z")
+    records[0]["observation"].update(updated_at=entry, filled_at=entry)
+    records[1]["observation"].update(updated_at=exit_time, filled_at=exit_time)
+    row = project(records=records)
+    if later:
+        assert row["status"] == "complete" and row["gross_realized_pnl"] == 80.0
+    else:
+        assert (
+            row["status"] == "incomplete" and row["reason"] == "fill_timestamp_missing_or_invalid"
+        )
+        assert row["gross_realized_pnl"] is None
+
+
+@pytest.mark.parametrize("after_grace", [False, True])
+def test_future_observation_grace_boundary_is_exact_to_one_nanosecond(after_grace):
+    records = orders()
+    records[1]["observation"]["updated_at"] = (
+        "2026-11-09T17:00:05.000000001Z" if after_grace else "2026-11-09T17:00:05.000000000Z"
+    )
+    row = project(records=records)
+    assert row["status"] == ("incomplete" if after_grace else "complete")
+    assert row["reason"] == ("future_observation" if after_grace else None)
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_cancel_cannot_hide_one_nanosecond_fill_clock_change(changed):
+    records = orders()
+    records[1]["observation"].update(
+        updated_at="2026-10-05T10:00:00.123456790Z", filled_at="2026-10-05T10:00:00.123456788Z"
+    )
+    cancel = claim("cancel", operation="DELETE", target=records[1]["observation"]["id"])
+    cancel["observation"] = deepcopy(records[1]["observation"])
+    cancel["observation"].update(
+        updated_at="2026-10-05T10:00:00.123456791Z",
+        filled_at="2026-10-05T06:00:00." + ("123456789-04:00" if changed else "123456788-04:00"),
+    )
+    row = project(records=records + [cancel])
+    assert row["status"] == ("incomplete" if changed else "complete")
+    assert row["reason"] == ("cumulative_fill_conflict" if changed else None)
+
+
+def test_new_cumulative_fill_one_nanosecond_later_is_not_equal_clock_conflict():
+    records = orders()
+    records[1]["observation"].update(
+        updated_at="2026-10-05T10:00:00.123456788Z",
+        filled_at=None,
+        filled_qty="25",
+        status="partially_filled",
+    )
+    cancel = claim("cancel", operation="DELETE", target=records[1]["observation"]["id"])
+    cancel["observation"] = deepcopy(orders()[1]["observation"])
+    cancel["observation"].update(
+        updated_at="2026-10-05T10:00:00.123456789Z",
+        filled_at="2026-10-05T10:00:00.123456789Z",
+    )
+    row = project(records=records + [cancel])
+    assert row["status"] == "complete" and row["gross_realized_pnl"] == 80.0
+    assert row["exited_qty"] == 40 and row["exit_time"] == "2026-10-05T10:00:00.123456789+00:00"
+
+
+def test_timestamp_parser_and_comparison_keys_do_not_use_float_epoch_math():
+    tree = ast.parse(Path(H.__file__).read_text())
+    functions = [
+        n
+        for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name in {"parsed_timestamp", "timestamp", "instant"}
+    ]
+    assert len(functions) == 3
+    for function in functions:
+        for node in ast.walk(function):
+            if isinstance(node, ast.Call):
+                assert not (isinstance(node.func, ast.Name) and node.func.id == "float")
+                assert not (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr in {"timestamp", "total_seconds"}
+                )
+
+
+@pytest.mark.parametrize("field", ["updated_at", "filled_at"])
+@pytest.mark.parametrize(
+    "value", [None, "2026-10-05T10:00:00.123456789", "2026-10-05T10:00:00.1234567890Z"]
+)
+def test_invalid_observation_clock_never_becomes_completed(field, value):
+    records = orders()
+    records[1]["observation"][field] = value
+    row = project(records=records)
+    assert row["status"] == "incomplete" and row["gross_realized_pnl"] is None

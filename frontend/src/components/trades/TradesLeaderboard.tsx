@@ -41,7 +41,7 @@ export default function TradesLeaderboard({
 
   return (
     <section
-      className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-violet"
+      className="flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-hidden rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-violet"
       aria-label="Leaderboard"
     >
       <h2 className="sr-only">Leaderboard</h2>

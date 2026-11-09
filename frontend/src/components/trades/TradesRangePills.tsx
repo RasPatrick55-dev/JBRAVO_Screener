@@ -23,7 +23,7 @@ export default function TradesRangePills({
   const ranges: Array<{ key: RangeKey; label: string }> = [...baseRanges, { key: "all", label: allLabel }];
 
   return (
-    <div className={`inline-flex items-center gap-2 ${className}`.trim()} role="group" aria-label="Range selection">
+    <div className={`grid min-w-0 grid-cols-5 gap-2 sm:inline-flex sm:items-center ${className}`.trim()} role="group" aria-label="Range selection">
       {ranges.map((range) => {
         const isSelected = range.key === value;
         return (
@@ -33,7 +33,7 @@ export default function TradesRangePills({
             aria-pressed={isSelected}
             onClick={() => onChange(range.key)}
             className={
-              "font-arimo inline-flex min-w-11 items-center justify-center rounded-lg px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.08em] transition " +
+              "font-arimo inline-flex min-w-0 items-center justify-center rounded-lg px-1 sm:min-w-11 sm:px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.08em] transition " +
               (isSelected
                 ? "bg-amber-50 text-amber-700 outline outline-1 outline-offset-[-1px] outline-amber-300 dark:bg-amber-500/20 dark:text-amber-200 dark:outline-amber-300/45"
                 : "jbravo-panel-inner jbravo-panel-inner-cyan text-secondary hover:text-primary")

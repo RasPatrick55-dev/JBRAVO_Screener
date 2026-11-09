@@ -12,8 +12,9 @@ import json
 import re
 import time
 from uuid import UUID
+from threading import Event
 
-from dashboards.source_contracts import bounded_read, timestamp
+from dashboards.source_contracts import bounded_read
 
 
 SCHEMA = "jbravo.strategy-history.v1"
@@ -80,10 +81,59 @@ def text(value, maximum=128):
     return value
 
 
+def parsed_timestamp(value):
+    """Return UTC text and exact integer nanoseconds since the Unix epoch.
+
+    Native observations retain Alpaca's 1-9 fractional digits. Parse only whole
+    seconds with datetime (including on Python 3.10), and keep the fraction as
+    an integer. Never round/truncate it or infer a zone for a naive value.
+    """
+    try:
+        if isinstance(value, datetime):
+            if value.tzinfo is None or value.utcoffset() is None:
+                return None
+            parsed = value.astimezone(timezone.utc)
+            fraction = f"{parsed.microsecond:06d}" if parsed.microsecond else ""
+            parsed = parsed.replace(microsecond=0)
+        elif type(value) is str:
+            match = re.fullmatch(
+                r"([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2})"
+                r"(?:\.([0-9]{1,9}))?(Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])",
+                value,
+            )
+            if match is None:
+                return None
+            main, fraction, offset = match.groups()
+            parsed = datetime.fromisoformat(main + ("+00:00" if offset == "Z" else offset))
+            parsed = parsed.astimezone(timezone.utc)
+            fraction = fraction or ""
+        else:
+            return None
+        nanos = int(fraction.ljust(9, "0")) if fraction else 0
+        seconds = (
+            (parsed.toordinal() - datetime(1970, 1, 1).toordinal()) * 86400
+            + parsed.hour * 3600
+            + parsed.minute * 60
+            + parsed.second
+        )
+        # Keep the existing microsecond wire shape and every higher-precision
+        # source digit. An explicit offset is converted, not silently dropped.
+        suffix = "." + fraction.ljust(6, "0") if nanos or len(fraction) > 6 else ""
+        stamp = parsed.isoformat(timespec="seconds")[:-6] + suffix + "+00:00"
+        return stamp, seconds * 1_000_000_000 + nanos
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def timestamp(value):
+    parsed = parsed_timestamp(value)
+    return parsed[0] if parsed is not None else None
+
+
 def instant(value):
-    stamp = timestamp(value)
-    need(stamp is not None, "invalid_timestamp")
-    return datetime.fromisoformat(stamp)
+    parsed = parsed_timestamp(value)
+    need(parsed is not None, "invalid_timestamp")
+    return parsed[1]
 
 
 def digest(value):
@@ -360,7 +410,7 @@ def project_signal(signal, records, account, now):
             )
             price = exact(observation["filled_avg_price"], positive=True) if filled else None
             updated = instant(observation["updated_at"])
-            need(updated <= now + timedelta(seconds=5), "future_observation")
+            need(updated <= instant(now + timedelta(seconds=5)), "future_observation")
             if observation.get("filled_at") is not None:
                 need(
                     filled > 0 and instant(observation["filled_at"]) <= updated,
@@ -508,7 +558,8 @@ def project_signal(signal, records, account, now):
                 entry_time is not None
                 and all(exit_times)
                 and all(
-                    instant(t) >= instant(entry_time) and instant(t) <= now + timedelta(seconds=5)
+                    instant(t) >= instant(entry_time)
+                    and instant(t) <= instant(now + timedelta(seconds=5))
                     for t in exit_times
                 ),
                 "fill_timestamp_missing_or_invalid",
@@ -525,7 +576,7 @@ def project_signal(signal, records, account, now):
             entry_avg_price=float(entry["_price"]),
             exit_avg_price=exit_average,
             entry_time=entry_time,
-            exit_time=max(exit_times) if closed else None,
+            exit_time=max(exit_times, key=instant) if closed else None,
             entry_order_ids=[entry["id"]],
             exit_order_ids=sorted(o["id"] for o in sells),
             status="partial",
@@ -595,16 +646,19 @@ def snapshot(
     if client is None or type(expected_identity) is not tuple or len(expected_identity) != 2:
         return unavailable(base, "paper_read_context_unavailable")
     failure_stage = "broker_account_read"
+    database_task_entered = Event()
     try:
         account = read(client.get_account, seconds=2)
         need(type(account.id) in (str, UUID), "broker_account_identity_invalid")
         account_id = text(str(account.id))
         need(str(UUID(account_id)) == account_id, "broker_account_identity_invalid")
         failure_stage = "database_history_read"
-        signals, records, overlap, has_more = read(
-            lambda: read_snapshot(connection_factory, account_id, expected_identity, limit),
-            seconds=7,
-        )
+
+        def read_database():
+            database_task_entered.set()
+            return read_snapshot(connection_factory, account_id, expected_identity, limit)
+
+        signals, records, overlap, has_more = read(read_database, seconds=7)
     except Exception as error:
         # Fixed phases/codes only. Never return SQL/provider exception text,
         # configuration, account IDs, database names or evidence references.
@@ -620,7 +674,15 @@ def snapshot(
             if type(error) is EvidenceError and str(error) in known
             else "strategy_history_unavailable"
         )
-        return dict(unavailable(base, reason), failure_stage=failure_stage)
+        if type(error) is RuntimeError and str(error) in {"source_busy", "source_timeout"}:
+            reason = str(error)
+        # This is the observed state at response time, not a promise that a
+        # timed-out worker cannot subsequently start or finish its bounded read.
+        return dict(
+            unavailable(base, reason),
+            failure_stage=failure_stage,
+            database_task_entered=database_task_entered.is_set(),
+        )
     base["broker_account_match"] = "verified"
     legacy_ids = {
         r.get(k) for r in overlap for k in ("entry_order_id", "exit_order_id") if r.get(k)
@@ -636,7 +698,7 @@ def snapshot(
             continue
         rows.append(row)
     stamps = [timestamp(r.get("updated_at")) for r in signals + records]
-    base["source_as_of"] = max((s for s in stamps if s), default=None)
+    base["source_as_of"] = max((s for s in stamps if s), key=instant, default=None)
     partial = any(
         r["status"] == "incomplete" or r["reason"] == "native_state_reconciliation_required"
         for r in rows

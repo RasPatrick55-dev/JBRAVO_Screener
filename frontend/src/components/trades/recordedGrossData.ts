@@ -1,4 +1,4 @@
-import { finiteNumber, type SourcePayload } from "../ui/sourceState";
+import { finiteNumber, type SourcePayload, type SourceReadPolicy } from "../ui/sourceState";
 import type { LeaderRow, RangeRowMetrics } from "./types";
 import type { GrossBasis } from "./leaderboardData";
 const stamp=(value:unknown):number|null=>{
@@ -70,3 +70,20 @@ export function normalizeRecordedGrossLeaders(payload:SourcePayload|null,basis:G
   });
   return {rows,rejected:payload.rows.length-rows.length};
 }
+
+// A native unavailable response is an unsuccessful CURRENT read, not proof that
+// the last contract-valid historical observation was empty. Retain only this
+// exact read-only envelope, with its original time and explicit stale labeling.
+const unavailableKeys = new Set(["ok", "status", "source", "view_scope", "pnl_basis", "reason", "rows", "coverage",
+  "fees_status", "net_status", "net_eligible", "accounting_complete", "recovery_complete", "entry_ready"]);
+export const executionGrossReadPolicy: SourceReadPolicy = {
+  accepts: payload => !!payload && payload.ok === true && recordedGrossContract(payload, "execution_gross"),
+  retainUnavailable: payload => !!payload && Object.keys(payload).length === unavailableKeys.size &&
+    Object.keys(payload).every(key => unavailableKeys.has(key)) && payload.ok === false && payload.status === "unavailable" &&
+    payload.reason === "CURRENT_EXECUTION_GROSS_INPUTS_UNAVAILABLE" && payload.source === "postgres" &&
+    payload.view_scope === "EXECUTION_RECONSTRUCTED_GROSS" && payload.pnl_basis === "POSTGRES_MATCHED_EXECUTION_GROSS_V1" &&
+    Array.isArray(payload.rows) && payload.rows.length === 0 && payload.coverage === null &&
+    payload.fees_status === "UNKNOWN" && payload.net_status === "UNKNOWN" && payload.net_eligible === false &&
+    payload.accounting_complete === false && payload.recovery_complete === false && payload.entry_ready === false &&
+    payload.performance_status === undefined && payload.policy_validation_status === undefined,
+};
