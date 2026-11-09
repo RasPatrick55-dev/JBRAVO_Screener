@@ -48,6 +48,9 @@ pins before deriving local classes. Only quote acquisition and quote-error
 metadata differ. All broker order methods and engine trading, reconciliation,
 risk and ownership methods remain inherited. Provider setup is deferred to quote
 acquisition so data failure cannot disable existing order/stop reconciliation.
+The native `market_data=False` boundary is preserved: that setting cannot create
+a Webull transport or fetch quotes. The entry-only process continues placing
+buy orders only; the separate monitor owns sells and protective-stop changes.
 
 `DepthTransport` takes an **already initialized**, approved SDK market-data
 interface. It calls only `get_quotes(symbol=..., category='US_STOCK', depth=1,
