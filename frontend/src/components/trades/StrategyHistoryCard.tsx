@@ -49,6 +49,7 @@ export default function StrategyHistoryCard({ result }: { result: SourceResult }
     <p className="mt-1 text-xs font-semibold text-secondary">Separate from the recorded ledger below. These rows are not added to its performance totals or leaderboard. Fees and net P/L are unknown.</p>
     {stale ? <p role="status" className="mt-2 text-xs font-semibold text-secondary">Showing a stale strategy read. Current lifecycle and fill state are unverified; timestamps below belong to the retained sample.</p> : null}
     <p className="mt-2 break-words text-[11px] text-secondary">Source: {result.payload?.source === "postgres_strategy_execution" ? "PostgreSQL strategy execution" : "Unknown"} | Last successful read: {strategyTime(result.receivedAt ?? null)}</p>
+    {result.refreshStatus === "unavailable" ? <p role="status" className="mt-1 text-[11px] text-secondary">Current source unavailable. Last attempt: {strategyTime(result.lastAttemptAt ?? null)}. A response is not a successful data read.</p> : null}
     <details className="mt-1 text-[11px] text-secondary">
       <summary className="cursor-pointer">Source and accounting limits</summary>
       <div className="mt-1 space-y-1 break-words">

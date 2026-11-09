@@ -1,4 +1,4 @@
-import { canDisplay, type SourceKind, type SourceResult } from "../ui/sourceState";
+import { canDisplay, type SourceKind, type SourceResult, type SourceReadPolicy } from "../ui/sourceState";
 
 export const STRATEGY_HISTORY_LIMIT = 25;
 export const STRATEGY_HISTORY_PATH = `/api/trades/strategy-history?limit=${STRATEGY_HISTORY_LIMIT}`;
@@ -104,3 +104,10 @@ export const strategyCurrency = (value: number | null) => value === null ? "Unkn
 export const strategyTime = (value: string | null) => timestamp(value) === null ? "Unknown" : new Date(value!).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
 export const strategyCompletion = (value: StrategyHistoryRow["completion"]) => ({FULL_EXIT_OBSERVED: "Full exit observed", PARTIAL_EXIT_OBSERVED: "Partial exit observed", NO_EXIT_OBSERVED: "No exit observed", NO_ENTRY_FILL_OBSERVED: "Entry unfilled in stored observation", UNVERIFIED: "Fill evidence incomplete"})[value];
 export const strategyOwnership = (value: StrategyHistoryRow["ownership"]) => ({UNKNOWN: "Ownership unknown", STRATEGY_SIGNAL: "Stored: strategy enrollment", MANUAL_PAPER_TEST: "Stored: manual paper test", ENTRY_RECOGNITION_ONLY_NO_POSITION_ORDERS: "Stored: entry recognition only (no position orders)"})[value];
+
+// Do not advance a successful-data timestamp for an HTTP200 unavailable or
+// malformed envelope. Strategy failures still hide rows; no new retention here.
+export const strategyHistoryReadPolicy: SourceReadPolicy = {
+  accepts: payload => canDisplay(strategyHistoryView({payload, kind: "ready", validity: "ready", freshness: "current"}).kind),
+  retainUnavailable: () => false,
+};

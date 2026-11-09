@@ -62,7 +62,7 @@ export default function TradesPerformanceBoard({
   );
 
   return (
-    <section className="rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-cyan" aria-label="Performance board">
+    <section className="min-w-0 max-w-full rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-cyan" aria-label="Performance board">
       <h2 className="sr-only">Performance board</h2>
       {sourceNote ? <p className="mb-2 text-xs text-secondary" role="status">{sourceNote}</p> : null}
 
