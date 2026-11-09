@@ -4,7 +4,7 @@ import * as sources from "../src/components/ui/sourceState";
 import { executionGrossReadPolicy } from "../src/components/trades/recordedGrossData";
 import { strategyHistoryReadPolicy } from "../src/components/trades/strategyHistory";
 import StrategyHistoryCard from "../src/components/trades/StrategyHistoryCard";
-import TradesTab from "../src/components/trades/TradesTab";
+import TradesTab from "./fixtures/LegacyTradesTab";
 import fixture from "./recordedGrossFixture.json";
 import type { SourcePayload, SourceResult } from "../src/components/ui/sourceState";
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import TradesTab from "../src/components/trades/TradesTab";
+import TradesTab from "./fixtures/LegacyTradesTab";
 import TradesRangePills from "../src/components/trades/TradesRangePills";
 import * as sources from "../src/components/ui/sourceState";
 

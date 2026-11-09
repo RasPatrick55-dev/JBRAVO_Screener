@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import TradesTab from "../src/components/trades/TradesTab";
+import TradesTab from "./fixtures/LegacyTradesTab";
 import { STRATEGY_HISTORY_PATH } from "../src/components/trades/strategyHistory";
 import { strategyHistoryFixture } from "./fixtures/strategyHistoryFixture";
 import gross from "./executionGrossFixture.json";

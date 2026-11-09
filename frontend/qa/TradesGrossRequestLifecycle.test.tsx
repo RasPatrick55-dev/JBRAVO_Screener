@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import TradesTab from "../src/components/trades/TradesTab";
+import TradesTab from "./fixtures/LegacyTradesTab";
 import gross from "./executionGrossFixture.json";
 
 const response = (value: unknown) => new Response(JSON.stringify(value));

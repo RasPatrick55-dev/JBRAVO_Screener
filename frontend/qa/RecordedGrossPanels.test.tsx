@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import TradesTab from "../src/components/trades/TradesTab";
+import TradesTab from "./fixtures/LegacyTradesTab";
 import * as sources from "../src/components/ui/sourceState";
 import { normalizeRecordedGrossStats, normalizeRecordedGrossLeaders, recordedGrossContract } from "../src/components/trades/recordedGrossData";
 import { buildLeaderboardRequestPath } from "../src/components/trades/leaderboardData";
