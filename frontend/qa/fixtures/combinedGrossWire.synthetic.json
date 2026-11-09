@@ -207,69 +207,123 @@
     {
       "key": "w",
       "label": "WEEKLY",
-      "tradesCount": 3,
-      "totalPL": "44",
-      "winRatePct": 66.66666666666667,
+      "tradesCount": 0,
+      "totalPL": null,
+      "winRatePct": null,
       "topTrade": {
-        "symbol": "SYNTH",
-        "pl": "80"
+        "symbol": "--",
+        "pl": null
       },
       "worstLoss": {
-        "symbol": "DECLINE",
-        "pl": "-40"
+        "symbol": "--",
+        "pl": null
       },
       "coverage": {
-        "included": 3,
+        "included": 0,
         "excluded": 1,
         "unknown": 1,
         "deduplicated": 0,
         "strategy_not_closed": 2,
         "by_source": {
           "legacy": {
-            "included": 1,
+            "included": 0,
             "excluded": 1,
             "unknown": 0
           },
           "strategy": {
-            "included": 2,
+            "included": 0,
             "excluded": 0,
             "unknown": 1
           }
         }
+      },
+      "period": {
+        "status": "ready",
+        "basis": "US_EQUITY_OPEN_DATES",
+        "source": "alpaca_calendar",
+        "timezone": "America/New_York",
+        "start_date": "2001-01-29",
+        "end_date": "2001-02-02",
+        "request_start_date": "2001-01-29",
+        "request_end_date": "2001-02-28",
+        "coverage_basis": "PROVIDER_RETURNED_UNPAGINATED_CALENDAR",
+        "as_of": "2001-02-03T12:00:00+00:00",
+        "session_dates": [
+          "2001-01-29",
+          "2001-01-30",
+          "2001-01-31",
+          "2001-02-01",
+          "2001-02-02"
+        ],
+        "label": "2001-01-29 to 2001-02-02 | America/New_York | period-to-date through 2001-02-03T07:00:00-05:00"
       }
     },
     {
       "key": "m",
       "label": "MONTHLY",
-      "tradesCount": 3,
-      "totalPL": "44",
-      "winRatePct": 66.66666666666667,
+      "tradesCount": 0,
+      "totalPL": null,
+      "winRatePct": null,
       "topTrade": {
-        "symbol": "SYNTH",
-        "pl": "80"
+        "symbol": "--",
+        "pl": null
       },
       "worstLoss": {
-        "symbol": "DECLINE",
-        "pl": "-40"
+        "symbol": "--",
+        "pl": null
       },
       "coverage": {
-        "included": 3,
+        "included": 0,
         "excluded": 1,
         "unknown": 1,
         "deduplicated": 0,
         "strategy_not_closed": 2,
         "by_source": {
           "legacy": {
-            "included": 1,
+            "included": 0,
             "excluded": 1,
             "unknown": 0
           },
           "strategy": {
-            "included": 2,
+            "included": 0,
             "excluded": 0,
             "unknown": 1
           }
         }
+      },
+      "period": {
+        "status": "ready",
+        "basis": "US_EQUITY_OPEN_DATES",
+        "source": "alpaca_calendar",
+        "timezone": "America/New_York",
+        "start_date": "2001-02-01",
+        "end_date": "2001-02-28",
+        "request_start_date": "2001-01-29",
+        "request_end_date": "2001-02-28",
+        "coverage_basis": "PROVIDER_RETURNED_UNPAGINATED_CALENDAR",
+        "as_of": "2001-02-03T12:00:00+00:00",
+        "session_dates": [
+          "2001-02-01",
+          "2001-02-02",
+          "2001-02-05",
+          "2001-02-06",
+          "2001-02-07",
+          "2001-02-08",
+          "2001-02-09",
+          "2001-02-12",
+          "2001-02-13",
+          "2001-02-14",
+          "2001-02-15",
+          "2001-02-16",
+          "2001-02-20",
+          "2001-02-21",
+          "2001-02-22",
+          "2001-02-23",
+          "2001-02-26",
+          "2001-02-27",
+          "2001-02-28"
+        ],
+        "label": "2001-02-01 to 2001-02-28 | America/New_York | period-to-date through 2001-02-03T07:00:00-05:00"
       }
     },
     {
@@ -364,46 +418,12 @@
       ]
     },
     "w": {
-      "winners": [
-        {
-          "rank": 1,
-          "symbol": "SYNTH",
-          "pl": "80"
-        },
-        {
-          "rank": 2,
-          "symbol": "FICT",
-          "pl": "4"
-        }
-      ],
-      "losers": [
-        {
-          "rank": 1,
-          "symbol": "DECLINE",
-          "pl": "-40"
-        }
-      ]
+      "winners": [],
+      "losers": []
     },
     "m": {
-      "winners": [
-        {
-          "rank": 1,
-          "symbol": "SYNTH",
-          "pl": "80"
-        },
-        {
-          "rank": 2,
-          "symbol": "FICT",
-          "pl": "4"
-        }
-      ],
-      "losers": [
-        {
-          "rank": 1,
-          "symbol": "DECLINE",
-          "pl": "-40"
-        }
-      ]
+      "winners": [],
+      "losers": []
     },
     "y": {
       "winners": [
