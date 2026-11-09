@@ -33,8 +33,8 @@ def offline(monkeypatch):
 
 def payload(symbol='SPY', stamp=NOW, **changes):
     return dict(symbol=symbol, quote_time=str(int(stamp.timestamp() * 1000)),
-                bids=[dict(price='747.23', size='21')],
-                asks=[dict(price='747.26', size='95')]) | changes
+                bids=[dict(price='100.00', size='100')],
+                asks=[dict(price='100.05', size='200')]) | changes
 
 
 def provider(fetch=None, **kwargs):
@@ -42,12 +42,12 @@ def provider(fetch=None, **kwargs):
                                non_display_authorized=True, now=lambda: NOW, **kwargs)
 
 
-def test_actual_mcp_observation_values_preserve_time_and_single_exchange_qualification():
-    # Price/size/time from Nov9 14:55UTC observation; dict schema from SDK1.2.6
-    # formatter source. This is reconstructed evidence, not a captured raw response.
+def test_synthetic_depth_preserves_time_and_single_exchange_qualification():
+    # Synthetic prices/sizes, using the SDK1.2.6 formatter's documented shape.
+    # Actual subscription observations belong in private qualification evidence.
     result = webull.normalize(payload(quote_time='1794236124260'), symbol='SPY', observed=NOW)
     assert result['timestamp'] == '2026-11-09T14:55:24.260000+00:00'
-    assert result['bid'] == '747.23' and result['ask'] == '747.26'
+    assert result['bid'] == '100.00' and result['ask'] == '100.05'
     assert result['is_nbbo'] is False and result['venue_scope'] == 'single_exchange'
     assert result['venue_basis'] == 'configured_nasdaq_basic_entitlement'
     assert result['timestamp_basis'] == 'provider_quote_time_unix_ms'
