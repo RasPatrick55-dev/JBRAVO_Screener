@@ -108,7 +108,7 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
               {!isLoading && visibleRows.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="px-3 py-8 text-center text-sm text-secondary">
-                    No orders available.
+                    {hasError ? "Order source unavailable; current order count is unknown." : "No orders available."}
                   </td>
                 </tr>
               ) : null}

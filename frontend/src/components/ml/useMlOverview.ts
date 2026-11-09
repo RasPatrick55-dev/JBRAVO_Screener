@@ -1,3 +1,4 @@
+import { pollRead, readJson } from "../ui/readLifecycle";
 import { useEffect, useState } from "react";
 import type { LogEntry, StatusTone } from "../../types/ui";
 
@@ -183,43 +184,25 @@ type MlOverviewState = {
   hasError: boolean;
 };
 
-const fetchMlOverview = async (): Promise<MlOverviewResponse | null> => {
-  try {
-    const response = await fetch(`/api/ml/overview?ts=${Date.now()}`, {
-      headers: { Accept: "application/json" },
-      cache: "no-store",
-    });
-    if (!response.ok) {
-      return null;
-    }
-    return (await response.json()) as MlOverviewResponse;
-  } catch {
-    return null;
-  }
-};
-
 export function useMlOverview(): MlOverviewState {
   const [data, setData] = useState<MlOverviewResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
-    let isMounted = true;
-    const load = async () => {
-      setIsLoading(true);
-      const payload = await fetchMlOverview();
-      if (!isMounted) {
-        return;
-      }
-      setData(payload);
-      setHasError(payload === null);
-      setIsLoading(false);
-    };
-
-    load();
-    return () => {
-      isMounted = false;
-    };
+    // This overview is intentionally one-shot per mount. The shared dispatcher
+    // bounds the response/body and cancels navigation without adding polling.
+    const request = pollRead({
+      interval: null,
+      read: async signal => await readJson("/api/ml/overview", signal) as MlOverviewResponse | null,
+      success: payload => {
+        setData(payload);
+        setHasError(payload === null);
+        setIsLoading(false);
+      },
+      failure: () => { setData(null); setHasError(true); setIsLoading(false); },
+    });
+    return request.stop;
   }, []);
 
   return { data, isLoading, hasError };

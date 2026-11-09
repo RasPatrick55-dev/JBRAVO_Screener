@@ -1,3 +1,4 @@
+import type { SourceKind } from "../ui/sourceState";
 import { useMemo } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { formatCurrency } from "../dashboard/formatters";
@@ -6,12 +7,13 @@ import type { EquityCurvePoint } from "./types";
 interface EquityCurveCardProps {
   points: EquityCurvePoint[];
   isLoading?: boolean;
+  sourceKind?: SourceKind;
 }
 
 const axisColor = "var(--ds-text-secondary)";
 const gridColor = "rgba(148, 163, 184, 0.22)";
 
-export default function EquityCurveCard({ points, isLoading = false }: EquityCurveCardProps) {
+export default function EquityCurveCard({ points, isLoading = false, sourceKind }: EquityCurveCardProps) {
   const chartData = useMemo(
     () =>
       points.map((point) => {
@@ -42,7 +44,7 @@ export default function EquityCurveCard({ points, isLoading = false }: EquityCur
           <div className="h-full animate-pulse rounded-xl jbravo-panel-inner jbravo-panel-inner-cyan" />
         ) : chartData.length === 0 ? (
           <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-slate-300 text-sm text-secondary dark:border-slate-600">
-            No portfolio history available.
+            {sourceKind && !["ready", "empty"].includes(sourceKind) ? "Current portfolio history is unavailable." : "No portfolio history available."}
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">

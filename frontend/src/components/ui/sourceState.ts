@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { pollRead, readJson, READ_TIMEOUT_MS } from "./readLifecycle";
+export { deadlineRead } from "./readLifecycle";
 
 export type SourceKind = "loading" | "ready" | "empty" | "held" | "partial" | "unavailable" | "stale";
 export type SourcePayload = Record<string, unknown>;
@@ -30,31 +32,17 @@ export function sourceKind(value: unknown): SourceKind {
   return displayKind(sourceValidity(value), data?.status === "stale" || data?.stale === true ? "stale" : "current");
 }
 export type SourceResult = {payload: SourcePayload | null; kind: SourceKind; validity: SourceValidity; freshness: SourceFreshness; receivedAt?: string};
-// Deadline includes body decoding; a transport that ignores abort cannot publish a late result.
-export async function deadlineRead<T>(operation: (signal: AbortSignal) => Promise<T>, milliseconds = 10000): Promise<T> {
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([operation(controller.signal), new Promise<never>((_resolve, reject) => {
-      timer = globalThis.setTimeout(() => {controller.abort(); reject(new Error("source_timeout"));}, milliseconds);
-    })]);
-  } finally { globalThis.clearTimeout(timer); }
-}
-export function watchSource(path: string, publish: (result: SourceResult) => void, interval = 20000, transport: typeof fetch = fetch, maxAgeMs = 60000, timeoutMs = 10000) {
-  let active = true, inFlight = false;
+export function watchSource(path: string, publish: (result: SourceResult) => void, interval = 20000, transport: typeof fetch = fetch, maxAgeMs = 60000, timeoutMs = READ_TIMEOUT_MS) {
+  let active = true;
   let result: SourceResult = {payload: null, kind: "loading", validity: "loading", freshness: "unknown"};
   let observed = 0;
   const emit = (next: SourceResult) => {if (active) {result = next; publish(next);}};
   emit(result);
-  const load = async () => {
-    if (inFlight || !active) return;
-    inFlight = true;
-    try {
-      const payload = await deadlineRead(async signal => {
-        const response = await transport(path, {cache: "no-store", signal, headers: {Accept: "application/json"}});
-        if (!response.ok) throw new Error("source_http_unavailable");
-        return await response.json() as SourcePayload;
-      }, timeoutMs);
+  const polling = pollRead({
+    read: async signal => await readJson(path, signal, transport) as SourcePayload,
+    timeout: timeoutMs,
+    interval,
+    success: payload => {
       const stamp = payload?.observed_at ?? payload?.taken_at_utc;
       observed = stamp ? Date.parse(String(stamp)) : Date.now();
       let validity = sourceValidity(payload);
@@ -64,23 +52,23 @@ export function watchSource(path: string, publish: (result: SourceResult) => voi
         if (["ready", "empty", "partial"].includes(validity)) validity = "unavailable";
       }
       emit({payload, validity, freshness, kind: displayKind(validity, freshness), receivedAt: new Date().toISOString()});
-    } catch {
+    },
+    failure: () => {
       const validity = result.validity === "loading" ? "unavailable" : result.validity;
       const freshness = result.payload ? "stale" : "unknown";
       emit({payload: result.payload, validity, freshness, kind: displayKind(validity, freshness), receivedAt: result.receivedAt});
-    } finally {inFlight = false;}
-  };
-  void load();
-  const poll = globalThis.setInterval(() => void load(), interval);
+    },
+  });
   const expiry = globalThis.setInterval(() => {
     if (result.payload && result.freshness !== "stale" && Date.now() - observed >= maxAgeMs) emit({...result, freshness: "stale", kind: displayKind(result.validity, "stale")});
   }, Math.min(1000, maxAgeMs));
-  return () => {active = false; globalThis.clearInterval(poll); globalThis.clearInterval(expiry);};
+  return () => {active = false; polling.stop(); globalThis.clearInterval(expiry);};
 }
-export function useSource(path: string, interval = 20000, timeoutMs = 10000, maxAgeMs = 60000) {
-  const [result, setResult] = useState<SourceResult>({payload: null, kind: "loading", validity: "loading", freshness: "unknown"});
-  useEffect(() => watchSource(path, setResult, interval, fetch, maxAgeMs, timeoutMs), [path, interval, timeoutMs, maxAgeMs]);
-  return result;
+export function useSource(path: string, interval = 20000, timeoutMs = READ_TIMEOUT_MS, maxAgeMs = 60000) {
+  const initial: SourceResult = {payload: null, kind: "loading", validity: "loading", freshness: "unknown"};
+  const [state, setState] = useState({path, result: initial});
+  useEffect(() => watchSource(path, result => setState({path, result}), interval, fetch, maxAgeMs, timeoutMs), [path, interval, timeoutMs, maxAgeMs]);
+  return state.path === path ? state.result : initial;
 }
 
 export const canDisplay = (kind: SourceKind) => ["ready", "empty", "partial", "stale"].includes(kind);

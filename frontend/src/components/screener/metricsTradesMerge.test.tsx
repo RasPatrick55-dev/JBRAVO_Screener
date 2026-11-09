@@ -48,12 +48,16 @@ describe("PR754 Metrics and financial dashboard source merge", () => {
   });
   it("renders native Metrics table units and strategy context using the retained component", async () => {
     vi.resetModules(); let cursor = 0;
-    const values: unknown[] = ["Pullback/Reclaim v2", metricRows(payload()), "", "", "all", false, null, 0];
+    const values: unknown[] = ["", "", "all"];
     vi.doMock("react", async () => {
       const actual = await vi.importActual<typeof import("react")>("react");
       return { ...actual, useState: () => [values[cursor++], () => {}], useEffect: () => {},
         useMemo: (fn: () => unknown) => fn(), useRef: (value: unknown) => ({ current: value }) };
     });
+    vi.doMock("../ui/usePollingRead", () => ({
+      usePollingRead: () => ({ data: { strategy: "Pullback/Reclaim v2", rows: metricRows(payload()) }, isLoading: false, isRefreshing: false, error: null, refresh: () => {} }),
+      refreshNotice: () => null,
+    }));
     try {
       const { default: Card } = await import("./MetricsResultsCard");
       const html = renderToStaticMarkup(<Card/>);
@@ -61,6 +65,6 @@ describe("PR754 Metrics and financial dashboard source merge", () => {
       expect(html).toContain("$12.34"); expect(html).toContain("$2.50"); expect(html).toContain("Drawdown (USD)");
       expect(html).toContain("Current signals have no future result yet."); expect(html).toContain("exact strategy backtest");
       expect(html).not.toContain("No Screener picks in this batch.");
-    } finally { vi.doUnmock("react"); vi.resetModules(); }
+    } finally { vi.doUnmock("react"); vi.doUnmock("../ui/usePollingRead"); vi.resetModules(); }
   });
 });

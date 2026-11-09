@@ -57,7 +57,7 @@ describe("provider-only log evidence lifecycle", () => {
   it("does not publish a prior visit after unmount/navigation", async () => {
     const events: ProviderLogs[] = []; let resolve!: (value: Response) => void;
     const stop = watchProviderLogs(value => events.push(value), vi.fn().mockImplementation(() => new Promise<Response>(done => { resolve = done; })));
-    stop(); resolve(good()); await settle(); expect(events).toHaveLength(1);
+    await settle(); stop(); resolve(good()); await settle(); expect(events).toHaveLength(1);
   });
   it("distinguishes a verified empty returned sample from absent activity", async () => {
     const events: ProviderLogs[] = [];
