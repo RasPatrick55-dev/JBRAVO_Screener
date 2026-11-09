@@ -6128,6 +6128,18 @@ def _execution_gross_db_conn():
     return connect_current_db(db)
 
 
+@server.route("/api/trades/combined-gross")
+def api_trades_combined_gross():
+    from dashboards import combined_trade_gross
+    try:
+        client, _context = _dashboard_broker_context()
+        identity = _dashboard_read_policy_identity()
+    except Exception:
+        return _json_no_store(combined_trade_gross.context_unavailable())
+    return _json_no_store(combined_trade_gross.snapshot(
+        _execution_gross_db_conn, client, identity))
+
+
 @server.route("/api/trades/stats")
 def api_trades_stats():
     requested_range = _parse_trades_range(request.args.get("range"), default="all")
