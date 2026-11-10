@@ -127,6 +127,33 @@ def test_library_uses_exact_research_feature_preparation():
     pd.testing.assert_frame_equal(actual.drop(columns=['setup_score','setup_volume_ratio']), expected)
 
 
+def test_signal_indicators_use_completed_bars_and_leave_unavailable_readings_null():
+    sessions = pd.bdate_range('2025-01-02', periods=203)
+    close = pd.Series([100.] * 199 + [101., 99., 100., 1000.], index=sessions)
+    features = {'AAA': close.to_frame('close'), 'SPY': close.to_frame('close')}
+    warmup, as_of = (day.strftime('%Y-%m-%d') for day in (sessions[0], sessions[-2]))
+
+    def observation(index, *, consumed=True, selected=False):
+        return dict(symbol='AAA', session=sessions[index].strftime('%Y-%m-%d'),
+                    consumed=consumed, selected=selected)
+
+    rows = [observation(198), observation(199), observation(200),
+            observation(201, consumed=False, selected=True), observation(201, consumed=False)]
+    strategy_scanner.annotate_signal_indicators(rows, features, warmup, as_of)
+    missing, above, below, at = [row['indicator_context'] for row in rows[:4]]
+    assert missing == dict(rsi2=None, spy_close=None, spy_sma200=None, spy_regime=None)
+    assert above == dict(rsi2=100., spy_close=101., spy_sma200=100.005, spy_regime='ABOVE')
+    assert below == dict(rsi2=pytest.approx(100 / 3), spy_close=99., spy_sma200=100., spy_regime='BELOW')
+    assert at == dict(rsi2=pytest.approx(100 / 3), spy_close=100., spy_sma200=100., spy_regime='AT')
+    assert 'indicator_context' not in rows[-1]
+
+    # A missing SPY bar must not be filled with the prior session's reading.
+    features['SPY'] = features['SPY'].drop(sessions[201])
+    strategy_scanner.annotate_signal_indicators(rows, features, warmup, as_of)
+    assert rows[3]['indicator_context'] == dict(
+        rsi2=pytest.approx(100 / 3), spy_close=None, spy_sma200=None, spy_regime=None)
+
+
 def test_real_capture_adapter_writes_valid_empty_day_and_bound_trace(tmp_path):
     spec, _, _, _ = make_capture(tmp_path)
     day = spec['folds'][0]['test_end']

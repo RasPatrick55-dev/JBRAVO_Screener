@@ -1,6 +1,7 @@
 """Full six-strategy replay parity, sparse-input integrity and blocked outcomes."""
 from copy import deepcopy
 from datetime import timedelta
+import gzip
 import json
 import time
 from pathlib import Path
@@ -63,6 +64,19 @@ def test_real_six_strategy_preparation_and_portfolio_replays_are_identical(tmp_p
     for sid in strategies:
         cached = scanner.evaluate_strategy(dataset, cached_spec, get_strategy(sid), fold, cost, fold['test_end'])
         assert json_value(cached) == json_value(original[sid])
+    scan_spec = dict(cached_spec, strategies=strategies, max_runs=len(strategies) + 1)
+    output = root/'diagnostic-scan'
+    summary = scanner.run_scan(scan_spec, as_of=fold['test_end'], output=output, now=NOW, dataset=dataset)
+    assert json_value(summary['top_candidates']) == json_value([
+        candidate for sid in strategies for candidate in original[sid]['top_candidates']])
+    assert all('indicator_context' not in candidate for candidate in summary['top_candidates'])
+    for sid in strategies:
+        latest = json.loads(gzip.decompress((output/sid/'latest_observations.json.gz').read_bytes()))
+        qualifying = {row['signal_id']: row['indicator_context'] for row in latest
+                      if row['consumed'] or row['selected']}
+        for candidate in original[sid]['top_candidates']:
+            context = qualifying[candidate['signal_id']]
+            assert context['spy_sma200'] > 0 and context['spy_regime'] in {'ABOVE', 'AT', 'BELOW'}
     assert descriptions == {s:get_strategy(s).describe() for s in strategies}
     # Windows checkout CRLF bytes differ from the Linux production rule bytes.
     # Verify the production fingerprint with canonical repository LF blobs too.

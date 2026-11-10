@@ -6,22 +6,26 @@ session, using the same kernel as research. Each output root is single use.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date, datetime, time, timezone
-import hashlib
 import gzip
+import hashlib
 import html
 import json
+import math
 from pathlib import Path
 import time as clock
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from scripts.indicators import rsi
 from scripts.research_dataset import bounded_read, canonical_hash, load_dataset, strict_json
 from scripts.research_simulation import ResearchPortfolio, availability_clock
 from scripts.research_testing import save_json, validate_spec, json_default
 from scripts.strategy_library import select_strategies
 from scripts.pattern_strategy import PATTERNS, plan_from_row
+from scripts.strategy_runtime_diagnostics import checkpoint
 
 SOURCE_FILES = ('screener.py', 'strategy_scanner.py', 'strategy_library.py', 'research_dataset.py',
                 'research_testing.py', 'research_strategies.py', 'research_simulation.py',
@@ -237,6 +241,39 @@ def evaluate_strategy(dataset, spec, strategy, fold, cost_case, as_of, *, deadli
     return result
 
 
+def annotate_signal_indicators(observations, features, warmup_start, as_of, *, deadline=None, stop_file=None):
+    """Record completed-bar research context on signals, independent of selection."""
+    by_symbol = defaultdict(list)
+    for observation in observations:
+        if observation['consumed'] or observation['selected']:
+            by_symbol[observation['symbol']].append(observation)
+    if not by_symbol:
+        return
+
+    checkpoint('SIGNAL_INDICATORS', deadline=deadline, stop_file=stop_file)
+    spy = features.get('SPY')
+    spy_context = {}
+    if spy is not None:
+        close = spy.loc[warmup_start:as_of, 'close']
+        for session, sma in close.rolling(200).mean().dropna().items():
+            price = float(close.at[session])
+            regime = 'ABOVE' if price > sma else 'BELOW' if price < sma else 'AT'
+            spy_context[session] = (price, float(sma), regime)
+
+    for symbol, signals in by_symbol.items():
+        checkpoint('SIGNAL_INDICATORS', deadline=deadline, stop_file=stop_file)
+        close = features[symbol].loc[warmup_start:as_of, 'close']
+        rsi2 = rsi(close, period=2)
+        for signal in signals:
+            session = pd.Timestamp(signal['session'])
+            reading = float(rsi2.get(session, math.nan))
+            spy_close, spy_sma200, spy_regime = spy_context.get(session, (None, None, None))
+            signal['indicator_context'] = dict(
+                rsi2=reading if math.isfinite(reading) else None,
+                spy_close=spy_close, spy_sma200=spy_sma200, spy_regime=spy_regime,
+            )
+
+
 def _report(results):
     chunks = ['<!doctype html><meta charset="utf-8"><title>Strategy scanner trace</title>',
               '<h1>Strategy scanner â€” paper simulation</h1>',
@@ -322,6 +359,8 @@ def run_scan(spec, *, as_of, output, strategy_ids=None, fold_id=None, cost_case_
         for strategy in selected:
             result = evaluate_strategy(dataset, spec, strategy, folds[0], costs[0], as_of,
                                        deadline=deadline, stop_file=output/'STOP')
+            annotate_signal_indicators(result['observations'], dataset.features,
+                folds[0]['warmup_start'], as_of, deadline=deadline, stop_file=output/'STOP')
             results.append(result)
             folder = output/strategy.id
             folder.mkdir()
