@@ -211,6 +211,8 @@ def api_payload(kind, args, *, base_dir=ROOT, now=None):
         except (ValueError,TypeError):same=False
         if not same:
             return dict(result,ok=False,status='ERROR',rows=[],rows_final=0,source_detail='strategy_primary:batch_changed',
+                entry_ready=False,entry_block_reason='strategy_primary:batch_changed',
+                entry_block_reasons=['strategy_primary:batch_changed'],order_submission_authorized=False,
                 completion_status='unverified',computation_complete=False,completion_evidence=None)
     if unified is not None and kind in {'metrics','backtest'}:
         from scripts.setup_selection import dashboard_reports

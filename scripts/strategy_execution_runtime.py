@@ -102,11 +102,13 @@ def source_guard(handoff,*,base_dir=ROOT,lifecycle=False):
     return True
 
 
-def readonly_handoff(env,*,base_dir=ROOT,inspection=False):
+def readonly_handoff(env,*,base_dir=ROOT,inspection=False,pipeline_limits=False):
     from scripts.research_store import connect
     from scripts.strategy_execution_handoff import load_handoff
     conn=connect(env=env)
-    try:return load_handoff(conn,base_dir=base_dir,now=datetime.now(timezone.utc),inspection=inspection)
+    try:
+        options={"pipeline_limits":True} if pipeline_limits else {}
+        return load_handoff(conn,base_dir=base_dir,now=datetime.now(timezone.utc),inspection=inspection,**options)
     finally:conn.rollback();conn.close()
 
 
@@ -168,7 +170,8 @@ def store_connection(env,broker):
         conn.rollback();conn.close();raise
 
 
-def guard_for(env,*,base_dir=ROOT):
+def guard_for(env,*,base_dir=ROOT,pipeline_entry_only=False):
+    require(type(pipeline_entry_only) is bool,'strategy_entry_guard_mode_invalid')
     def guard(kind,signal):
         require(os.environ.get('APCA_API_BASE_URL')=='https://paper-api.alpaca.markets' and
             os.environ.get('JBR_EXEC_PAPER')=='true','strategy_paper_process_context_changed')
@@ -177,16 +180,35 @@ def guard_for(env,*,base_dir=ROOT):
             current=readonly_handoff(env,base_dir=base_dir,inspection=True)
             from scripts.setup_selection import execution_queue
             verified=unified_handoff(env,current,base_dir=base_dir)
-            matching=[r for r in execution_queue(verified) if r['proposal']['signal_id']==signal['signal_id']]
+            pipeline_limit=('execution_orders' in verified['record'] or
+                handoff.get('execution_policy',{}).get('model')==rules.PIPELINE_LIMIT_MODEL)
+            if pipeline_limit:
+                require(handoff.get('execution_policy',{}).get('model')==rules.PIPELINE_LIMIT_MODEL,
+                        'execution_pipeline_model_changed_before_post')
+            if pipeline_entry_only:
+                require(pipeline_limit, 'strategy_entry_only_pipeline_required')
+                from scripts.strategy_order_lifecycle import cancellation_deadline
+                cancellation_deadline(signal['payload'],require_marker=True)
+            queue=pipeline_execution_queue(verified) if pipeline_limit else execution_queue(verified)
+            matching=[r for r in queue if r['proposal']['signal_id']==signal['signal_id']]
             require(len(matching)==1 and matching[0]['handoff']['unified_selection']==handoff.get('unified_selection'),
                     'strategy_signal_not_in_current_unified_selection')
+            if pipeline_limit:
+                require(signal['payload']['account_id']==expected_paper_account(env),
+                        'strategy_expected_paper_account_changed')
+                require(matching[0]['handoff']['pipeline_limit_order']==handoff.get('pipeline_limit_order'),
+                        'execution_pipeline_limit_changed_before_post')
+                ticket=handoff['pipeline_limit_order'];observed=datetime.now(timezone.utc)
+                require(rules.utc(ticket['valid_from'])<=observed<rules.utc(ticket['valid_until']),
+                        'strategy_pipeline_submission_expired')
             current=verified['handoffs'][handoff['strategy_contract']['strategy_id']]
             require(current['primary_report_sha256']==handoff['primary_report_sha256'] and
                 current['candidate_values']==handoff['candidate_values'] and
                 current['batch_sha256']==handoff['batch_sha256'],'strategy_entry_batch_changed_before_post')
             now=datetime.now(timezone.utc);opening=rules.utc(handoff['execution_policy']['entry_open_at'])
             require(opening<=now<opening+timedelta(seconds=60),'strategy_initial_entry_window_expired')
-            monitor_ready(handoff,signal['payload']['account_id'],now=now,base_dir=base_dir)
+            if not pipeline_entry_only:
+                monitor_ready(handoff,signal['payload']['account_id'],now=now,base_dir=base_dir)
         return True
     return guard
 
@@ -444,3 +466,157 @@ def monitor_cycle(*,base_dir=ROOT):
     finally:
         if conn is not None:conn.rollback();conn.close()
         broker.close()
+
+
+def pipeline_execution_queue(verified):
+    """Attach final, lineage-bound pipeline limits. Never derive a missing price."""
+    from scripts.setup_selection import execution_queue
+    queue=execution_queue(verified)
+    if not queue:return queue
+    record=verified['record'];tickets=record.get('execution_orders')
+    from scripts.research_strategies import CHALLENGER
+    parent=verified['handoffs'][CHALLENGER]
+    actionable=parent.get('pipeline_limit_placement_v2') is True and parent.get('inspection_mode') is False
+    require(isinstance(tickets,dict),'execution_pipeline_limit_price_required')
+    require(set(tickets)=={r['proposal']['signal_id'] for r in queue},
+            'execution_pipeline_limit_population_changed')
+    for setup in queue:
+        handoff=setup['handoff'];proposal=setup['proposal']
+        ticket=rules.validate_pipeline_limit_order(handoff,proposal,tickets[proposal['signal_id']],
+            published_at=record['finished_at'])
+        handoff['pipeline_limit_order']=ticket
+        handoff['pipeline_limit_published_at']=record['finished_at']
+        if actionable:
+            # Companion inputs are read in inspection mode for immutable lineage.
+            # Only the verified actionable parent plus committed v2 ticket authorizes this queue.
+            handoff['inspection_mode']=False
+            handoff['pipeline_limit_placement_v2']=True
+        handoff['execution_policy'].update(model=rules.PIPELINE_LIMIT_MODEL,
+            reference='PIPELINE_PUBLISHED_FINAL_LIMIT',limit_buffer_pct=0)
+        handoff.pop('handoff_id',None);handoff['handoff_id']=rules.digest(handoff)
+    return queue
+
+
+def expected_paper_account(env):
+    """Independent private identity pin, not a monitor health/receipt dependency.
+
+    Installation must bind the already verified native paper account once;
+    absence/malformed input blocks before construction of a broker or order state.
+    Never export the actual value to reports or diagnostics.
+    """
+    from uuid import UUID
+    value=env.get('JBR_EXEC_EXPECTED_PAPER_ACCOUNT_ID')
+    try:canonical=str(UUID(value)) if isinstance(value,str) else None
+    except (ValueError,AttributeError):canonical=None
+    require(canonical is not None and value==canonical,'strategy_expected_paper_account_binding_required')
+    return value
+
+
+def compact_events(events):
+    """Count identical observations without dropping distinct error details."""
+    result=[];indices={}
+    for event in events:
+        key=json.dumps(event,sort_keys=True,allow_nan=False)
+        if key in indices:
+            row=result[indices[key]];row['occurrences']=row.get('occurrences',1)+1
+        else:
+            indices[key]=len(result);result.append(dict(event))
+    return result
+
+
+def entry_account(broker,env):
+    account=broker.account()
+    require(broker.account_id==expected_paper_account(env),'strategy_expected_paper_account_mismatch')
+    return account
+
+
+def lifecycle_handoff(signal):
+    """Resolve an append-only deployment record, never rewrite original lineage.
+
+    This narrow compatibility path cannot change entry authority, strategy rules,
+    quantities, prices, orders, or the paper-account identity.
+    """
+    from copy import deepcopy
+    payload=signal['payload'];original=payload['handoff'];result=deepcopy(original)
+    history=payload.get('executor_release_history',[])
+    require(not history or (not payload.get('execution_owner') and not original.get('manual_paper_test')),
+        'strategy_manual_release_requires_recognition_path')
+    require(isinstance(history,list) and len(history)<=32,'strategy_release_history_invalid')
+    operations=set()
+    for index,event in enumerate(history):
+        require(isinstance(event,dict) and set(event)=={'schema','operation_id','signal_id',
+            'original_handoff_sha256','previous_history_sha256','previous_source_bindings_sha256',
+            'source_bindings','recorded_at'} and
+            event['schema']=='jbravo.executor-lifecycle-release-compat.v1' and
+            event['signal_id']==signal['signal_id'] and
+            event['original_handoff_sha256']==rules.digest(original) and
+            event['previous_history_sha256']==rules.digest(history[:index]) and
+            event['previous_source_bindings_sha256']==rules.digest(result['source_bindings']) and
+            isinstance(event['operation_id'],str) and 1<=len(event['operation_id'])<=128 and
+            event['operation_id'] not in operations,'strategy_release_history_changed')
+        pins=event['source_bindings'];old=result['source_bindings']
+        require(isinstance(pins,dict) and set(pins)==set(old) and
+            {name for name in old if old[name]!=pins[name]}<=COMPATIBLE_EXECUTOR_SOURCES and
+            pins!=old,'strategy_release_compatibility_scope_changed')
+        rules.utc(event['recorded_at']);operations.add(event['operation_id'])
+        result['source_bindings']=deepcopy(pins)
+    return result
+
+
+def entry_protection_state(store):
+    """Read the last reconciled state; never infer a stop from an entry fill.
+
+    This certifies regular-hours broker stops only. No market data or monitor
+    readiness check is part of this execution completion condition.
+    """
+    from scripts.strategy_execution_engine import TERMINAL
+    from decimal import Decimal,ROUND_FLOOR
+    positions=[];issues=[]
+    for signal in store.signals():
+        sid=signal['signal_id'];payload=signal['payload'];symbol=payload['proposal']['symbol']
+        records=store.orders(sid)
+        if signal['state'] in {'UNKNOWN','DISPUTED','PREPARED','ENTRY_PENDING','EXIT_PENDING'}:
+            issues.append(dict(signal_id=sid,symbol=symbol,reason='SIGNAL_NOT_SETTLED'))
+        if any(r['state'] in {'CLAIMED','UNKNOWN'} for r in records):
+            issues.append(dict(signal_id=sid,symbol=symbol,reason='ORDER_OUTCOME_UNKNOWN'))
+        position=payload.get('position')
+        if not position:
+            # An OPEN signal with no reconciled position is not a flat proof.
+            if signal['state']=='OPEN':issues.append(dict(signal_id=sid,symbol=symbol,reason='POSITION_NOT_RECONCILED'))
+            continue
+        live=[r for r in records if r['role'] in {'stop','exit','partial'} and
+            r.get('observation') and r['observation']['status'] not in TERMINAL]
+        stops=[r['observation'] for r in live if r['role']=='stop']
+        qty=rules.number(position['qty'],positive=True)
+        minimum=Decimal(str(max(position.get('trailing_stop') or 0,position.get('atr_stop') or 0))).quantize(
+            Decimal('.01'),rounding=ROUND_FLOOR)
+        confirmed=(len(live)==1 and len(stops)==1 and stops[0]['status'] in {'new','accepted'} and
+            stops[0].get('side')=='sell' and stops[0].get('type')=='stop' and
+            stops[0].get('symbol')==symbol and stops[0].get('time_in_force')=='gtc' and
+            stops[0].get('extended_hours') is False and
+            rules.number(stops[0].get('filled_qty',0))==0 and
+            rules.number(stops[0]['qty'],positive=True)==qty and
+            rules.number(stops[0]['stop_price'],positive=True)>=minimum)
+        positions.append(dict(signal_id=sid,symbol=symbol,qty=str(qty),
+            regular_hours_stop_confirmed=confirmed,extended_hours=False,
+            stop_order_id=stops[0]['id'] if confirmed else None))
+        if not confirmed:issues.append(dict(signal_id=sid,symbol=symbol,reason='FULL_QUANTITY_STOP_NOT_CONFIRMED'))
+    return dict(confirmed=not issues,positions=positions,unresolved=issues,
+        scope='REGULAR_HOURS_BROKER_STOPS_ONLY')
+
+
+class EntryRecognitionStore:
+    """Hide adopted positions from lifecycle work; broker exposure stays global."""
+    def __init__(self,store,recognized):self.store,self.recognized=store,frozenset(recognized)
+    def __getattr__(self,name):return getattr(self.store,name)
+    def signals(self,*,active=True):
+        return [s for s in self.store.signals(active=active) if s['signal_id'] not in self.recognized]
+    def save(self,signal,**kwargs):
+        require(signal['signal_id'] not in self.recognized,'strategy_recognized_position_write_forbidden')
+        return self.store.save(signal,**kwargs)
+    def claim(self,**kwargs):
+        require(kwargs['signal_id'] not in self.recognized,'strategy_recognized_position_order_forbidden')
+        return self.store.claim(**kwargs)
+
+COMPATIBLE_EXECUTOR_SOURCES=frozenset({"scripts/strategy_execution_broker.py",
+    "scripts/strategy_execution_engine.py","scripts/strategy_execution_runtime.py"})

@@ -9,6 +9,7 @@ from scripts.strategy_backtest import require,digest
 ROOT=Path(__file__).resolve().parents[1]
 MODEL='COMMON_TECHNICAL_COMPOSITE_V1'
 POLICY='UNIFIED_BEST_SETUPS_V1'
+PIPELINE_LIMIT_POLICY='RAW_SIP_AFTER_HOURS_CLOSE_PLUS_0_5_PCT_V1'
 
 
 def model_sha256():
@@ -180,6 +181,11 @@ def read_selection(connection,parent,*,now,base_dir=ROOT):
     handoffs,references,selection=inputs(connection,parent,now=now,base_dir=base_dir)
     specification=dict(policy=POLICY,model_sha256=model_sha256(),required_strategies=sorted(handoffs),
                        strategy_result_sha256=references)
+    if 'execution_orders' in record:
+        specification['execution_limit_policy']=PIPELINE_LIMIT_POLICY
+        expected=build_pipeline_limit_orders(selection,parent,record['execution_price_inputs'],
+            published_at=record['finished_at'])
+        require(record['execution_orders']==expected,'pipeline_published_limit_changed')
     require(record['specification']==specification and spec_sha.strip()==digest(specification) and
             record['selection']==selection,'unified_selection_ranking_changed')
     return dict(record=record,result_sha256=result_sha.strip(),handoffs=handoffs)
@@ -262,3 +268,46 @@ def dashboard_reports(kind,result,selection,reports,args):
         metric_basis='STRATEGY_RESEARCH_SIMULATION',strategy_priority=False,
         **({'metrics_status':'COMPLETED_UNIFIED_SETUP_METRICS'} if kind=='metrics' else
            {'backtest_status':'COMPLETED_UNIFIED_SETUP_BACKTEST'}))
+
+
+def build_pipeline_limit_orders(selection,parent,price_inputs,*,published_at):
+    """Pure publication/replay of the unchanged after-hours pricing formula."""
+    from decimal import Decimal,ROUND_FLOOR
+    from datetime import date,time,timedelta
+    from scripts import strategy_execution as rules
+    selected=selection['selected_setups']
+    require(isinstance(price_inputs,dict) and set(price_inputs)=={r['proposal']['symbol'] for r in selected},
+        'pipeline_limit_reference_population_changed')
+    published=rules.utc(published_at)
+    opening=datetime.combine(date.fromisoformat(parent['session']['next_session']),time(4),rules.NY)
+    require(published<opening+timedelta(minutes=35),'pipeline_limit_publication_after_entry_window')
+    result={}
+    for setup in selected:
+        proposal=setup['proposal'];symbol=proposal['symbol'];reference=price_inputs[symbol]
+        require(proposal['signal_session']==parent['session']['signal_session'] and
+            proposal['next_session']==parent['session']['next_session'],
+            'pipeline_limit_proposal_session_changed')
+        require(isinstance(reference,dict),'pipeline_limit_reference_unavailable')
+        # Reuse the exact former reference validator, including SIP/raw/USD,
+        # the 16:00-20:00 New York session and >=20:15 capture availability.
+        checked=rules.after_hours_reference(reference['bars'],symbol=symbol,
+            signal_session=parent['session']['signal_session'],observed_at=reference['observed_at'],
+            feed=reference['feed'],adjustment=reference['adjustment'],currency=reference['currency'],
+            complete=reference['complete'])
+        require(checked==reference and checked['status']=='AVAILABLE' and
+            rules.utc(checked['observed_at'])<=published,'pipeline_limit_reference_unavailable')
+        price=(rules.number(checked['price'],positive=True)*Decimal('1.005')).quantize(Decimal('.01'),rounding=ROUND_FLOOR)
+        require(price>0,'pipeline_limit_nonpositive')
+        provenance=dict(provider='alpaca',feed='sip',adjustment='raw',currency='USD',
+            policy=PIPELINE_LIMIT_POLICY,reference_price=str(rules.number(checked['price'],positive=True)),
+            reference_at=checked['last_bar_at'],captured_at=checked['observed_at'],
+            reference_id=checked['reference_id'],bars_sha256=checked['bars_sha256'],
+            multiplier='1.005',rounding='ROUND_FLOOR',tick_size='0.01')
+        result[proposal['signal_id']]=dict(schema='jbravo.pipeline-paper-limit-order.v2',
+            primary_run_id=parent['primary_run_id'],selection_run_id=selection_id(parent['primary_run_id']),
+            signal_id=proposal['signal_id'],symbol=symbol,signal_session=proposal['signal_session'],
+            next_session=proposal['next_session'],limit_price=format(price,'.2f'),currency='USD',
+            price_basis=PIPELINE_LIMIT_POLICY,price_as_of=checked['last_bar_at'],
+            valid_from=published.isoformat(),valid_until=(opening+timedelta(minutes=35)).isoformat(),
+            price_provenance=provenance)
+    return result

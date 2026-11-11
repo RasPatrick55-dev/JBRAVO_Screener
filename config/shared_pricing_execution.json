@@ -1,0 +1,14 @@
+{
+  "schema": "jbravo.pipeline-limit-paper-execution-config.v1",
+  "enabled": true,
+  "paper_only": true,
+  "strategy_id": "trend_pullback_reclaim_qualifying_close_v2",
+  "execution_model": "NEXT_PREMARKET_0400_PIPELINE_LIMIT_V1",
+  "allocation_pct": 0.05,
+  "max_positions": 4,
+  "extra_limit_buffer_pct": 0,
+  "cancel_after_minutes": 35,
+  "limit_source": "PIPELINE_PUBLISHED_LIMIT",
+  "currency": "USD",
+  "research_qualified": false
+}

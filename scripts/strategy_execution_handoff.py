@@ -11,7 +11,7 @@ from scripts.strategy_execution import prepare_handoff
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def load_handoff(conn, *, base_dir=ROOT, now=None, inspection=False):
+def load_handoff(conn, *, base_dir=ROOT, now=None, inspection=False, pipeline_limits=False):
     """Require source/history/completion proof plus one repeatable DB snapshot.
 
     The connection must be a newly opened read-only research_store connection.
@@ -46,7 +46,7 @@ def load_handoff(conn, *, base_dir=ROOT, now=None, inspection=False):
     from scripts.strategy_pipeline_store import candidate_frame
     frame, stamp = candidate_frame(conn, batch[1], exact_run_ts=batch[2])
     require(stamp == batch[2], 'execution_database_snapshot_changed')
-    handoff = prepare_handoff(record, frame.to_dict('records'), now=now,inspection=inspection)
+    handoff = prepare_handoff(record, frame.to_dict('records'), now=now,inspection=inspection,pipeline_limits=pipeline_limits)
     require(health._read(Path(base_dir)/'reports/pipeline_postflight/latest.json', health.MAX_REPORT_BYTES) == raw,
         'execution_primary_changed_after_database_read')
     return handoff
