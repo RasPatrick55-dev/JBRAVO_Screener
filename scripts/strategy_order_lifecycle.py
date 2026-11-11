@@ -102,15 +102,21 @@ def cancellation_deadline(payload, *, require_marker=False):
         raise ValueError('entry_lifecycle_marker_invalid') from error
 
 
-def monitor_engine(Engine, *, require_marker=False):
+def monitor_engine(Engine, *, require_marker=False, source_variant="retained"):
     """Derive pinned native Engine, replacing ONLY two deadline expressions.
 
     Exact source pins fail closed on host drift. Compile copies in private
     globals, never patch native functions/globals or rewrite stored handoffs.
     Everything else (fill quantities, readback, risk exits, stops) stays native.
     """
+    _require(source_variant in {'retained','canonical'}, 'entry_lifecycle_source_variant_invalid')
+    hashes=dict(_METHOD_HASHES)
+    if source_variant=='canonical':
+        # Reviewed per-signal contract selection supports legacy pending fills
+        # without allowing malformed pipeline tickets to use legacy validation.
+        hashes['sync']='97957449461c36b583c14bac5c83a706fa7a9d85b847478756ede0bc3240a9c1'
     methods = {}
-    for name, digest in _METHOD_HASHES.items():
+    for name, digest in hashes.items():
         native = getattr(Engine, name)
         source = textwrap.dedent(inspect.getsource(native)).strip()
         _require(hashlib.sha256(source.encode()).hexdigest() == digest,

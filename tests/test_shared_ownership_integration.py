@@ -29,9 +29,19 @@ bound=install_shared_native(native,root=root,adapter_pins=pins,clock=lambda:date
 proof=assemble_ownership(native,bound,root=root,pins=pins)
 assert native.strategy_execution_runtime.source_guard is guard
 assert proof['entry_invocations']==proof['broker_calls']==proof['database_calls']==0
-assert proof['source_guard_preserved'] and proof['monitor_readiness_gate_preserved']
+assert proof['source_guard_preserved'] and proof['legacy_monitor_gate_preserved']
+assert proof['entry_monitor_dependency'] is False
+assert proof['direct_ownership_preflight_retained']
 assert proof['monitor_installation']['existing_history_preserved']
 assert proof['receipt_policy_composed']
+from scripts import strategy_entry_only as entry
+captured={}
+def inspect_entry(*args,**kwargs):captured.update(kwargs);return 'BINDING_ONLY'
+entry.run_entry_only=inspect_entry
+assert native.strategy_execution_runtime._run_entry(None,progress={})=='BINDING_ONLY'
+bound.entry_runtime.guard_for=lambda env,**kwargs:kwargs
+assert captured['runtime'].guard_for({},base_dir=root)['pipeline_entry_only'] is True
+
 print('OWNERSHIP_ASSEMBLED_NO_RUN')
 """
     result = subprocess.run([sys.executable, '-B', '-c', code], cwd=root,
@@ -45,7 +55,7 @@ def test_canonical_pending_variant_requires_exact_source():
     from scripts import strategy_order_lifecycle as lifecycle
     from scripts import strategy_pending_stop_replacement as pending
     from scripts.strategy_only_monitor import quote_safe_engine
-    wrapped=quote_safe_engine(lifecycle.monitor_engine(Engine))
+    wrapped=quote_safe_engine(lifecycle.monitor_engine(Engine,source_variant="canonical"))
     assert issubclass(pending.monitor_engine(wrapped,NativeEngine=Engine,
                                             source_variant='canonical'),Engine)
     with pytest.raises(ValueError,match='source_variant_invalid'):
@@ -54,3 +64,15 @@ def test_canonical_pending_variant_requires_exact_source():
         def manage(self,*args,**kwargs):return super().manage(*args,**kwargs)
     with pytest.raises(ValueError,match='manage_source_changed'):
         pending.monitor_engine(Changed,NativeEngine=Changed,source_variant='canonical')
+
+
+def test_canonical_lifecycle_variant_rejects_unknown_and_drift():
+    from scripts.strategy_execution_engine import Engine
+    from scripts import strategy_order_lifecycle as lifecycle
+    assert issubclass(lifecycle.monitor_engine(Engine,source_variant='canonical'),Engine)
+    with pytest.raises(ValueError,match='source_variant_invalid'):
+        lifecycle.monitor_engine(Engine,source_variant='unreviewed')
+    class Changed(Engine):
+        def sync(self,*args,**kwargs):return super().sync(*args,**kwargs)
+    with pytest.raises(ValueError,match='sync_source_changed'):
+        lifecycle.monitor_engine(Changed,source_variant='canonical')

@@ -88,3 +88,26 @@ are superseded only inside the explicit manifest-bound assembled process.
 No scheduler or monitor main/cycle, publisher, database query, or order is run
 by assembly. A separate supported deployment operation must bind executable
 entry points and rollback/preimage rules before activation.
+
+
+## PR review corrections: pipeline-only entry and mixed historical fills
+
+This section supersedes the earlier assembled-entry monitor-readiness notes.
+The assembled entry guard now explicitly selects pipeline-entry-only admission.
+It does not read or depend on a monitor health receipt. Entry still requires
+verified current pipeline selection, exact ticket and account identity, source
+bindings, the opening-minute window, and a valid monitor-owned lifecycle marker.
+The unchanged entry-only runner retains direct broker ownership/stop-coverage
+preflight and account/source leases before placement. Legacy runtime callers
+retain their prior monitor gate; a legacy handoff cannot select the exemption.
+
+Monitor fill reconciliation now selects the contract from each signal's valid
+handoff, not the monitor-wide pipeline flag. Legacy pending entries keep legacy
+fill validation. Pipeline entries require their exact complete ticket contract;
+missing or corrupt pipeline metadata cannot fall back to legacy handling.
+The named canonical lifecycle adapter freezes the reviewed new sync method and
+unchanged tick method. Retained fixture/default pins remain available unchanged.
+
+Cutover admission must freshly inspect pending/open host handoffs and their
+source/lifecycle bindings. Offline compatibility fixtures do not establish the
+current account population or authorize rebinding historical positions.

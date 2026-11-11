@@ -30,7 +30,7 @@ def offline(monkeypatch):
 def test_canonical_entry_only_to_pinned_monitor(fill_mode):
     # Exercises exact ticket submission, durable marker-before-claim, 04:35
     # survival, fill reconciliation, GTC protection and regular-close cleanup.
-    ownership_case(native, fill_mode)
+    ownership_case(native, fill_mode, source_variant="canonical")
 
 
 def test_canonical_monitor_preserves_source_drift_guard():
@@ -38,7 +38,7 @@ def test_canonical_monitor_preserves_source_drift_guard():
         def tick(self, **kwargs):
             return {}
     with pytest.raises(ValueError, match='native_tick_source_changed'):
-        lifecycle.monitor_engine(Changed)
+        lifecycle.monitor_engine(Changed,source_variant="canonical")
 
 
 def test_pipeline_preparation_is_optional_and_bounded():
@@ -160,6 +160,7 @@ def test_historical_manual_position_retains_protection_cancel_and_exit():
     signal = store.signals()[0]
     payload = deepcopy(signal['payload'])
     payload['handoff']['manual_paper_test'] = True
+    payload['handoff']['handoff_id'] = rules.digest({k:v for k,v in payload['handoff'].items() if k != 'handoff_id'})
     store.save(signal, payload=payload)
     engine.tick(now=broker.now)
     assert broker.posts[-1]['type'] == 'stop'
@@ -193,3 +194,50 @@ def test_pipeline_manage_keeps_canonical_offhours_mutation_guard(hour, pending_e
     engine.manage(signal, store.orders(signal['signal_id']), now=now,
                   quote=dict(bid='90', ask='90.01'), regular_open=False)
     assert before == (broker.posts, broker.patches, broker.cancels, store.rows, store.outbox)
+
+
+def test_pipeline_monitor_reconciles_legacy_pending_entry_fill():
+    from tests.test_strategy_execution_engine import setup, enter
+    entry, store, broker, handoff = setup()
+    enter(entry, broker, handoff)
+    qty = broker.posts[0]['qty']
+    broker.fill('entry', qty)
+    monitor = native.Engine(store, broker, guard=lambda *args: True,
+                            pipeline_orders=True, now=lambda: broker.now)
+    monitor.tick(now=broker.now, observe_prices=False)
+    signal = store.signals()[0]
+    assert signal['state'] == 'OPEN'
+    assert signal['payload']['handoff'] == handoff
+    assert signal['payload']['entry_filled_qty'] == qty
+    assert broker.posts[-1]['type'] == 'stop' and broker.posts[-1]['qty'] == qty
+
+
+@pytest.mark.parametrize('change', ['missing_ticket', 'missing_publication', 'missing_marker',
+                                     'changed_ticket', 'changed_digest', 'disguised_legacy'])
+@pytest.mark.parametrize('monitor_pipeline_mode', [False, True])
+def test_pipeline_fill_never_falls_back_to_legacy(change, monitor_pipeline_mode):
+    store, broker, handoff = pipeline_fixture(native)
+    entry = native.Engine(store, broker, guard=lambda *args: True,
+                          pipeline_orders=True, now=lambda: broker.now)
+    entry.enter(handoff, {handoff['proposals'][0]['symbol']: handoff['pipeline_limit_order']},
+                now=broker.now, clock=broker.clock(), account=broker.account(),
+                positions={}, open_orders=[])
+    broker.fill('entry', broker.posts[0]['qty'])
+    signal = store.signals()[0]
+    payload = deepcopy(signal['payload'])
+    changed = payload['handoff']
+    if change == 'missing_ticket': changed.pop('pipeline_limit_order')
+    elif change == 'missing_publication': changed.pop('pipeline_limit_published_at')
+    elif change == 'missing_marker': changed.pop('pipeline_limit_placement_v2')
+    elif change == 'changed_ticket': changed['pipeline_limit_order']['signal_id'] = '0'*64
+    elif change == 'disguised_legacy': changed['execution_policy']['model'] = rules.EXECUTION_MODEL
+    if change != 'changed_digest':
+        changed['handoff_id'] = rules.digest({k:v for k,v in changed.items() if k != 'handoff_id'})
+    else: changed['handoff_id'] = '0'*64
+    store.save(signal, payload=payload)
+    monitor = native.Engine(store, broker, guard=lambda *args: True,
+                            pipeline_orders=monitor_pipeline_mode, now=lambda: broker.now)
+    with pytest.raises(ValueError):
+        monitor.tick(now=broker.now, observe_prices=False)
+    assert store.signals()[0]['payload']['position'] is None
+    assert len(broker.posts) == 1 and not broker.cancels and not broker.patches

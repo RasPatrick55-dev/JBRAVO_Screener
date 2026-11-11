@@ -169,3 +169,63 @@ def test_legacy_reader_keeps_native_validation_and_missing_ticket_rejection(wiri
         w.execution_queue(v)
     ranking['selection']['selected_signal_ids']=[]
     with pytest.raises(ValueError):w.entry_runtime.unified_handoff({},f.selection.parent_context(f.primary))
+
+
+@pytest.fixture
+def pipeline_guard_case(wiring,monkeypatch):
+    from scripts.strategy_order_lifecycle import marker_for
+    f,w,db,statuses,checks,runtime=wiring
+    f.handoffs['test'].update(strategy_contract={'strategy_id':'test'},
+        primary_report_sha256='report',candidate_values=[],batch_sha256='batch',
+        session={'signal_session':'2026-11-09','next_session':'2026-11-10',
+                 'next_open_at':'2026-11-10T14:30:00+00:00'})
+    f.handoffs['test']['execution_policy']['cancel_at']='2026-11-10T09:35:00+00:00'
+    publish(wiring)
+    parent=f.selection.parent_context(f.primary)
+    verified=w.entry_runtime.unified_handoff({},parent)
+    handoff=w.execution_queue(verified)[0]['handoff']
+    signal={'signal_id':'GOOD_signal','payload':{'handoff':handoff,'account_id':'synthetic'}}
+    signal['payload']['entry_lifecycle']=marker_for(handoff,
+        {'date':'2026-11-10','open':'09:30:00','close':'16:00:00'})
+    namespace=w.entry_runtime.guard_for.__globals__
+    source_checks=[]
+    monkeypatch.setitem(namespace,'source_guard',lambda *a,**kw:source_checks.append(True))
+    monkeypatch.setitem(namespace,'expected_paper_account',lambda env:'synthetic')
+    monkeypatch.setitem(namespace,'readonly_handoff',lambda *a,**kw:parent)
+    def forbidden_monitor(*a,**kw):raise AssertionError('monitor report must not be read')
+    monkeypatch.setitem(namespace,'monitor_ready',forbidden_monitor)
+    class Clock:
+        value=datetime(2026,11,10,9,0,10,tzinfo=timezone.utc)
+        @staticmethod
+        def now(tz):return Clock.value
+    monkeypatch.setitem(namespace,'datetime',Clock)
+    monkeypatch.setenv('APCA_API_BASE_URL','https://paper-api.alpaca.markets')
+    monkeypatch.setenv('JBR_EXEC_PAPER','true')
+    return w.entry_runtime.guard_for({},pipeline_entry_only=True),signal,namespace,Clock,source_checks
+
+
+def test_entry_only_pipeline_guard_has_no_monitor_dependency(pipeline_guard_case):
+    guard,signal,namespace,clock,source_checks=pipeline_guard_case
+    assert guard('entry',signal) is True
+    assert source_checks==[True]
+
+
+@pytest.mark.parametrize('change',['account','ticket','model','missing_marker','changed_marker',
+                                    'expired_window','pipeline_selection','source','legacy'])
+def test_entry_only_pipeline_guard_retains_safety_checks(pipeline_guard_case,monkeypatch,change):
+    guard,signal,namespace,clock,source_checks=pipeline_guard_case
+    handoff=signal['payload']['handoff']
+    if change=='account':signal['payload']['account_id']='different'
+    elif change=='ticket':handoff['pipeline_limit_order']['limit_price']='99'
+    elif change=='model':handoff['execution_policy']['model']='NEXT_PREMARKET_0400_FROZEN_LIMIT_V1'
+    elif change=='missing_marker':signal['payload'].pop('entry_lifecycle')
+    elif change=='changed_marker':signal['payload']['entry_lifecycle']['cancel_at']='2026-11-11T21:00:00+00:00'
+    elif change=='expired_window':clock.value=datetime(2026,11,10,9,1,tzinfo=timezone.utc)
+    elif change=='pipeline_selection':monkeypatch.setitem(namespace,'pipeline_execution_queue',lambda v:[])
+    elif change=='source':
+        def reject(*a,**kw):raise ValueError('source_changed')
+        monkeypatch.setitem(namespace,'source_guard',reject)
+    elif change=='legacy':
+        handoff['execution_policy']['model']='NEXT_PREMARKET_0400_FROZEN_LIMIT_V1'
+        monkeypatch.setitem(namespace,'unified_handoff',lambda *a,**kw:{'record':{}})
+    with pytest.raises(ValueError):guard('entry',signal)

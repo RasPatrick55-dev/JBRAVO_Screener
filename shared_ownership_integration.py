@@ -27,7 +27,13 @@ def assemble_ownership(native, bound, *, root, pins):
     need(Path(runtime.__file__).resolve() == root / 'scripts/strategy_execution_runtime.py',
          'shared_ownership_runtime_identity_changed')
     guard = runtime.source_guard
-    lifecycle = modules['strategy_order_lifecycle']
+    lifecycle_module = modules['strategy_order_lifecycle']
+    class CanonicalLifecycle:
+        def monitor_engine(self,Engine,*,require_marker=False):
+            return lifecycle_module.monitor_engine(Engine,require_marker=require_marker,
+                                                   source_variant='canonical')
+        def __getattr__(self,name):return getattr(lifecycle_module,name)
+    lifecycle = CanonicalLifecycle()
     Engine = modules['strategy_execution_engine'].Engine
     # The lifecycle module checks exact sync/tick source and deadline expressions.
     lifecycle.monitor_engine(Engine)
@@ -48,6 +54,11 @@ def assemble_ownership(native, bound, *, root, pins):
         return value
     load_config()
     class EntryRuntime:
+        def guard_for(self,env,*,base_dir=root):
+            # Entry-only callers already hold the account/source leases and run
+            # direct broker ownership/preflight checks before every placement.
+            # Monitor receipts are lifecycle reports, never entry admission.
+            return bound.entry_runtime.guard_for(env,base_dir=base_dir,pipeline_entry_only=True)
         def __getattr__(self,name):return getattr(bound.entry_runtime,name)
     facade=EntryRuntime()
     facade.load_config=load_config
@@ -80,7 +91,8 @@ def assemble_ownership(native, bound, *, root, pins):
     health.publish_receipt=receipt.publish_receipt
     need(runtime.source_guard is guard, 'shared_ownership_guard_changed')
     return {'entry_only': True, 'lifecycle_owner': 'MONITOR_POSITIONS',
-            'source_guard_preserved': True, 'monitor_readiness_gate_preserved': True,
+            'source_guard_preserved': True, 'legacy_monitor_gate_preserved': True,
+            'entry_monitor_dependency': False, 'direct_ownership_preflight_retained': True,
             'monitor_installation': monitor_proof, 'receipt_policy_composed': True,
             'entry_invocations': 0, 'broker_calls': 0, 'database_calls': 0,
             'activation_authorized': False}

@@ -233,9 +233,25 @@ class Engine:
         position=payload.get('position')
         if position is None:
             fill_time=entry.get('filled_at') or entry.get('updated_at')
+            # Monitor process mode does not change a historical signal's contract.
+            handoff=payload['handoff']
+            model=handoff.get('execution_policy',{}).get('model')
+            require(model in {rules.EXECUTION_MODEL,rules.PIPELINE_LIMIT_MODEL} and
+                rules.digest({k:v for k,v in handoff.items() if k!='handoff_id'})==handoff.get('handoff_id'),
+                'strategy_fill_handoff_contract_changed')
+            pipeline_fill=model==rules.PIPELINE_LIMIT_MODEL
+            if pipeline_fill:
+                require(handoff.get('pipeline_limit_placement_v2') is True and
+                    isinstance(handoff.get('pipeline_limit_order'),dict) and
+                    isinstance(handoff.get('pipeline_limit_published_at'),str),
+                    'strategy_fill_pipeline_contract_missing')
+            else:
+                require(not any(k in handoff for k in ('pipeline_limit_placement_v2',
+                    'pipeline_limit_order','pipeline_limit_published_at')),
+                    'strategy_fill_handoff_contract_changed')
             position=rules.initial_position(payload['proposal'],quantity=remaining,
                 fill_price=entry['filled_avg_price'],filled_at=fill_time,
-                **({'pipeline_handoff':payload['handoff']} if self.pipeline_orders else {}))
+                **({'pipeline_handoff':handoff} if pipeline_fill else {}))
             payload['entry_fill_timestamp_utc']=rules.utc(fill_time).isoformat()
             payload['fill_time_basis']='FILLED_AT' if entry.get('filled_at') else 'VERIFIED_PARTIAL_QUANTITY_BROKER_UPDATE'
         else:

@@ -170,7 +170,8 @@ def store_connection(env,broker):
         conn.rollback();conn.close();raise
 
 
-def guard_for(env,*,base_dir=ROOT):
+def guard_for(env,*,base_dir=ROOT,pipeline_entry_only=False):
+    require(type(pipeline_entry_only) is bool,'strategy_entry_guard_mode_invalid')
     def guard(kind,signal):
         require(os.environ.get('APCA_API_BASE_URL')=='https://paper-api.alpaca.markets' and
             os.environ.get('JBR_EXEC_PAPER')=='true','strategy_paper_process_context_changed')
@@ -184,6 +185,10 @@ def guard_for(env,*,base_dir=ROOT):
             if pipeline_limit:
                 require(handoff.get('execution_policy',{}).get('model')==rules.PIPELINE_LIMIT_MODEL,
                         'execution_pipeline_model_changed_before_post')
+            if pipeline_entry_only:
+                require(pipeline_limit, 'strategy_entry_only_pipeline_required')
+                from scripts.strategy_order_lifecycle import cancellation_deadline
+                cancellation_deadline(signal['payload'],require_marker=True)
             queue=pipeline_execution_queue(verified) if pipeline_limit else execution_queue(verified)
             matching=[r for r in queue if r['proposal']['signal_id']==signal['signal_id']]
             require(len(matching)==1 and matching[0]['handoff']['unified_selection']==handoff.get('unified_selection'),
@@ -202,7 +207,8 @@ def guard_for(env,*,base_dir=ROOT):
                 current['batch_sha256']==handoff['batch_sha256'],'strategy_entry_batch_changed_before_post')
             now=datetime.now(timezone.utc);opening=rules.utc(handoff['execution_policy']['entry_open_at'])
             require(opening<=now<opening+timedelta(seconds=60),'strategy_initial_entry_window_expired')
-            monitor_ready(handoff,signal['payload']['account_id'],now=now,base_dir=base_dir)
+            if not pipeline_entry_only:
+                monitor_ready(handoff,signal['payload']['account_id'],now=now,base_dir=base_dir)
         return True
     return guard
 
