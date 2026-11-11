@@ -1,0 +1,563 @@
+{
+  "schema_version": "jbravo.trades-overview.v1",
+  "ok": true,
+  "status": "partial",
+  "reason": null,
+  "cohort_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "source": "postgres",
+  "view_scope": "COMBINED_STORED_EXECUTION_GROSS",
+  "performance_status": "COMBINED_GROSS_ONLY",
+  "strategy_account_binding": "verified",
+  "legacy_account_binding": "unverified",
+  "policy_validation_status": "VALIDATED_POLICY",
+  "population_complete": true,
+  "observed_at": "2001-02-03T12:00:00+00:00",
+  "source_as_of": "2001-02-03T11:00:00+00:00",
+  "source_freshness": "STORED_EVIDENCE_NOT_LIVE_BROKER_COMPLETENESS",
+  "qualified_net_status": "NOT_ESTABLISHED",
+  "net_eligible": false,
+  "accounting_complete": false,
+  "recovery_complete": false,
+  "entry_ready": false,
+  "fees": null,
+  "net_pnl": null,
+  "fees_status": "UNKNOWN",
+  "net_status": "UNKNOWN",
+  "coverage": {
+    "included": 3,
+    "excluded": 1,
+    "unknown": 1,
+    "deduplicated": 0,
+    "strategy_not_closed": 2,
+    "by_source": {
+      "legacy": {
+        "included": 1,
+        "excluded": 1,
+        "unknown": 0
+      },
+      "strategy": {
+        "included": 2,
+        "excluded": 0,
+        "unknown": 1
+      }
+    }
+  },
+  "rows": [
+    {
+      "row_id": "strategy:8888888888888888888888888888888888888888888888888888888888888888",
+      "source_kind": "STRATEGY_EXECUTION",
+      "trade_id": null,
+      "signal_id": "8888888888888888888888888888888888888888888888888888888888888888",
+      "symbol": "DECLINE",
+      "state": "CLOSED",
+      "inclusion": "INCLUDED",
+      "reason": null,
+      "account_binding": "verified",
+      "entry_time": "2001-02-03T10:00:00+00:00",
+      "exit_time": "2001-02-03T11:00:00+00:00",
+      "recorded_entry_time": null,
+      "recorded_exit_time": null,
+      "holding_days": 0,
+      "qty": "40",
+      "entry_price": "10",
+      "exit_price": "9",
+      "gross_pnl": "-40",
+      "recorded_pnl": null,
+      "fees": null,
+      "net_pnl": null,
+      "price_basis": "STORED_ORDER_FILL_AVERAGES",
+      "ownership_scope": "STRATEGY_SIGNAL"
+    },
+    {
+      "row_id": "strategy:7777777777777777777777777777777777777777777777777777777777777777",
+      "source_kind": "STRATEGY_EXECUTION",
+      "trade_id": null,
+      "signal_id": "7777777777777777777777777777777777777777777777777777777777777777",
+      "symbol": "SYNTH",
+      "state": "CLOSED",
+      "inclusion": "INCLUDED",
+      "reason": null,
+      "account_binding": "verified",
+      "entry_time": "2001-02-03T10:00:00+00:00",
+      "exit_time": "2001-02-03T11:00:00+00:00",
+      "recorded_entry_time": null,
+      "recorded_exit_time": null,
+      "holding_days": 0,
+      "qty": "40",
+      "entry_price": "10",
+      "exit_price": "12",
+      "gross_pnl": "80",
+      "recorded_pnl": null,
+      "fees": null,
+      "net_pnl": null,
+      "price_basis": "STORED_ORDER_FILL_AVERAGES",
+      "ownership_scope": "STRATEGY_SIGNAL"
+    },
+    {
+      "row_id": "legacy:9002",
+      "source_kind": "LEGACY_EXECUTION",
+      "trade_id": 9002,
+      "signal_id": null,
+      "symbol": "EXCL",
+      "state": "CLOSED",
+      "inclusion": "POLICY_EXCLUDED",
+      "reason": "LEGACY_POLICY_EXCLUDED",
+      "account_binding": "unverified",
+      "entry_time": null,
+      "exit_time": null,
+      "recorded_entry_time": "2001-02-03T10:00:00+00:00",
+      "recorded_exit_time": "2001-02-03T11:00:00+00:00",
+      "holding_days": null,
+      "qty": null,
+      "entry_price": null,
+      "exit_price": null,
+      "gross_pnl": null,
+      "recorded_pnl": "2",
+      "fees": null,
+      "net_pnl": null,
+      "price_basis": "RECORDED_LEDGER",
+      "ownership_scope": null
+    },
+    {
+      "row_id": "legacy:9001",
+      "source_kind": "LEGACY_EXECUTION",
+      "trade_id": 9001,
+      "signal_id": null,
+      "symbol": "FICT",
+      "state": "CLOSED",
+      "inclusion": "INCLUDED",
+      "reason": null,
+      "account_binding": "unverified",
+      "entry_time": "2001-02-03T10:00:00+00:00",
+      "exit_time": "2001-02-03T11:00:00+00:00",
+      "recorded_entry_time": "2001-02-03T10:00:00+00:00",
+      "recorded_exit_time": "2001-02-03T11:00:00+00:00",
+      "holding_days": 0,
+      "qty": "2",
+      "entry_price": "10",
+      "exit_price": "11",
+      "gross_pnl": "4",
+      "recorded_pnl": "2",
+      "fees": null,
+      "net_pnl": null,
+      "price_basis": "RECORDED_LEDGER",
+      "ownership_scope": null
+    },
+    {
+      "row_id": "strategy:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source_kind": "STRATEGY_EXECUTION",
+      "trade_id": null,
+      "signal_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "symbol": "MISSING",
+      "state": "CLOSED",
+      "inclusion": "UNKNOWN",
+      "reason": "fill_timestamp_missing_or_invalid",
+      "account_binding": "verified",
+      "entry_time": null,
+      "exit_time": null,
+      "recorded_entry_time": null,
+      "recorded_exit_time": null,
+      "holding_days": null,
+      "qty": null,
+      "entry_price": null,
+      "exit_price": null,
+      "gross_pnl": null,
+      "recorded_pnl": null,
+      "fees": null,
+      "net_pnl": null,
+      "price_basis": "STORED_ORDER_FILL_AVERAGES",
+      "ownership_scope": "STRATEGY_SIGNAL"
+    }
+  ],
+  "stats": [
+    {
+      "key": "d",
+      "label": "DAILY",
+      "tradesCount": 3,
+      "totalPL": "44",
+      "winRatePct": 66.66666666666667,
+      "topTrade": {
+        "symbol": "SYNTH",
+        "pl": "80"
+      },
+      "worstLoss": {
+        "symbol": "DECLINE",
+        "pl": "-40"
+      },
+      "coverage": {
+        "included": 3,
+        "excluded": 1,
+        "unknown": 1,
+        "deduplicated": 0,
+        "strategy_not_closed": 2,
+        "by_source": {
+          "legacy": {
+            "included": 1,
+            "excluded": 1,
+            "unknown": 0
+          },
+          "strategy": {
+            "included": 2,
+            "excluded": 0,
+            "unknown": 1
+          }
+        }
+      }
+    },
+    {
+      "key": "w",
+      "label": "WEEKLY",
+      "tradesCount": null,
+      "totalPL": null,
+      "winRatePct": null,
+      "topTrade": {
+        "symbol": "--",
+        "pl": null
+      },
+      "worstLoss": {
+        "symbol": "--",
+        "pl": null
+      },
+      "coverage": null,
+      "period": {
+        "status": "unavailable",
+        "source": "alpaca_calendar",
+        "timezone": "America/New_York",
+        "as_of": "2001-02-03T12:00:00+00:00",
+        "label": "Trading calendar unavailable; period results unknown"
+      }
+    },
+    {
+      "key": "m",
+      "label": "MONTHLY",
+      "tradesCount": null,
+      "totalPL": null,
+      "winRatePct": null,
+      "topTrade": {
+        "symbol": "--",
+        "pl": null
+      },
+      "worstLoss": {
+        "symbol": "--",
+        "pl": null
+      },
+      "coverage": null,
+      "period": {
+        "status": "unavailable",
+        "source": "alpaca_calendar",
+        "timezone": "America/New_York",
+        "as_of": "2001-02-03T12:00:00+00:00",
+        "label": "Trading calendar unavailable; period results unknown"
+      }
+    },
+    {
+      "key": "y",
+      "label": "YEARLY",
+      "tradesCount": 3,
+      "totalPL": "44",
+      "winRatePct": 66.66666666666667,
+      "topTrade": {
+        "symbol": "SYNTH",
+        "pl": "80"
+      },
+      "worstLoss": {
+        "symbol": "DECLINE",
+        "pl": "-40"
+      },
+      "coverage": {
+        "included": 3,
+        "excluded": 1,
+        "unknown": 1,
+        "deduplicated": 0,
+        "strategy_not_closed": 2,
+        "by_source": {
+          "legacy": {
+            "included": 1,
+            "excluded": 1,
+            "unknown": 0
+          },
+          "strategy": {
+            "included": 2,
+            "excluded": 0,
+            "unknown": 1
+          }
+        }
+      }
+    },
+    {
+      "key": "all",
+      "label": "ALL",
+      "tradesCount": 3,
+      "totalPL": "44",
+      "winRatePct": 66.66666666666667,
+      "topTrade": {
+        "symbol": "SYNTH",
+        "pl": "80"
+      },
+      "worstLoss": {
+        "symbol": "DECLINE",
+        "pl": "-40"
+      },
+      "coverage": {
+        "included": 3,
+        "excluded": 1,
+        "unknown": 1,
+        "deduplicated": 0,
+        "strategy_not_closed": 2,
+        "by_source": {
+          "legacy": {
+            "included": 1,
+            "excluded": 1,
+            "unknown": 0
+          },
+          "strategy": {
+            "included": 2,
+            "excluded": 0,
+            "unknown": 1
+          }
+        }
+      }
+    }
+  ],
+  "rankings": {
+    "d": {
+      "winners": [
+        {
+          "rank": 1,
+          "symbol": "SYNTH",
+          "pl": "80"
+        },
+        {
+          "rank": 2,
+          "symbol": "FICT",
+          "pl": "4"
+        }
+      ],
+      "losers": [
+        {
+          "rank": 1,
+          "symbol": "DECLINE",
+          "pl": "-40"
+        }
+      ]
+    },
+    "w": null,
+    "m": null,
+    "y": {
+      "winners": [
+        {
+          "rank": 1,
+          "symbol": "SYNTH",
+          "pl": "80"
+        },
+        {
+          "rank": 2,
+          "symbol": "FICT",
+          "pl": "4"
+        }
+      ],
+      "losers": [
+        {
+          "rank": 1,
+          "symbol": "DECLINE",
+          "pl": "-40"
+        }
+      ]
+    },
+    "all": {
+      "winners": [
+        {
+          "rank": 1,
+          "symbol": "SYNTH",
+          "pl": "80"
+        },
+        {
+          "rank": 2,
+          "symbol": "FICT",
+          "pl": "4"
+        }
+      ],
+      "losers": [
+        {
+          "rank": 1,
+          "symbol": "DECLINE",
+          "pl": "-40"
+        }
+      ]
+    }
+  },
+  "strategy_history": {
+    "schema_version": "jbravo.strategy-history.v1",
+    "ok": true,
+    "status": "partial",
+    "source": "postgres_strategy_execution",
+    "trade_view": "STRATEGY_EXECUTION_HISTORY",
+    "evidence_basis": "STORED_BROKER_ORDER_OBSERVATIONS",
+    "freshness": "stored_observations_not_live",
+    "broker_account_match": "verified",
+    "accounting_complete": false,
+    "fees_status": "UNKNOWN_UNALLOCATED",
+    "net_status": "UNKNOWN",
+    "observed_at": "2001-02-03T12:00:00+00:00",
+    "source_as_of": "2001-02-03T12:00:00+00:00",
+    "limit": 25,
+    "has_more": false,
+    "legacy_overlap_count": 0,
+    "account_scope": "configured_paper_broker",
+    "performance_status": "NOT_QUALIFIED_STRATEGY_HISTORY",
+    "rows": [
+      {
+        "signal_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "symbol": "MISSING",
+        "strategy_id": "synthetic-pattern",
+        "state": "CLOSED",
+        "status": "incomplete",
+        "reason": "fill_timestamp_missing_or_invalid",
+        "entry_qty": null,
+        "exited_qty": null,
+        "remaining_qty": null,
+        "entry_avg_price": null,
+        "exit_avg_price": null,
+        "entry_time": null,
+        "exit_time": null,
+        "gross_realized_pnl": null,
+        "fees": null,
+        "net_realized_pnl": null,
+        "fees_status": "UNKNOWN_UNALLOCATED",
+        "completion_status": "UNVERIFIED",
+        "updated_at": "2001-02-03T12:00:00+00:00",
+        "entry_order_ids": [],
+        "exit_order_ids": [],
+        "evidence_basis": "STORED_BROKER_ORDER_OBSERVATIONS",
+        "ownership_scope": "STRATEGY_SIGNAL",
+        "ownership_basis": "STORED_SIGNAL_PAYLOAD_NOT_REVALIDATED",
+        "combined_inclusion": "UNKNOWN",
+        "combined_reason": "fill_timestamp_missing_or_invalid"
+      },
+      {
+        "signal_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "symbol": "UNFILLED",
+        "strategy_id": "synthetic-pattern",
+        "state": "EXPIRED",
+        "status": "partial",
+        "reason": "entry_not_filled",
+        "entry_qty": 0,
+        "exited_qty": 0,
+        "remaining_qty": 0,
+        "entry_avg_price": null,
+        "exit_avg_price": null,
+        "entry_time": null,
+        "exit_time": null,
+        "gross_realized_pnl": null,
+        "fees": null,
+        "net_realized_pnl": null,
+        "fees_status": "UNKNOWN_UNALLOCATED",
+        "completion_status": "NO_ENTRY_FILL_OBSERVED",
+        "updated_at": "2001-02-03T12:00:00+00:00",
+        "entry_order_ids": [
+          "fixture-aaaa-entry"
+        ],
+        "exit_order_ids": [],
+        "evidence_basis": "STORED_BROKER_ORDER_OBSERVATIONS",
+        "ownership_scope": "STRATEGY_SIGNAL",
+        "ownership_basis": "STORED_SIGNAL_PAYLOAD_NOT_REVALIDATED",
+        "combined_inclusion": "NOT_CLOSED",
+        "combined_reason": "NATIVE_POSITION_NOT_CLOSED"
+      },
+      {
+        "signal_id": "9999999999999999999999999999999999999999999999999999999999999999",
+        "symbol": "RECOG",
+        "strategy_id": "synthetic-pattern",
+        "state": "OPEN",
+        "status": "partial",
+        "reason": "position_not_fully_exited",
+        "entry_qty": 40.0,
+        "exited_qty": 0.0,
+        "remaining_qty": 40.0,
+        "entry_avg_price": 10.0,
+        "exit_avg_price": null,
+        "entry_time": "2001-02-03T10:00:00+00:00",
+        "exit_time": null,
+        "gross_realized_pnl": null,
+        "fees": null,
+        "net_realized_pnl": null,
+        "fees_status": "UNKNOWN_UNALLOCATED",
+        "completion_status": "NO_EXIT_OBSERVED",
+        "updated_at": "2001-02-03T12:00:00+00:00",
+        "entry_order_ids": [
+          "fixture-9999-entry"
+        ],
+        "exit_order_ids": [],
+        "evidence_basis": "STORED_BROKER_ORDER_OBSERVATIONS",
+        "ownership_scope": "ENTRY_RECOGNITION_ONLY_NO_POSITION_ORDERS",
+        "ownership_basis": "STORED_SIGNAL_PAYLOAD_NOT_REVALIDATED",
+        "combined_inclusion": "NOT_CLOSED",
+        "combined_reason": "NATIVE_POSITION_NOT_CLOSED"
+      },
+      {
+        "signal_id": "8888888888888888888888888888888888888888888888888888888888888888",
+        "symbol": "DECLINE",
+        "strategy_id": "synthetic-pattern",
+        "state": "CLOSED",
+        "status": "complete",
+        "reason": null,
+        "entry_qty": 40.0,
+        "exited_qty": 40.0,
+        "remaining_qty": 0.0,
+        "entry_avg_price": 10.0,
+        "exit_avg_price": 9.0,
+        "entry_time": "2001-02-03T10:00:00+00:00",
+        "exit_time": "2001-02-03T11:00:00+00:00",
+        "gross_realized_pnl": -40.0,
+        "fees": null,
+        "net_realized_pnl": null,
+        "fees_status": "UNKNOWN_UNALLOCATED",
+        "completion_status": "FULL_EXIT_OBSERVED",
+        "updated_at": "2001-02-03T12:00:00+00:00",
+        "entry_order_ids": [
+          "fixture-8888-entry"
+        ],
+        "exit_order_ids": [
+          "fixture-8888-exit"
+        ],
+        "evidence_basis": "STORED_BROKER_ORDER_OBSERVATIONS",
+        "ownership_scope": "STRATEGY_SIGNAL",
+        "ownership_basis": "STORED_SIGNAL_PAYLOAD_NOT_REVALIDATED",
+        "combined_inclusion": "INCLUDED",
+        "combined_reason": null
+      },
+      {
+        "signal_id": "7777777777777777777777777777777777777777777777777777777777777777",
+        "symbol": "SYNTH",
+        "strategy_id": "synthetic-pattern",
+        "state": "CLOSED",
+        "status": "complete",
+        "reason": null,
+        "entry_qty": 40.0,
+        "exited_qty": 40.0,
+        "remaining_qty": 0.0,
+        "entry_avg_price": 10.0,
+        "exit_avg_price": 12.0,
+        "entry_time": "2001-02-03T10:00:00+00:00",
+        "exit_time": "2001-02-03T11:00:00+00:00",
+        "gross_realized_pnl": 80.0,
+        "fees": null,
+        "net_realized_pnl": null,
+        "fees_status": "UNKNOWN_UNALLOCATED",
+        "completion_status": "FULL_EXIT_OBSERVED",
+        "updated_at": "2001-02-03T12:00:00+00:00",
+        "entry_order_ids": [
+          "fixture-7777-entry"
+        ],
+        "exit_order_ids": [
+          "fixture-7777-exit"
+        ],
+        "evidence_basis": "STORED_BROKER_ORDER_OBSERVATIONS",
+        "ownership_scope": "STRATEGY_SIGNAL",
+        "ownership_basis": "STORED_SIGNAL_PAYLOAD_NOT_REVALIDATED",
+        "combined_inclusion": "INCLUDED",
+        "combined_reason": null
+      }
+    ]
+  }
+}

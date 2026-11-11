@@ -34,7 +34,7 @@ import urllib.request
 from urllib.parse import quote, urlencode, urlsplit
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
-from flask import Response, abort, jsonify, send_from_directory, request
+from flask import Response, abort, g, jsonify, send_from_directory, request
 from plotly.subplots import make_subplots
 from scripts import db
 from scripts.utils.alpaca_account import account_equity
@@ -2142,35 +2142,13 @@ def _build_latest_trades_rows(frame: pd.DataFrame, limit: int) -> list[dict[str,
 def _record_trades_api_request(
     *, endpoint: str, params: Mapping[str, Any], source: str, rows_returned: int
 ) -> bool:
-    conn = db.get_db_conn()
-    if conn is None:
-        return False
+    """Retain the response contract without writing telemetry during display GETs.
 
-    payload = json.dumps({key: _serialize_record(value) for key, value in params.items()})
-    try:
-        with conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO trades_api_requests (endpoint, params, source, rows_returned)
-                    VALUES (%(endpoint)s, CAST(%(params)s AS JSONB), %(source)s, %(rows_returned)s)
-                    """,
-                    {
-                        "endpoint": endpoint,
-                        "params": payload,
-                        "source": source,
-                        "rows_returned": int(rows_returned),
-                    },
-                )
-        return True
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning("[WARN] TRADES_API_RECORD_FAIL endpoint=%s err=%s", endpoint, exc)
-        return False
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    A second database connection and an unbounded INSERT must not delay a ready
+    result or an honest held result. Existing telemetry history is untouched.
+    ``recorded_to_db`` reports this invocation, so the truthful value is false.
+    """
+    return False
 
 
 def _account_latest_db() -> dict[str, Any]:
@@ -5722,6 +5700,27 @@ app = Dash(
 server = app.server
 
 
+@server.before_request
+def _api_request_started() -> None:
+    if request.path.startswith("/api/"):
+        g._dashboard_request_started = time.perf_counter()
+
+
+@server.after_request
+def _api_server_timing(response: Response) -> Response:
+    """Time non-streaming handlers, excluding time queued before Flask admission.
+
+    Only a fixed metric name and a finite number are public. Streaming work
+    executes after this hook, so it must not receive a misleading duration.
+    """
+    started = getattr(g, "_dashboard_request_started", None)
+    if request.path.startswith("/api/") and not response.is_streamed and started is not None:
+        milliseconds = (time.perf_counter() - started) * 1000
+        if math.isfinite(milliseconds) and milliseconds >= 0:
+            response.headers["Server-Timing"] = f"web_handler;dur={milliseconds:.3f}"
+    return response
+
+
 @server.after_request
 def _api_cors_headers(response: Response) -> Response:
     path = str(getattr(request, "path", "") or "")
@@ -6114,9 +6113,31 @@ def api_trades_history():
     return _json_no_store(source_contracts.physical_history(db.get_db_conn, limit=limit, before=before, derived_identity=derived_identity))
 
 
+@server.route("/api/trades/strategy-history")
+def api_trades_strategy_history():
+    from dashboards import strategy_trade_history
+    limit = _parse_positive_int(request.args.get("limit"), default=25, minimum=1, maximum=50)
+    client, _context = _dashboard_broker_context()
+    identity = _dashboard_read_policy_identity()
+    return _json_no_store(strategy_trade_history.snapshot(
+        lambda: strategy_trade_history.connect_current_db(db), client, identity, limit=limit))
+
+
 def _execution_gross_db_conn():
     from dashboards.execution_gross_projection import connect_current_db
     return connect_current_db(db)
+
+
+@server.route("/api/trades/combined-gross")
+def api_trades_combined_gross():
+    from dashboards import combined_trade_gross
+    try:
+        client, _context = _dashboard_broker_context()
+        identity = _dashboard_read_policy_identity()
+    except Exception:
+        return _json_no_store(combined_trade_gross.context_unavailable())
+    return _json_no_store(combined_trade_gross.snapshot(
+        _execution_gross_db_conn, client, identity))
 
 
 @server.route("/api/trades/stats")
@@ -8855,7 +8876,14 @@ def api_execute_state():
 
 @server.route("/api/execute/state/stream")
 def api_execute_state_stream():
-    return _execute_sse_response(_execute_state_payload, interval_seconds=5.0)
+    # Cached clients still know this URL. HTTP 204 tells EventSource not to
+    # reconnect; merely ending a stream would repeatedly occupy WSGI workers.
+    # The existing finite /api/execute/state fallback remains available.
+    response = Response(status=204)
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @server.route("/api/execute/audit")

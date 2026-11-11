@@ -114,7 +114,7 @@ export default function TrailingStopsCard({ rows, isLoading, hasError }: Props) 
               {!isLoading && visibleRows.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-3 py-8 text-center text-sm text-secondary">
-                    No trailing-stop observations in this response.
+                    {hasError ? "Trailing-stop source unavailable; current protection is unverified." : "No trailing-stop observations in this response."}
                   </td>
                 </tr>
               ) : null}

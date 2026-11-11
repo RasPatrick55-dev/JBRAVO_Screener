@@ -8,6 +8,7 @@ interface TradesPerformanceBoardProps {
   statusMessage?: string | null;
   sourceNote?: string;
   gross?: boolean;
+  unknownLabel?: string;
 }
 
 const percentFormatter = new Intl.NumberFormat("en-US", {
@@ -42,9 +43,9 @@ const plToneClass = (value: number | null): string => {
 
 function MobileMetric({ label, value, toneClass = "text-primary" }: { label: string; value: string; toneClass?: string }) {
   return (
-    <div className="rounded-md px-2.5 py-2 jbravo-panel-inner jbravo-panel-inner-cyan">
+    <div className="min-w-0 rounded-md px-2.5 py-2 jbravo-panel-inner jbravo-panel-inner-cyan">
       <p className={metricLabelClass}>{label}</p>
-      <p className={`font-cousine mt-1 text-sm font-bold tabular-nums ${toneClass}`}>{value}</p>
+      <p className={`break-words font-cousine mt-1 text-sm font-bold tabular-nums ${toneClass}`}>{value}</p>
     </div>
   );
 }
@@ -55,14 +56,16 @@ export default function TradesPerformanceBoard({
   statusMessage = null,
   sourceNote,
   gross = false,
+  unknownLabel = "--",
 }: TradesPerformanceBoardProps) {
+  const currency = (value: number | null) => value === null ? unknownLabel : formatSignedCurrency(value);
   const sortedRows = useMemo(
     () => [...rows].sort((left, right) => rangeOrder[left.key] - rangeOrder[right.key]),
     [rows]
   );
 
   return (
-    <section className="rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-cyan" aria-label="Performance board">
+    <section className="min-w-0 max-w-full rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-cyan" aria-label="Performance board">
       <h2 className="sr-only">Performance board</h2>
       {sourceNote ? <p className="mb-2 text-xs text-secondary" role="status">{sourceNote}</p> : null}
 
@@ -93,26 +96,27 @@ export default function TradesPerformanceBoard({
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="font-arimo text-xs font-semibold uppercase tracking-[0.08em] text-secondary">{row.label}</h3>
                   <span className="font-cousine text-xs font-semibold tabular-nums text-primary">
-                    {numberFormatter.format(row.tradesCount)} TRADES
+                    {row.tradesCount === null ? unknownLabel : numberFormatter.format(row.tradesCount)} TRADES
                   </span>
                 </div>
 
+                {row.periodLabel ? <p className="text-xs text-secondary">{row.periodLabel}</p> : null}
                 {gross && row.coverage ? <p className="text-xs text-secondary">{row.coverage.included} included / {row.coverage.excluded} excluded / {row.coverage.unknown} unknown</p> : null}
                 <div className="mt-2 grid grid-cols-2 gap-2">
-                  <MobileMetric label={gross ? "Gross Win Rate (known)" : "Win Rate"} value={row.winRatePct === null ? "--" : `${percentFormatter.format(row.winRatePct)}%`} />
+                  <MobileMetric label={gross ? "Gross Win Rate (known)" : "Win Rate"} value={row.winRatePct === null ? unknownLabel : `${percentFormatter.format(row.winRatePct)}%`} />
                   <MobileMetric
                     label={gross ? "Known Gross P/L" : "Total P/L"}
-                    value={formatSignedCurrency(row.totalPL)}
+                    value={currency(row.totalPL)}
                     toneClass={plToneClass(row.totalPL)}
                   />
                   <MobileMetric
                     label={gross ? "Best Gross Trade" : "Top Trade"}
-                    value={`${row.topTrade.symbol} ${formatSignedCurrency(row.topTrade.pl)}`}
+                    value={`${row.topTrade.symbol} ${currency(row.topTrade.pl)}`}
                     toneClass={plToneClass(row.topTrade.pl)}
                   />
                   <MobileMetric
                     label={gross ? "Worst Gross Trade" : "Worst Loss"}
-                    value={`${row.worstLoss.symbol} ${formatSignedCurrency(row.worstLoss.pl)}`}
+                    value={`${row.worstLoss.symbol} ${currency(row.worstLoss.pl)}`}
                     toneClass={plToneClass(row.worstLoss.pl)}
                   />
                 </div>
@@ -191,36 +195,37 @@ export default function TradesPerformanceBoard({
                         className="font-arimo px-2 py-2.5 text-center text-xs font-semibold uppercase tracking-[0.08em] text-secondary"
                       >
                         {row.label}
+                        {row.periodLabel ? <p className="mt-1 text-[10px] font-normal normal-case text-secondary">{row.periodLabel}</p> : null}
                       </th>
                       <td className="px-2 py-2.5 text-center">
                         {!gross ? <p className={metricLabelClass}>Win Rate</p> : null}
                         <p className={`font-cousine ${gross ? "" : "mt-1 "}text-sm font-bold text-primary tabular-nums`}>
-                          {row.winRatePct === null ? "--" : `${percentFormatter.format(row.winRatePct)}%`}
+                          {row.winRatePct === null ? unknownLabel : `${percentFormatter.format(row.winRatePct)}%`}
                         </p>
                       </td>
                       <td className="px-2 py-2.5 text-center">
                         {!gross ? <p className={metricLabelClass}>Total P/L</p> : null}
                         <p className={`font-cousine ${gross ? "" : "mt-1 "}text-sm font-bold tabular-nums ${totalTone}`}>
-                          {formatSignedCurrency(row.totalPL)}
+                          {currency(row.totalPL)}
                         </p>
                       </td>
                       <td className="px-2 py-2.5 text-center">
                         {!gross ? <p className={metricLabelClass}>Top Trade</p> : null}
                         <p className={`font-cousine ${gross ? "" : "mt-1 "}text-sm font-bold text-primary tabular-nums`}>
                           {row.topTrade.symbol}{" "}
-                          <span className={topTone}>{formatSignedCurrency(row.topTrade.pl)}</span>
+                          <span className={topTone}>{currency(row.topTrade.pl)}</span>
                         </p>
                       </td>
                       <td className="px-2 py-2.5 text-center">
                         {!gross ? <p className={metricLabelClass}>Worst Loss</p> : null}
                         <p className={`font-cousine ${gross ? "" : "mt-1 "}text-sm font-bold text-primary tabular-nums`}>
                           {row.worstLoss.symbol}{" "}
-                          <span className={worstTone}>{formatSignedCurrency(row.worstLoss.pl)}</span>
+                          <span className={worstTone}>{currency(row.worstLoss.pl)}</span>
                         </p>
                       </td>
                       <td className="font-cousine px-2 py-2.5 text-center text-sm font-bold text-primary tabular-nums">
                         {!gross ? <p className={metricLabelClass}>Trades</p> : null}
-                        <p className={gross ? undefined : "mt-1"}>{numberFormatter.format(row.tradesCount)}</p>
+                        <p className={gross ? undefined : "mt-1"}>{row.tradesCount === null ? unknownLabel : numberFormatter.format(row.tradesCount)}</p>
                         {gross && row.coverage ? <small className="text-secondary">{row.coverage.excluded} excluded / {row.coverage.unknown} unknown</small> : null}
                       </td>
                     </tr>

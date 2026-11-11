@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { NavbarDesktopProps, StatusTone } from "../../types/ui";
-import { deadlineRead } from "../ui/sourceState";
+import { pollRead, readJson } from "../ui/readLifecycle";
 
 export type ApiHealthResponse = {
   freshness?: {age_seconds?: number | null; freshness_level?: string | null};
@@ -16,7 +16,6 @@ type TradingStatus = boolean | null;
 export type LiveDataSyncState = "loading" | "ready" | "error";
 
 const POLL_INTERVAL_MS = 15_000;
-const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_CHECK_AGE_MS = 7_200_000;
 
 const liveToneFromStatus = (status: TradingStatus): StatusTone => {
@@ -56,28 +55,19 @@ export const parseTradingStatus = (payload: ApiHealthResponse | null, now=Date.n
 };
 
 export function watchTradingStatus(publish: (value: TradingStatus)=>void, transport: typeof fetch=fetch) {
-  let active=true, inFlight=false;
+  let active=true;
   let payload: ApiHealthResponse | null=null;
   let last: TradingStatus | undefined;
   const emit=(value:TradingStatus)=>{if(active && value !== last){last=value;publish(value);}};
   emit(null);
-  const load=async()=>{
-    if(!active || inFlight)return;
-    inFlight=true;
-    try {
-      const next=await deadlineRead(async signal=>{
-        const response=await transport("/api/health",{cache:"no-store",headers:{Accept:"application/json"},signal});
-        if(!response.ok)throw new Error("stored_check_unavailable");
-        return await response.json() as ApiHealthResponse;
-      },REQUEST_TIMEOUT_MS);
-      if(active){payload=next;emit(parseTradingStatus(payload));}
-    }catch{payload=null;emit(null);}
-    finally{inFlight=false;}
-  };
-  void load();
-  const poll=globalThis.setInterval(()=>void load(),POLL_INTERVAL_MS);
+  const polling = pollRead({
+    interval: POLL_INTERVAL_MS,
+    read: async signal => await readJson("/api/health", signal, transport) as ApiHealthResponse,
+    success: next => { payload = next; emit(parseTradingStatus(payload)); },
+    failure: () => { payload = null; emit(null); },
+  });
   const expiry=globalThis.setInterval(()=>emit(parseTradingStatus(payload)),1000);
-  return ()=>{active=false;globalThis.clearInterval(poll);globalThis.clearInterval(expiry);};
+  return ()=>{active=false;polling.stop();globalThis.clearInterval(expiry);};
 };
 
 export const buildNavbarBadges = (

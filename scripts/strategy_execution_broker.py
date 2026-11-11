@@ -26,12 +26,14 @@ class PaperBroker:
     paper=True
     base_url=PAPER
 
-    def __init__(self,env,*,session=None,max_requests=96,now=None):
+    def __init__(self,env,*,session=None,max_requests=96,now=None,market_data=True):
         require(is_paper_endpoint(env.get('APCA_API_BASE_URL')) and env.get('JBR_EXEC_PAPER')=='true',
                 'strategy_paper_process_context_required')
         key,secret=env.get('APCA_API_KEY_ID'),env.get('APCA_API_SECRET_KEY')
         require(isinstance(key,str) and bool(key) and isinstance(secret,str) and bool(secret),
                 'strategy_paper_credentials_unavailable')
+        require(type(market_data) is bool,'strategy_broker_data_scope_invalid')
+        self.market_data=market_data
         if session is None:
             import requests
             session=requests.Session();session.trust_env=False
@@ -44,6 +46,7 @@ class PaperBroker:
         self.session.close()
 
     def request(self,method,path,*,params=None,payload=None,data=False,missing_ok=False):
+        require(not data or self.market_data,'strategy_entry_market_data_forbidden')
         trade_get=path in {'/v2/account','/v2/clock','/v2/positions','/v2/orders','/v2/orders:by_client_order_id'}
         asset=path.startswith('/v2/assets/') and SYMBOL.fullmatch(path[len('/v2/assets/'):]) is not None
         order=path.startswith('/v2/orders/') and ORDER.fullmatch(path[len('/v2/orders/'):]) is not None

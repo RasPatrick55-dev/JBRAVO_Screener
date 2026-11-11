@@ -198,7 +198,7 @@ export default function ExecutionLogsCard({ logs, isLoading, hasError }: Props) 
               {!isLoading && visibleRows.length === 0 ? (
                 <tr>
                   <td colSpan={3} className="px-3 py-8 text-center text-sm text-secondary">
-                    No execution logs available.
+                    {hasError ? "Execution log source unavailable; current activity is unknown." : "No execution logs available."}
                   </td>
                 </tr>
               ) : null}
@@ -238,7 +238,7 @@ export default function ExecutionLogsCard({ logs, isLoading, hasError }: Props) 
       </div>
 
       {hasError ? (
-        <p className="mt-3 text-xs text-rose-700 dark:text-rose-300">Execution logs endpoint unavailable. Showing fallback state.</p>
+        <p className="mt-3 text-xs text-rose-700 dark:text-rose-300">Execution logs endpoint unavailable. Any displayed rows are stale observations; current activity is unverified.</p>
       ) : null}
     </section>
   );

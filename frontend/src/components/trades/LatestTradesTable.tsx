@@ -95,7 +95,7 @@ export default function LatestTradesTable({
   footer,
 }: LatestTradesTableProps) {
   return (
-    <section className="rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-emerald" aria-label="Latest trades">
+    <section className="min-w-0 max-w-full rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-emerald" aria-label="Latest trades">
       <h2 className="font-arimo text-sm font-semibold uppercase tracking-[0.08em] text-primary">LATEST TRADES</h2>
       {sourceNote ? <p className="mt-1 text-xs text-secondary" role="status">{sourceNote}</p> : null}
       {sourceDetails ? <details className="mt-1 text-xs text-secondary"><summary>Source details</summary>{sourceDetails}</details> : null}

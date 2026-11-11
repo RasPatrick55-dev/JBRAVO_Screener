@@ -1,8 +1,10 @@
+import type { SourceKind } from "../ui/sourceState";
 import type { OrderLogLevel, OrderLogRow } from "./types";
 
 interface DailyOrderLogsCardProps {
   rows: OrderLogRow[];
   isLoading?: boolean;
+  sourceKind?: SourceKind;
 }
 
 const levelChipClass: Record<OrderLogLevel, string> = {
@@ -23,7 +25,7 @@ const formatTs = (value: string): string => {
   });
 };
 
-export default function DailyOrderLogsCard({ rows, isLoading = false }: DailyOrderLogsCardProps) {
+export default function DailyOrderLogsCard({ rows, isLoading = false, sourceKind }: DailyOrderLogsCardProps) {
   return (
     <section className="rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-amber" aria-label="Daily order logs">
       <header>
@@ -39,7 +41,7 @@ export default function DailyOrderLogsCard({ rows, isLoading = false }: DailyOrd
             ))}
           </div>
         ) : rows.length === 0 ? (
-          <div className="flex h-full items-center justify-center px-4 text-sm text-secondary">No logs today.</div>
+          <div className="flex h-full items-center justify-center px-4 text-sm text-secondary">{sourceKind && !["ready", "empty"].includes(sourceKind) ? "Current order-log activity is unknown." : "No logs today."}</div>
         ) : (
           <ul className="divide-y divide-slate-200/70 dark:divide-slate-700/70">
             {rows.map((row, index) => (

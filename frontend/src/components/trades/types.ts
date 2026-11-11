@@ -7,7 +7,9 @@ export interface RangeRowMetrics {
   totalPL: number | null;
   topTrade: { symbol: string; pl: number | null };
   worstLoss: { symbol: string; pl: number | null };
-  tradesCount: number;
+  tradesCount: number | null;
+  periodLabel?: string;
+  periodUnavailable?: boolean;
   coverage?: { included: number; excluded: number; unknown: number };
 }
 

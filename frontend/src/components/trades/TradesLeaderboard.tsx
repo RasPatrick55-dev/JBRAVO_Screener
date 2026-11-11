@@ -41,7 +41,7 @@ export default function TradesLeaderboard({
 
   return (
     <section
-      className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-violet"
+      className="flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-hidden rounded-2xl p-md shadow-card jbravo-panel jbravo-panel-violet"
       aria-label="Leaderboard"
     >
       <h2 className="sr-only">Leaderboard</h2>
@@ -126,14 +126,14 @@ export default function TradesLeaderboard({
                     <tr key={`${row.rank}-${row.symbol}`} className="border-b border-slate-200/70 text-sm transition-colors hover:bg-sky-100/35 dark:border-slate-700/70 dark:hover:bg-slate-800/45">
                       <td className="font-cousine px-2 py-2.5 text-center text-secondary tabular-nums">#{row.rank}</td>
                       <td className="px-2 py-2.5">
-                        <div className="flex items-center justify-center gap-2">
+                        <div className="flex min-w-0 flex-wrap items-center justify-center gap-2">
                           <div className="scale-90">
                             <StockLogo symbol={row.symbol} />
                           </div>
-                          <span className="font-arimo font-semibold text-primary">{row.symbol}</span>
+                          <span className="min-w-0 break-all font-arimo font-semibold text-primary">{row.symbol}</span>
                         </div>
                       </td>
-                      <td className={`font-cousine px-2 py-2.5 text-center font-bold tabular-nums ${plTone}`}>
+                      <td className={`break-all font-cousine px-2 py-2.5 text-center font-bold tabular-nums ${plTone}`}>
                         {formatSignedCurrency(row.pl)}
                       </td>
                     </tr>

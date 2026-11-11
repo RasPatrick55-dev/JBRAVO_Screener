@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { usePollingRead, refreshNotice } from "../ui/usePollingRead";
+import { useEffect, useMemo, useState } from "react";
 import type { LiveDataSyncState } from "../navbar/liveStatus";
-import type { MetricsFilter, MetricsResponse, MetricsRow } from "./types";
-import { fetchNoStoreJson, formatCurrency, formatNumber, metricsMatchQuery, withTs } from "./utils";
+import type { MetricsFilter, MetricsResponse } from "./types";
+import { parseScreenerPayload, formatCurrency, formatNumber, metricsMatchQuery } from "./utils";
 import { formatMetricWinRate, metricRows, strategyLabel } from "./metricsRows";
 
 const filterOptions: Array<{ key: MetricsFilter; label: string }> = [
@@ -9,85 +10,31 @@ const filterOptions: Array<{ key: MetricsFilter; label: string }> = [
   { key: "with_history", label: "Completed history" },
   { key: "no_history", label: "No completed history" },
 ];
-const REFRESH_INTERVAL_MS = 20_000;
-const REQUEST_TIMEOUT_MS = 15_000;
+const parseMetrics = (value: unknown) => {
+  const payload = parseScreenerPayload<MetricsResponse>(value, true);
+  const rows = metricRows(payload);
+  return { rows, strategy: strategyLabel(payload.strategy_id!, payload.strategy_version!) };
+};
 
 type MetricsResultsCardProps = {
   onSyncStateChange?: (state: LiveDataSyncState) => void;
 };
 
 export default function MetricsResultsCard({ onSyncStateChange }: MetricsResultsCardProps) {
-  const [strategy, setStrategy] = useState("Strategy backtest");
-  const [rows, setRows] = useState<MetricsRow[]>([]);
   const [search, setSearch] = useState("");
   const [serverQuery, setServerQuery] = useState("");
   const [selectedFilter, setSelectedFilter] = useState<MetricsFilter>("all");
-  const [isLoading, setIsLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
-  const hasLoadedRef = useRef(false);
-
   useEffect(() => {
     const timeoutId = window.setTimeout(() => setServerQuery(search.trim()), 250);
     return () => window.clearTimeout(timeoutId);
   }, [search]);
-
-  useEffect(() => {
-    let isMounted = true;
-    let inFlight = false;
-
-    const load = async () => {
-      if (inFlight) {
-        return;
-      }
-      inFlight = true;
-      setIsLoading(!hasLoadedRef.current);
-      const params = new URLSearchParams({
-        filter: selectedFilter,
-        limit: "50",
-      });
-      if (serverQuery) {
-        params.set("q", serverQuery);
-      }
-
-      try {
-        const payload = await fetchNoStoreJson<MetricsResponse>(
-          withTs(`/api/screener/metrics?${params.toString()}`),
-          REQUEST_TIMEOUT_MS
-        );
-        if (!isMounted) {
-          return;
-        }
-        const normalizedRows = metricRows(payload);
-        setStrategy(strategyLabel(payload.strategy_id!, payload.strategy_version!));
-        setRows(normalizedRows);
-        setErrorMessage(null);
-      } catch (error) {
-        if (!isMounted) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : "Unable to load metrics results.";
-        setRows([]);
-        setErrorMessage(message);
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-          hasLoadedRef.current = true;
-        }
-        inFlight = false;
-      }
-    };
-
-    void load();
-    const intervalId = window.setInterval(() => {
-      void load();
-    }, REFRESH_INTERVAL_MS);
-
-    return () => {
-      isMounted = false;
-      window.clearInterval(intervalId);
-    };
-  }, [selectedFilter, serverQuery, reloadToken]);
+  const params = new URLSearchParams({ filter: selectedFilter, limit: "50" });
+  if (serverQuery) params.set("q", serverQuery);
+  const source = usePollingRead(`/api/screener/metrics?${params}`, parseMetrics);
+  const rows = source.data?.rows ?? [];
+  const strategy = source.data?.strategy ?? "Strategy backtest";
+  const { isLoading } = source;
+  const errorMessage = refreshNotice(source.error, source.receivedAt);
 
   useEffect(() => {
     if (!onSyncStateChange) {
@@ -124,7 +71,8 @@ export default function MetricsResultsCard({ onSyncStateChange }: MetricsResults
           <span>{errorMessage}</span>
           <button
             type="button"
-            onClick={() => setReloadToken((value) => value + 1)}
+            onClick={source.refresh}
+            disabled={source.isRefreshing}
             className="rounded-md px-2 py-1 font-semibold uppercase tracking-wide outline outline-1 outline-rose-300/70 transition hover:bg-rose-100/70 dark:outline-rose-400/45 dark:hover:bg-rose-500/20"
           >
             Retry
