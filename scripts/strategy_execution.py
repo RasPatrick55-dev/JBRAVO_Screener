@@ -20,6 +20,7 @@ from scripts.strategy_backtest import digest, require
 
 SCHEMA = 'jbravo.premarket-strategy-execution-handoff.v1'
 EXECUTION_MODEL = 'NEXT_PREMARKET_0400_FROZEN_LIMIT_V1'
+PIPELINE_LIMIT_MODEL = 'NEXT_PREMARKET_0400_PIPELINE_LIMIT_V1'
 PORTFOLIO = dict(initial_cash=100000.0, alloc_pct=.05, top_n=3,
                  max_positions=4, trail_pct=.03, max_hold_days=7, atr_multiple=1.0)
 NY = pipeline.NY
@@ -52,7 +53,7 @@ def number(value, *, positive=False):
     return result
 
 
-def prepare_handoff(record, rows, *, now, inspection=False):
+def prepare_handoff(record, rows, *, now, inspection=False, pipeline_limits=False):
     """Bind the exact published population, strategy, backtest and Metrics.
 
     Callers must separately validate the source-bound completed primary report.
@@ -74,9 +75,11 @@ def prepare_handoff(record, rows, *, now, inspection=False):
     proposals = batch['proposals']
     opening=datetime.combine(date.fromisoformat(record['session']['next_session']),
         datetime.min.time().replace(hour=4),NY).astimezone(timezone.utc)
-    require(utc(record['finished_at']) <= now and (inspection or now < opening),
+    require(type(pipeline_limits) is bool,'execution_pipeline_timing_mode_invalid')
+    deadline=opening+timedelta(minutes=35) if pipeline_limits else opening
+    require(utc(record['finished_at']) <= now and (inspection or now < deadline),
             'execution_premarket_preparation_expired')
-    require(inspection or utc(record['finished_at'])<opening,'execution_preparation_missed_premarket_open')
+    require(inspection or utc(record['finished_at'])<deadline,'execution_preparation_missed_premarket_open')
     require(isinstance(rows, list) and len(rows) == len(proposals) <= PORTFOLIO['top_n'],
             'execution_candidate_population_changed')
     require(len({p['symbol'] for p in proposals}) == len(proposals) and
@@ -128,6 +131,7 @@ def prepare_handoff(record, rows, *, now, inspection=False):
         inspection_mode=inspection,paper_only=True,
         order_submission_authorized=False, research_qualified=False,
         broker_operations=0, qualification_basis='EXPLICIT_PAPER_STRATEGY_TEST')
+    if pipeline_limits:result['pipeline_limit_placement_v2']=True
     result['handoff_id'] = digest(result)
     return result
 
@@ -145,7 +149,7 @@ def entry_window(handoff, *, now, clock_next_regular_open, clock_timestamp):
         'execution_clock_session_unavailable')
     require(opening.astimezone(NY).date().isoformat() == handoff['session']['next_session'] and
         opening.astimezone(NY).strftime('%H:%M:%S') == '04:00:00' and
-        handoff['execution_policy']['model']==EXECUTION_MODEL,
+        handoff['execution_policy']['model'] in {EXECUTION_MODEL,PIPELINE_LIMIT_MODEL},
         'execution_session_changed')
     if now < opening:
         return 'WAIT_PREMARKET_OPEN'
@@ -206,7 +210,8 @@ def build_entry_order(handoff, *, signal_id, account_id, cash, reference,
     require(handoff.get('schema') == SCHEMA and
         digest({k:v for k,v in handoff.items() if k!='handoff_id'}) == handoff.get('handoff_id') and
         handoff['portfolio'] == PORTFOLIO and handoff['paper_only'] is True and
-        handoff['order_submission_authorized'] is False and handoff.get('inspection_mode') is False,
+        handoff['order_submission_authorized'] is False and handoff.get('inspection_mode') is False and
+        handoff['execution_policy']['model'] == EXECUTION_MODEL,
         'execution_handoff_changed')
     require(entry_window(handoff,now=now,clock_next_regular_open=clock_next_regular_open,
         clock_timestamp=clock_timestamp) == 'PREMARKET_OPEN', 'execution_entry_before_premarket_open')
@@ -260,7 +265,7 @@ def checked_order(request, order):
     return order
 
 
-def initial_position(proposal, *, quantity, fill_price, filled_at):
+def initial_position(proposal, *, quantity, fill_price, filled_at, pipeline_handoff=None):
     """Create protection from actual fills and signal-day ATR, never later ATR."""
     from scripts.backtest_core import Position
     import pandas as pd
@@ -268,7 +273,14 @@ def initial_position(proposal, *, quantity, fill_price, filled_at):
     price, atr = float(number(fill_price, positive=True)), float(number(proposal['signal_atr14_raw'], positive=True))
     filled_at = utc(filled_at)
     opening = utc(datetime.combine(date.fromisoformat(proposal['next_session']),datetime.min.time().replace(hour=4),NY))
-    require(opening <= filled_at and filled_at.astimezone(NY).date().isoformat() == proposal['next_session'],
+    if pipeline_handoff is None:
+        require(opening <= filled_at and filled_at.astimezone(NY).date().isoformat() == proposal['next_session'],
+                'execution_fill_session_mismatch')
+    else:
+        ticket=validate_pipeline_limit_order(pipeline_handoff,proposal,pipeline_handoff.get('pipeline_limit_order'),
+            published_at=pipeline_handoff['pipeline_limit_published_at'])
+        require(utc(ticket['valid_from'])<=filled_at and
+            proposal['signal_session']<=filled_at.astimezone(NY).date().isoformat()<=proposal['next_session'],
             'execution_fill_session_mismatch')
     position = Position(symbol=proposal['symbol'], qty=quantity, entry_price=price,
         entry_time=pd.Timestamp(proposal['next_session']), highest_close=price, max_price=price,
@@ -372,3 +384,88 @@ def submit_claimed(store, broker, *, account_id, signal_id, request, lineage,
         raise
     store.observed(expected, order)
     return dict(status='OBSERVED', order=order)
+
+
+def validate_pipeline_limit_order(handoff,proposal,ticket,*,published_at):
+    """Consume a final price explicitly committed by the pipeline; no lookup.
+
+    A signal close, display entry_price or missing ticket is never a substitute.
+    Price policy belongs to the publisher. This consumer does not select it.
+    """
+    require(isinstance(ticket,dict),'execution_pipeline_limit_price_required')
+    require(set(ticket)-{'price_provenance'}=={'schema','primary_run_id','selection_run_id','signal_id','symbol',
+        'signal_session','next_session','limit_price','currency','price_basis','price_as_of',
+        'valid_from','valid_until'},'execution_pipeline_limit_contract_changed')
+    require(ticket['schema']=='jbravo.pipeline-paper-limit-order.v2' and
+        ticket['primary_run_id']==handoff['primary_run_id'] and
+        ticket['selection_run_id']==handoff['unified_selection']['run_id'] and
+        all(ticket[k]==proposal[k] for k in ('signal_id','symbol','signal_session','next_session')) and
+        ticket['currency']=='USD','execution_pipeline_limit_lineage_changed')
+    price=number(ticket['limit_price'],positive=True)
+    require(price==price.quantize(Decimal('.01')),'execution_pipeline_limit_tick_invalid')
+    require(isinstance(ticket['price_basis'],str) and
+        re.fullmatch('[A-Z][A-Z0-9_]{0,79}',ticket['price_basis']) is not None,
+        'execution_pipeline_limit_basis_required')
+    opening=utc(handoff['execution_policy']['entry_open_at'])
+    require(opening.astimezone(NY).date().isoformat()==proposal['next_session'] and
+        opening.astimezone(NY).strftime('%H:%M:%S')=='04:00:00',
+        'execution_session_changed')
+    stamp=utc(ticket['price_as_of']);published=utc(published_at)
+    require(stamp.astimezone(NY).date().isoformat()==proposal['signal_session'] and
+        stamp<=published<opening+timedelta(minutes=35) and utc(ticket['valid_from'])==published and
+        utc(ticket['valid_until'])==opening+timedelta(minutes=35),
+        'execution_pipeline_limit_session_changed')
+    return deepcopy(ticket)
+
+
+def build_pipeline_limit_order(handoff,*,signal_id,account_id,cash,reference,occupied_slots,
+                              now,clock_next_regular_open,clock_timestamp,reserved_cash=0):
+    """Use the pipeline's exact final limit. No quote, bar, buffer or fallback."""
+    require(handoff.get('schema')==SCHEMA and
+        digest({k:v for k,v in handoff.items() if k!='handoff_id'})==handoff.get('handoff_id') and
+        handoff['portfolio']==PORTFOLIO and handoff['paper_only'] is True and
+        handoff['order_submission_authorized'] is False and handoff.get('inspection_mode') is False and
+        handoff['execution_policy']['model']==PIPELINE_LIMIT_MODEL,
+        'execution_handoff_changed')
+    matches=[p for p in handoff['proposals'] if p['signal_id']==signal_id]
+    require(len(matches)==1,'execution_order_signal_not_in_handoff')
+    proposal=matches[0]
+    ticket=validate_pipeline_limit_order(handoff,proposal,handoff.get('pipeline_limit_order'),
+        published_at=handoff['pipeline_limit_published_at'])
+    require(reference==ticket,'execution_pipeline_limit_changed')
+    pipeline_submission_window(handoff,ticket,now=now,clock_next_regular_open=clock_next_regular_open,clock_timestamp=clock_timestamp)
+    price=number(ticket['limit_price'],positive=True)
+    if proposal.get('strategy_id') in PATTERNS:
+        from scripts.pattern_strategy import plan_from_row
+        pattern=plan_from_row(proposal['symbol'],dict(entry_details=dict(pattern_exit=proposal.get('pattern_exit'))))
+        require(pattern is not None and pattern==proposal.get('pattern_exit') and
+            pattern['pattern']==proposal['strategy_id'] and pattern['invalidation']<float(price)<pattern['target'],'pattern_entry_outside_levels')
+    quantity=size_entry(cash,price,occupied_slots=occupied_slots,reserved_cash=reserved_cash)
+    return dict(status='ORDER_PLANNED' if quantity else 'SKIP_CAPACITY_OR_WHOLE_SHARE_BUDGET',
+        request=dict(symbol=proposal['symbol'],qty=quantity,side='buy',type='limit',
+            limit_price=float(price),time_in_force='day',extended_hours=True,
+            client_order_id=client_order_id(account_id,signal_id)),
+        lineage=dict(handoff_id=handoff['handoff_id'],primary_run_id=handoff['primary_run_id'],
+            strategy_contract=deepcopy(handoff['strategy_contract']),signal_id=signal_id,
+            symbol=proposal['symbol'],backtest_result_id=handoff['backtest_result_id'],
+            metrics_result_id=handoff['metrics_result_id'],batch_sha256=handoff['batch_sha256'],
+            execution_model=PIPELINE_LIMIT_MODEL,reference_id=digest(ticket)),
+        sizing=dict(cash=str(number(cash)),reserved_cash=str(number(reserved_cash)),
+            pipeline_limit_price=str(price),price_as_of=ticket['price_as_of'],
+            price_basis=ticket['price_basis'],extra_limit_buffer_pct=0,allocation_pct=.05,
+            occupied_slots=occupied_slots,prepared_at=utc(now).isoformat()),
+        order_submission_authorized=False,broker_operations=0)
+
+
+def pipeline_submission_window(handoff,ticket,*,now,clock_next_regular_open,clock_timestamp):
+    """Submit on invocation during published validity; retain supplied session."""
+    now=utc(now);observed=utc(clock_timestamp)
+    require(observed<=now and (now-observed).total_seconds()<=60 and
+        utc(clock_next_regular_open)==utc(handoff['session']['next_open_at']),
+        'execution_clock_session_unavailable')
+    require(handoff.get('pipeline_limit_placement_v2') is True and
+        handoff['execution_policy']['model']==PIPELINE_LIMIT_MODEL and
+        utc(ticket['valid_from'])<=now<utc(ticket['valid_until']) and
+        utc(ticket['valid_until'])==utc(handoff['execution_policy']['cancel_at']),
+        'execution_pipeline_submission_not_current')
+    return 'PIPELINE_SUBMISSION_OPEN'

@@ -22,14 +22,21 @@ def _require(condition):
         raise ValueError('stop_replacement_pending_proof_invalid')
 
 
-def monitor_engine(Engine, *, NativeEngine):
+def monitor_engine(Engine, *, NativeEngine, source_variant="retained"):
     """Wrap the already composed lifecycle/quote-safe engine, never its base.
 
 Source pins and the unmodified native checker establish the supported
 interface. The release bootstrap must also retain its full native inventory
 and account/source/recognition guards. This factory has no external effects.
 """
-    for name, digest in _METHOD_HASHES.items():
+    if source_variant not in {'retained', 'canonical'}:
+        raise ValueError('stop_replacement_source_variant_invalid')
+    hashes=dict(_METHOD_HASHES)
+    if source_variant=='canonical':
+        # Canonical manage retains the stricter 04:00-20:00 gate for every
+        # engine mode. All identity/quantity/stop semantics remain unchanged.
+        hashes['manage']='b83cbec83fbdd0f89594471b2c0d0b12c0a85967c5bee036c7707072fa37b6f8'
+    for name, digest in hashes.items():
         source = textwrap.dedent(inspect.getsource(getattr(NativeEngine, name))).strip()
         if hashlib.sha256(source.encode()).hexdigest() != digest:
             raise ValueError('stop_replacement_native_' + name + '_source_changed')
