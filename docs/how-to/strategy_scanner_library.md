@@ -127,6 +127,15 @@ Market-wide historical observations, intents, fills, lifecycle and action
 artifacts also use `.json.gz`; resolve their exact names through `manifest.json`
 rather than assume the small fixed-universe filenames or silently skip them.
 
+Qualifying signal observations carry `indicator_context`, including setups that
+were not selected. Join observations to paper outcomes by `signal_id`. The
+context records `rsi2` using JBravo's rolling-average RSI formula and
+`spy_close`, `spy_sma200`, and `spy_regime` (`ABOVE`, `BELOW`, or `AT`). These
+readings use completed, split-adjusted daily bars through the signal session.
+Unavailable readings are `null`. For example, SPY needs 200 bars and a bar on
+the signal date. Entry rules, ranking, and order proposals use their existing
+inputs.
+
 These artifacts retain `research_qualified=false` and explicit
 `order_submission_authorized=false`. They do not alter the separately authorized
 existing paper executor or qualify the strategy based on software parity alone.
