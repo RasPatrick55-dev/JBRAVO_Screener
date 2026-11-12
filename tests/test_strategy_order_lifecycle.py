@@ -290,7 +290,7 @@ def pipeline_fixture(native):
 
 
 @pytest.mark.parametrize('fill_mode', ['unfilled', 'partial', 'full'])
-def test_native_pipeline_entry_only_to_monitor_ownership(native, fill_mode):
+def test_native_pipeline_entry_only_to_monitor_ownership(native, fill_mode, source_variant="retained"):
     from scripts.strategy_entry_only import EntryOnlyStore, EntryOnlyBroker, entry_engine
     store, broker, handoff = pipeline_fixture(native)
     proposal = handoff['proposals'][0]
@@ -329,7 +329,7 @@ def test_native_pipeline_entry_only_to_monitor_ownership(native, fill_mode):
     assert not broker.cancels and not broker.patches
     assert next(iter(store.rows.values()))['payload']['position'] is None
     broker.submit_order = real_submit
-    monitor = lifecycle.monitor_engine(native.Engine, require_marker=True)(
+    monitor = lifecycle.monitor_engine(native.Engine, require_marker=True, source_variant=source_variant)(
         store, broker, guard=lambda *args: True, pipeline_orders=True, now=lambda: broker.now)
     broker.now = datetime(2026, 10, 26, 8, 35, tzinfo=timezone.utc)
     qty = 0 if fill_mode == 'unfilled' else 2 if fill_mode == 'partial' else broker.posts[0]['qty']

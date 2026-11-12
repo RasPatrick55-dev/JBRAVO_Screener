@@ -31,10 +31,12 @@ def available_cash(account):
 
 
 class Engine:
-    def __init__(self,store,broker,*,guard,now=None):
+    def __init__(self,store,broker,*,guard,now=None,pipeline_orders=False):
         require(callable(guard) and broker.paper is True and broker.account_id==store.account_id,
                 'strategy_engine_paper_account_guard_required')
         self.store,self.broker,self.guard=store,broker,guard
+        require(type(pipeline_orders) is bool,'strategy_pipeline_order_mode_invalid')
+        self.pipeline_orders=pipeline_orders
         self.events=[]
         self.now=now or (lambda:datetime.now(timezone.utc))
 
@@ -76,6 +78,8 @@ class Engine:
         return order
 
     def _perform(self,signal,role,sequence,request,*,operation='POST',order_id=None):
+        require(role!='entry' or not signal['payload']['handoff'].get('manual_paper_test'),
+                'strategy_manual_position_orders_not_authorized')
         key=rules.client_order_id(self.store.account_id,signal['signal_id'],role=role,sequence=sequence)
         request=deepcopy(request)
         if operation!='DELETE':request['client_order_id']=key
@@ -142,19 +146,20 @@ class Engine:
             if len(occupied)>=4:
                 self.note(None,'TOTAL_POSITION_CAP');break
             reference=references.get(symbol)
-            if not reference or reference.get('status')!='AVAILABLE':
+            if not reference or (not self.pipeline_orders and reference.get('status')!='AVAILABLE'):
                 self.note(None,'AFTER_HOURS_REFERENCE_UNAVAILABLE');continue
             if not self.broker.eligible_asset(symbol):
                 self.note(None,'ASSET_INELIGIBLE');continue
-            try:quoted=self.broker.quotes({symbol},now=self.now())
-            except (ValueError,KeyError,TypeError):
-                self.note(None,'ENTRY_MONITOR_QUOTE_UNAVAILABLE');continue
-            if symbol not in quoted:
-                self.note(None,'ENTRY_MONITOR_QUOTE_UNAVAILABLE');continue
+            if not self.pipeline_orders:
+                try:quoted=self.broker.quotes({symbol},now=self.now())
+                except (ValueError,KeyError,TypeError):
+                    self.note(None,'ENTRY_MONITOR_QUOTE_UNAVAILABLE');continue
+                if symbol not in quoted:
+                    self.note(None,'ENTRY_MONITOR_QUOTE_UNAVAILABLE');continue
             fresh_account=self.broker.account()
             cash=min(available_cash(fresh_account),ceiling-reserved)
             try:
-                plan=rules.build_entry_order(handoff,signal_id=sid,account_id=self.store.account_id,cash=cash,
+                plan=(rules.build_pipeline_limit_order if self.pipeline_orders else rules.build_entry_order)(handoff,signal_id=sid,account_id=self.store.account_id,cash=cash,
                     reference=reference,occupied_slots=len(occupied),now=self.now(),
                     clock_next_regular_open=clock['next_open'],clock_timestamp=clock['timestamp'])
             except ValueError as error:
@@ -177,7 +182,7 @@ class Engine:
                 break
             # Protect actual fills before attempting another symbol. A pending
             # entry remains durable for the independent monitor to reconcile.
-            self.tick(now=self.now())
+            self.tick(now=self.now(),observe_prices=not self.pipeline_orders)
 
     def cancel_confirmed(self,signal,order_id):
         current=self.broker.get_order(order_id)
@@ -228,8 +233,26 @@ class Engine:
         position=payload.get('position')
         if position is None:
             fill_time=entry.get('filled_at') or entry.get('updated_at')
+            # Monitor process mode does not change a historical signal's contract.
+            handoff=payload['handoff']
+            model=handoff.get('execution_policy',{}).get('model')
+            require(model in {rules.EXECUTION_MODEL,rules.PIPELINE_LIMIT_MODEL} and
+                rules.digest({k:v for k,v in handoff.items() if k!='handoff_id'})==handoff.get('handoff_id'),
+                'strategy_fill_handoff_contract_changed')
+            pipeline_fill=model==rules.PIPELINE_LIMIT_MODEL
+            if pipeline_fill:
+                require(handoff.get('pipeline_limit_placement_v2') is True and
+                    isinstance(handoff.get('pipeline_limit_order'),dict) and
+                    isinstance(handoff.get('pipeline_limit_published_at'),str),
+                    'strategy_fill_pipeline_contract_missing')
+            else:
+                require(not any(k in handoff for k in ('pipeline_limit_placement_v2',
+                    'pipeline_limit_order','pipeline_limit_published_at')),
+                    'strategy_fill_handoff_contract_changed')
             position=rules.initial_position(payload['proposal'],quantity=remaining,
-                fill_price=entry['filled_avg_price'],filled_at=fill_time)
+                fill_price=entry['filled_avg_price'],filled_at=fill_time,
+                **({'pipeline_handoff':handoff} if pipeline_fill else {}))
+            payload['entry_fill_timestamp_utc']=rules.utc(fill_time).isoformat()
             payload['fill_time_basis']='FILLED_AT' if entry.get('filled_at') else 'VERIFIED_PARTIAL_QUANTITY_BROKER_UPDATE'
         else:
             position=deepcopy(position);position['qty']=remaining
@@ -368,7 +391,7 @@ class Engine:
         self._perform(signal,'stop',sequence,dict(symbol=symbol,qty=own_qty,side='sell',type='stop',
             stop_price=float(price),time_in_force='gtc',extended_hours=False))
 
-    def tick(self,*,now,frames=None,completed_session=None,next_session=None):
+    def tick(self,*,now,frames=None,completed_session=None,next_session=None,observe_prices=True):
         clock=self.broker.clock()
         require(abs((rules.utc(now)-rules.utc(clock['timestamp'])).total_seconds())<=60,
                 'strategy_monitor_clock_stale')
@@ -389,11 +412,13 @@ class Engine:
             ready.append((signal,records))
         # Cancellations/fill reconciliation must still run when quote service
         # is unavailable. Unknown quote data is never a synthetic zero price.
-        try:quotes=self.broker.quotes({s['payload']['proposal']['symbol'] for s,r in ready},now=now) if ready else {}
-        except (ValueError,KeyError,TypeError):
-            quotes={};self.note(None,'STRATEGY_QUOTES_UNAVAILABLE')
-        if any(s['payload']['proposal']['symbol'] not in quotes for s,r in ready):
-            self.note(None,'STRATEGY_QUOTES_UNAVAILABLE')
+        quotes={}
+        if observe_prices:
+            try:quotes=self.broker.quotes({s['payload']['proposal']['symbol'] for s,r in ready},now=now) if ready else {}
+            except (ValueError,KeyError,TypeError):
+                quotes={};self.note(None,'STRATEGY_QUOTES_UNAVAILABLE')
+            if any(s['payload']['proposal']['symbol'] not in quotes for s,r in ready):
+                self.note(None,'STRATEGY_QUOTES_UNAVAILABLE')
         for signal,records in ready:
             if frames is not None and completed_session and signal['payload']['position']['entry_time']<=completed_session:
                 self.completed(signal,frames[signal['payload']['proposal']['symbol']],
