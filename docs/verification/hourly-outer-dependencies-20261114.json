@@ -1,0 +1,69 @@
+{
+  "schema": "jbravo.hourly-outer-provenance.v1",
+  "read_at_utc": "2026-11-14T22:05:59Z",
+  "sources": {
+    "strategy_fill_sync.py": {
+      "bytes": 1794,
+      "sha256": "bae4acf1bf6bb03864393ed3bc5208e4f22030d596b5f3a2be0e19aa68b6e99d",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_fill_sync.py"
+    },
+    "strategy_lot_accounting_v2.py": {
+      "bytes": 25637,
+      "sha256": "12e20abe5709593d53853ecbc9cff339bf38d8884ef1366f5849a4abeb632b5b",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_lot_accounting_v2.py"
+    },
+    "strategy_lot_automatic_phase.py": {
+      "bytes": 4562,
+      "sha256": "8361a64a1826dcb01e38732b0f112a08e3fc3a7d8b137d33455c21c458925ad4",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_lot_automatic_phase.py"
+    },
+    "strategy_lot_hourly_phase.py": {
+      "bytes": 3079,
+      "sha256": "339a81a64afff808b4259a5b5c001625bd1573c55aded7fc6291d60645fd4ae8",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_lot_hourly_phase.py"
+    },
+    "strategy_lot_incremental_preview.py": {
+      "bytes": 15992,
+      "sha256": "8e043c3b9ca628afa9858a5729d19d88f545c3af59428be6ad46718a8341aa09",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_lot_incremental_preview.py"
+    },
+    "strategy_lot_incremental_store.py": {
+      "bytes": 12670,
+      "sha256": "2a9bef1d9f32143435fe2532e3dea2fc0aa9a9740a0495125bdfc672e16fcd31",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_lot_incremental_store.py"
+    },
+    "strategy_lot_supervised.py": {
+      "bytes": 11352,
+      "sha256": "af8a25106219c59e8723218f3594d0029f3488afdc2cfbf9cfb87a5f42241704",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_lot_supervised.py"
+    },
+    "strategy_order_origin_evidence.py": {
+      "bytes": 6876,
+      "sha256": "31474e28cae1c80d9e23d87b2e96e374c2d54e784864995a558418bd4f85e14d",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_order_origin_evidence.py"
+    },
+    "strategy_order_origin_fetch.py": {
+      "bytes": 8721,
+      "sha256": "77418a658a44010a83a7a5baaed6ffeb5346727ce3d0de65e01ac9ddd6308c61",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_order_origin_fetch.py"
+    },
+    "strategy_order_origin_phase.py": {
+      "bytes": 4358,
+      "sha256": "c3cb4fa8d521d58d49366c8a3d7401512415e3fa5d13701b987d5f1a60931a5e",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_order_origin_phase.py"
+    },
+    "whole_position_allocation.py": {
+      "bytes": 6662,
+      "sha256": "443687b2e3db278104c5e11f6a67139ceed93d2ff08fa1ee85cd63cc2dc24895",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/whole_position_allocation.py"
+    },
+    "whole_position_transaction.py": {
+      "bytes": 15607,
+      "sha256": "120406e684274613b9cd9c63c1a870f0da48685e0fb94d67b3221b88035eaf3e",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/whole_position_transaction.py"
+    }
+  },
+  "all_match_frozen_hourly_outer_manifest": true,
+  "canonical_base": "1d13cf62f60d67188499c616a1e80746751aa45e",
+  "runtime_or_schema_activation": false
+}

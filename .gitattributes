@@ -11,3 +11,15 @@ scripts/strategy_fill_linkage_store.py -text whitespace=cr-at-eol
 
 # Production POSIX wrapper must retain Linux line endings.
 scripts/ops/run_pythonanywhere_primary_pipeline.sh text eol=lf
+scripts/strategy_fill_sync.py -text whitespace=cr-at-eol
+scripts/strategy_lot_accounting_v2.py -text whitespace=cr-at-eol
+scripts/strategy_lot_automatic_phase.py -text whitespace=cr-at-eol
+scripts/strategy_lot_hourly_phase.py -text whitespace=cr-at-eol
+scripts/strategy_lot_incremental_preview.py -text whitespace=cr-at-eol
+scripts/strategy_lot_incremental_store.py -text whitespace=cr-at-eol
+scripts/strategy_lot_supervised.py -text whitespace=cr-at-eol
+scripts/strategy_order_origin_evidence.py -text whitespace=cr-at-eol
+scripts/strategy_order_origin_fetch.py -text whitespace=cr-at-eol
+scripts/strategy_order_origin_phase.py -text whitespace=cr-at-eol
+scripts/whole_position_allocation.py -text whitespace=cr-at-eol
+scripts/whole_position_transaction.py -text whitespace=cr-at-eol
