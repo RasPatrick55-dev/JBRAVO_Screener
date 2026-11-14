@@ -1,55 +1,59 @@
 # PythonAnywhere generation-lease compatibility
 
-This change makes the existing deployed generation-lease behavior canonical in
-GitHub. It does not install a release, start a job, change a task, or qualify data.
+This change makes the generation-lease helper and subprocess propagation available
+in GitHub without imposing a PythonAnywhere path on generic CLI entry points.
+It does not install a release, start a job, edit a task, or qualify market data.
 
-## What is preserved
+## Explicit host entry points
 
-The source helper and four call-site changes are taken from the reviewed
-candidate007 worker overlay. Primary and hourly entry points require the existing
-private POSIX generation lock. Their known child processes inherit its descriptor.
-The run_pipeline subprocess and executor telemetry boundaries preserve the lease.
-Existing paper checks, source verification, per-worker locks and arguments remain.
-The helper has no network or credential access. A missing, replaced, insecure, or
-blocked lock refuses work; it must never be silently auto-created or bypassed.
+- `scripts.pythonanywhere_primary_pipeline` owns exactly one strict generation
+  lease, then calls the unchanged generic `primary_paper_pipeline.main`.
+- `scripts.pythonanywhere_account_sync` owns one lease, then calls the unchanged
+  generic `account_sync.main` body.
+- `scripts/ops/run_pythonanywhere_primary_pipeline.sh` preserves the generic shell
+  launcher's venv, environment, arguments and primary single-flight lock, but
+  selects the strict PythonAnywhere primary wrapper.
 
-The fixed path remains the already-deployed PythonAnywhere generation-fence path.
-This is host compatibility, not a general cross-platform scheduler feature. The
-operator must provision and verify its private directory and lock before using
-these entry points on a new host. Source installation alone does not create them.
+The host wrappers always require the existing private POSIX generation lock. A
+missing, replaced, insecure or blocked lock refuses before underlying workflow
+import. There is no optional flag or environment setting that disables fencing.
+Generic primary/hourly CLI behavior remains portable and does not acquire that
+host-specific lease. Existing guarded external adapters may call generic code
+within their own lease; they must not nest the strict wrappers inside another
+`run_guarded` call. Accidental nesting fails closed before workflow execution.
 
-## Remaining release work
+The helper and existing subprocess propagation hooks retain the reviewed deployed
+behavior. Known direct children can inherit the descriptor and outlive the parent
+without releasing it. This is NOT a guarantee for arbitrary exec grandchildren:
+process-local `_active` is not reconstructed automatically in an exec'ed child,
+and any later subprocess that closes the inherited descriptor loses that hold.
+A release must separately qualify its actual process tree and adapter boundaries.
 
-- Rebuild external producer, entry, monitor and hourly adapters against the exact
-  merged GitHub commit; old checksum manifests are not reusable.
-- Bind fresh host source/task preimages and current hourly successor files.
-- Use a new reviewed operation identity and journal. Revision014 is consumed.
-- Verify active ownership compatibility, task/worker quiescence and rollback before
-  cutover. Do not substitute an enabled flag for actual process/lease evidence.
-- Verify installed files, task bindings and web deployment separately, without
-  submitting orders or replaying the pipeline as a deployment test.
+## Required release changes
 
-The existing revision014 source transaction, provider task adapter and recovery
-code are reusable implementation references, not reusable approval or receipts.
-A new release must bind its own exact source mapping and commands. No generic API
-transport, hidden metadata disclosure, source-pin bypass or disabled safety guard
-is introduced here.
+The new PythonAnywhere release must bind the primary task to the strict shell
+launcher above, and verify the exact wrapper/helper/source pins. Simply replacing
+native source while retaining the old generic primary task command is unsafe.
+Hourly's current external adapter already owns its lease; verify that route and
+retain its single lease instead of wrapping it twice. The new account-sync wrapper
+is for any separately scheduled direct account-sync entry, not automatic nesting.
 
-## Tests
+Rebuild producer, entry, monitor and hourly source manifests against the exact
+merged GitHub commit. Freeze fresh host preimages and latest hourly successors.
+Use a new reviewed plan, journal and rollback evidence: revision014 is consumed.
+Before cutover verify source-bound ownership compatibility, task/worker quiescence
+and all adapter boundaries. Enabled flags alone are not run or lease evidence.
+Source installation, task binding, web deployment and scheduled run success must
+be verified separately, without replaying pipeline or executor as a deploy test.
 
-Run `python -B -m unittest tests.test_candidate007_worker_fence
- tests.test_primary_paper_pipeline -v` on Linux in a configured test environment.
-The fence tests use temporary files and inert child processes. They test mutual
-exclusion, replaced/link identities, parent-death descriptor retention, persistent
-maintenance blocking/recovery, and primary/hourly refusal before workflow entry.
-The old paper-context tests isolate the lease with a stated test double; they do
-not independently establish POSIX lease safety. No test places broker orders.
+## Offline verification
 
-### November 14 offline result
+Use `python -B -m unittest tests.test_candidate007_worker_fence
+ tests.test_primary_paper_pipeline -v` on Linux. Tests use temporary files and inert
+children. They cover mutual exclusion, replaced/link identities, direct-child
+retention after parent death, maintenance recovery, wrapper fail-closed behavior,
+no double fencing, generic portability and exact single-flight shell derivation.
 
-All 18 focused Linux lease/wrapper and paper-context tests passed. Python 3.10
-syntax checks and documentation consistency passed. The broader 54-test
-account-sync suite has 27 failures and 3 errors on both untouched main and this
-branch, with identical failing test/subtest identifiers. These are retained
-baseline failures, not a full-suite pass. Source compatibility is not proof of
-native runtime deployment or usable market quotes.
+The broader 54-test account-sync suite retains 27 failures and 3 errors on untouched
+main and the compatibility version, with identical failing test identifiers.
+These baseline failures remain open; focused tests are not a full-suite pass.

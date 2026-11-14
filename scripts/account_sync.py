@@ -376,9 +376,7 @@ def main(argv=None) -> int:
     parser.add_argument('--stage-timeout-seconds', type=float, default=300)
     args = parser.parse_args(argv)
     try:
-        from scripts import candidate007_worker_fence as generation_fence
-        report = generation_fence.run_guarded(generation_fence.DIRECTORY,
-            lambda: run_workflow(args.state_dir, args.stage_timeout_seconds))
+        report = run_workflow(args.state_dir, args.stage_timeout_seconds)
     except Exception as failure:
         # Existing files retain primary stage results even if latest recording fails.
         print(json.dumps({'status': 'failed', 'reason': 'workflow_or_recording_failure',

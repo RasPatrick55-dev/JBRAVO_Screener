@@ -121,12 +121,12 @@ class FenceTest(unittest.TestCase):
 
     def test_primary_refuses_before_work_when_maintenance_is_present(self):
         from scripts import candidate007_worker_fence as fence
-        from scripts import primary_paper_pipeline as primary
+        from scripts import pythonanywhere_primary_pipeline as primary
         from scripts import primary_pipeline as implementation
         with Lease(self.path, exclusive=True) as installer:
             installer.begin_maintenance()
         with mock.patch.object(fence, 'DIRECTORY', str(self.path)), \
-             mock.patch.dict(os.environ, {'APCA_API_BASE_URL': primary.PAPER_ENDPOINT,
+             mock.patch.dict(os.environ, {'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets',
                                           'JBR_EXEC_PAPER': 'true'}), \
              mock.patch.object(implementation, 'main') as work:
             with self.assertRaisesRegex(RuntimeError, 'GENERATION_MAINTENANCE_BLOCKED'):
@@ -135,7 +135,7 @@ class FenceTest(unittest.TestCase):
 
     def test_primary_holds_shared_lease_during_work(self):
         from scripts import candidate007_worker_fence as fence
-        from scripts import primary_paper_pipeline as primary
+        from scripts import pythonanywhere_primary_pipeline as primary
         from scripts import primary_pipeline as implementation
         def work(argv):
             with self.assertRaisesRegex(RuntimeError, 'GENERATION_LEASE_BUSY'):
@@ -143,7 +143,7 @@ class FenceTest(unittest.TestCase):
                     self.fail('primary did not hold generation lease')
             return 17
         with mock.patch.object(fence, 'DIRECTORY', str(self.path)), \
-             mock.patch.dict(os.environ, {'APCA_API_BASE_URL': primary.PAPER_ENDPOINT,
+             mock.patch.dict(os.environ, {'APCA_API_BASE_URL': 'https://paper-api.alpaca.markets',
                                           'JBR_EXEC_PAPER': 'true'}), \
              mock.patch.object(implementation, 'main', side_effect=work):
             self.assertEqual(primary.main([]), 17)
@@ -151,9 +151,83 @@ class FenceTest(unittest.TestCase):
     def test_hourly_refuses_before_work_when_maintenance_is_present(self):
         from scripts import candidate007_worker_fence as fence
         from scripts import account_sync
+        from scripts import pythonanywhere_account_sync as hosted
         with Lease(self.path, exclusive=True) as installer:
             installer.begin_maintenance()
         with mock.patch.object(fence, 'DIRECTORY', str(self.path)), \
              mock.patch.object(account_sync, 'run_workflow') as work:
-            self.assertEqual(account_sync.main([]), 1)
+            with self.assertRaisesRegex(RuntimeError, 'GENERATION_MAINTENANCE_BLOCKED'):
+                hosted.main([])
             work.assert_not_called()
+
+    def test_both_pa_wrappers_refuse_missing_lock_before_work(self):
+        from scripts import candidate007_worker_fence as fence
+        from scripts import pythonanywhere_primary_pipeline as primary
+        from scripts import pythonanywhere_account_sync as hourly
+        from scripts import primary_paper_pipeline, account_sync
+        self.lock.unlink()
+        with mock.patch.object(fence, 'DIRECTORY', str(self.path)), \
+             mock.patch.object(primary_paper_pipeline, 'main') as p, \
+             mock.patch.object(account_sync, 'main') as h:
+            for wrapper in (primary, hourly):
+                with self.assertRaises(FileNotFoundError):
+                    wrapper.main([])
+            p.assert_not_called()
+            h.assert_not_called()
+
+    def test_adapter_accidentally_nesting_wrapper_refuses(self):
+        from scripts import candidate007_worker_fence as fence
+        from scripts import pythonanywhere_account_sync as hosted
+        from scripts import account_sync
+        with mock.patch.object(fence, 'DIRECTORY', str(self.path)), \
+             mock.patch.object(account_sync, 'main') as work:
+            with self.assertRaisesRegex(RuntimeError, 'GENERATION_NESTED_LEASE'):
+                run_guarded(self.path, lambda: hosted.main([]))
+            work.assert_not_called()
+
+
+class PortableEntryTests(unittest.TestCase):
+    """Generic entry policy does not acquire a PythonAnywhere-specific lock."""
+    def test_generic_primary_never_calls_generation_fence(self):
+        from scripts import primary_paper_pipeline as generic
+        from scripts import primary_pipeline as implementation
+        with mock.patch('scripts.candidate007_worker_fence.run_guarded',
+                        side_effect=AssertionError('generic CLI acquired PA lease')), \
+             mock.patch.dict(os.environ, {'APCA_API_BASE_URL': generic.PAPER_ENDPOINT,
+                                          'JBR_EXEC_PAPER': 'true'}), \
+             mock.patch.object(implementation, 'main', return_value=23) as work:
+            self.assertEqual(generic.main(['--help']), 23)
+            work.assert_called_once_with(['--help'])
+
+    def test_generic_hourly_never_calls_generation_fence(self):
+        from scripts import account_sync as generic
+        report = {'status': 'ok', 'run_id': 'offline-test', 'stages': []}
+        with mock.patch('scripts.candidate007_worker_fence.run_guarded',
+                        side_effect=AssertionError('generic CLI acquired PA lease')), \
+             mock.patch.object(generic, 'run_workflow', return_value=report) as work:
+            self.assertEqual(generic.main([]), 0)
+            work.assert_called_once()
+
+    def test_each_pa_wrapper_owns_exactly_one_lease(self):
+        from scripts import pythonanywhere_primary_pipeline as primary
+        from scripts import pythonanywhere_account_sync as hourly
+        from scripts import primary_paper_pipeline, account_sync
+        for wrapper, generic in ((primary, primary_paper_pipeline), (hourly, account_sync)):
+            with self.subTest(wrapper=wrapper.__name__):
+                with mock.patch('scripts.candidate007_worker_fence.run_guarded',
+                                side_effect=lambda directory, work: work()) as lease, \
+                     mock.patch.object(generic, 'main', return_value=7) as work:
+                    self.assertEqual(wrapper.main(['--help']), 7)
+                    lease.assert_called_once()
+                    work.assert_called_once_with(['--help'])
+
+    def test_pa_shell_uses_strict_wrapper_and_preserves_single_flight(self):
+        root = Path(__file__).resolve().parents[1]
+        generic = (root / 'scripts/ops/run_primary_pipeline.sh').read_text()
+        hosted = (root / 'scripts/ops/run_pythonanywhere_primary_pipeline.sh').read_text()
+        expected = generic.replace('scripts.primary_paper_pipeline',
+                                   'scripts.pythonanywhere_primary_pipeline').replace(
+            'All primary scheduled launches must use this launcher',
+            'PythonAnywhere primary scheduled launches must use this launcher')
+        self.assertEqual(hosted, expected)
+        self.assertIn('flock -n 9', hosted)

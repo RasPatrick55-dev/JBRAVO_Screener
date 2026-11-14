@@ -28,11 +28,8 @@ def main(argv=None):
         return 1
     # Keep the primary argument, single-flight, readiness and policy contracts.
     # This import is deferred so refused contexts cannot initialize the pipeline.
-    from scripts import candidate007_worker_fence as generation_fence
-    def work():
-        from scripts.primary_pipeline import main as primary_main
-        return primary_main(argv)
-    return generation_fence.run_guarded(generation_fence.DIRECTORY, work)
+    from scripts.primary_pipeline import main as primary_main
+    return primary_main(argv)
 
 
 if __name__ == '__main__':
