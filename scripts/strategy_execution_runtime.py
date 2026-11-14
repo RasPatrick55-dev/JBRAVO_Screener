@@ -31,10 +31,10 @@ _FEATURE_CACHE={}
 def load_config(base_dir=ROOT):
     value=json.loads(health._read(Path(base_dir)/CONFIG,4096),object_pairs_hook=health._strict_object,
         parse_constant=health._invalid_constant)
-    require(value==dict(schema='jbravo.premarket-paper-execution-config.v1',enabled=True,paper_only=True,
-        strategy_id='trend_pullback_reclaim_qualifying_close_v2',execution_model=rules.EXECUTION_MODEL,
-        allocation_pct=.05,max_positions=4,limit_buffer_pct=.5,cancel_after_minutes=35,
-        reference_feed='iex',reference_adjustment='raw',currency='USD',research_qualified=False),
+    require(value==dict(schema='jbravo.pipeline-limit-paper-execution-config.v1',enabled=True,paper_only=True,
+        strategy_id='trend_pullback_reclaim_qualifying_close_v2',execution_model=rules.PIPELINE_LIMIT_MODEL,
+        allocation_pct=.05,max_positions=4,extra_limit_buffer_pct=0,cancel_after_minutes=35,
+        limit_source='PIPELINE_PUBLISHED_LIMIT',currency='USD',research_qualified=False),
         'strategy_execution_configuration_changed')
     return value
 
