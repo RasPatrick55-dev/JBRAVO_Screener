@@ -8,3 +8,6 @@ scripts/strategy_data_projection.py -text whitespace=cr-at-eol
 scripts/strategy_fill_sync_adapter.py -text whitespace=cr-at-eol
 scripts/strategy_fill_linkage.py -text whitespace=cr-at-eol
 scripts/strategy_fill_linkage_store.py -text whitespace=cr-at-eol
+
+# Production POSIX wrapper must retain Linux line endings.
+scripts/ops/run_pythonanywhere_primary_pipeline.sh text eol=lf
