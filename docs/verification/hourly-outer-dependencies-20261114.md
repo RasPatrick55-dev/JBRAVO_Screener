@@ -7,4 +7,3 @@ These modules close the static scripts-import dependencies of the existing hourl
 Offline regression coverage uses synthetic fixtures only. Six historical unit suites were retained; two tests dependent on private actual-trade fixture files were excluded rather than publishing private fixtures. New contracts verify all twelve exact byte hashes, scripts-import closure and import without socket creation. Windows: 100 passed. Linux Python 3.10.22: 100 passed.
 
 Limits: no PostgreSQL integration, current schema, live account binding, production process, loader or hourly source-pin rebinding has been established by these tests. Existing origin and lot schemas and receipts remain mandatory runtime prerequisites. Historical proof pins must remain historical; current canonical source checks require a separate reviewed binding. This is source recovery only, not deployment readiness.
-
