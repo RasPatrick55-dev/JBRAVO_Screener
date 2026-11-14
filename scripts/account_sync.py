@@ -212,7 +212,8 @@ def run_stage(stage: Stage, timeout: float, lock_fd: int) -> dict:
             child_environment[ingestion_checkpoint.ENV_CUTOFF]=cutoff.isoformat()
         options['env'] = child_environment
     if os.name == 'posix':
-        options.update(start_new_session=True, pass_fds=(lock_fd,))
+        from scripts import candidate007_worker_fence as generation_fence
+        options.update(start_new_session=True, **generation_fence.child_options(lock_fd))
     reason = None
     started = time.monotonic()
     with tempfile.TemporaryFile() as output:

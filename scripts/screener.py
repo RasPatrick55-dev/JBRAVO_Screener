@@ -1,7 +1,7 @@
 """JBRAVO screener pipeline (production-ready post Phase V).
 
 By design:
-- Bars fetch via IEX (primary) with a single retry; SIP fallback covers missing bars only.
+- Bars fetch via IEX (primary) with a single retry; missing bars remain explicitly missing without a SIP fallback.
 - Partial bar coverage is accepted; fallback is used only on true no-signal days.
 - Every written candidate includes indicators and gate telemetry (passed_gates TRUE/FALSE).
 - run_date is not unique; pipeline_health_app.run_ts_utc is the canonical run id.
@@ -2022,54 +2022,8 @@ def _fetch_daily_bars(
         prescreened.update(retry_prescreened or {})
         missing = [sym for sym in unique_symbols if sym not in keep]
         metrics["symbols_no_bars_sample"] = missing[:10]
-    if missing and (feed or "").strip().lower() == "iex":
-        sip_frame, sip_pages, sip_prescreened, sip_metrics = fetch_single_collection(
-            missing,
-            use_http=(source == "http"),
-            feed_override="sip",
-        )
-        sip_recovered = 0
-        if not sip_frame.empty:
-            sip_frame = _normalize_bars_frame(sip_frame)
-            sip_frame = ensure_symbol_column(sip_frame)
-            sip_frame = sip_frame.dropna(subset=["timestamp"]) if not sip_frame.empty else sip_frame
-            if not sip_frame.empty:
-                sip_frame = (
-                    sip_frame.sort_values("timestamp")
-                    .groupby("symbol", as_index=False, group_keys=False)
-                    .tail(days)
-                )
-                sip_frame = ensure_symbol_column(sip_frame).reset_index(drop=True)
-                sip_hist = (
-                    sip_frame.groupby("symbol", as_index=False)["timestamp"]
-                    .size()
-                    .rename(columns={"size": "n"})
-                )
-                if min_history > 0 and not sip_hist.empty:
-                    sip_keep = set(sip_hist.loc[sip_hist["n"] >= min_history, "symbol"].tolist())
-                else:
-                    sip_keep = set(sip_hist["symbol"].tolist()) if not sip_hist.empty else set()
-                if sip_keep:
-                    sip_recovered = len(sip_keep)
-                    combined = pd.concat(
-                        [
-                            combined,
-                            sip_frame[sip_frame["symbol"].isin(sip_keep)],
-                        ],
-                        ignore_index=True,
-                    )
-                    keep.update(sip_keep)
-        LOGGER.info(
-            "[BARS_FEED_FALLBACK] from=iex to=sip recovered=%d",
-            sip_recovered,
-        )
-        for key, value in (sip_metrics or {}).items():
-            if not isinstance(value, int):
-                continue
-            metrics[key] = metrics.get(key, 0) + int(value)
-        prescreened.update(sip_prescreened or {})
-        missing = [sym for sym in unique_symbols if sym not in keep]
-        metrics["symbols_no_bars_sample"] = missing[:10]
+    missing = [sym for sym in unique_symbols if sym not in keep]
+    metrics["symbols_no_bars_sample"] = missing[:10]
     for sym in missing:
         if sym in insufficient:
             continue

@@ -176,6 +176,22 @@ class PostflightTests(unittest.TestCase):
                 path.write_bytes(data)
                 self.assertEqual(self.check()['status'], 'failed')
 
+    def test_pythonanywhere_entry_and_fence_drift_invalidate_receipt(self):
+        for relative in ('scripts/pythonanywhere_primary_pipeline.py',
+                         'scripts/ops/run_pythonanywhere_primary_pipeline.sh',
+                         'scripts/candidate007_worker_fence.py'):
+            with self.subTest(relative=relative):
+                path = self.root / relative
+                original = path.read_bytes()
+                record = self.publish()
+                self.assertIn(relative, record['source_bindings'])
+                self.assertEqual(self.check()['status'], 'ok')
+                try:
+                    path.write_bytes(original + b'\n# synthetic source drift\n')
+                    self.assertIn('source_binding_mismatch', self.check()['failures'])
+                finally:
+                    path.write_bytes(original)
+
     def test_missing_history_and_source_mismatch_fail(self):
         record = self.publish()
         history = self.root / 'reports/pipeline_postflight' / ('run-' + record['run_id'] + '.json')

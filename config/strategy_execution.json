@@ -8,7 +8,7 @@
   "max_positions": 4,
   "limit_buffer_pct": 0.5,
   "cancel_after_minutes": 35,
-  "reference_feed": "sip",
+  "reference_feed": "iex",
   "reference_adjustment": "raw",
   "currency": "USD",
   "research_qualified": false

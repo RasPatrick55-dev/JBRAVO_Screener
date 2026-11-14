@@ -1,0 +1,53 @@
+{
+  "schema": "jbravo.hourly-dependency-source-provenance.v1",
+  "observed_at_utc": "2026-11-14T21:43:40Z",
+  "method": "supported PythonAnywhere MCP read_file_or_directory",
+  "native_checkout": "5c402be1cbcf674a6f415261729110f86a3b5e0b with deployed overlays",
+  "canonical_base": "f0f8f41",
+  "sources": {
+    "strategy_fill_auto_sync.py": {
+      "bytes": 13892,
+      "sha256": "b357057366289609f036ab99b5315f1e3d38307b2990ad8d0ee0793267aeacd5",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_fill_auto_sync.py"
+    },
+    "strategy_data_projection.py": {
+      "bytes": 19492,
+      "sha256": "d2e88b41003ba9257a9b76233f01edb51eefdc7ff0abd3dffefd9d6a21f30bea",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_data_projection.py"
+    },
+    "strategy_fill_sync_adapter.py": {
+      "bytes": 12282,
+      "sha256": "2e8fc1eb46bbd1795a050bdc35694eaa606afe23cfc93b46c3e3cbadedc69e2a",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_fill_sync_adapter.py"
+    },
+    "strategy_fill_linkage.py": {
+      "bytes": 16287,
+      "sha256": "1af8147a50b85e30d92b69d4f403271533a9f5a375c18879177d90d87b7d815d",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_fill_linkage.py"
+    },
+    "strategy_fill_linkage_store.py": {
+      "bytes": 3820,
+      "sha256": "f26dae001de8f10b585b933775248bbe4205f84be2c660656eaa374667359a67",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/strategy_fill_linkage_store.py"
+    }
+  },
+  "canonical_support_sources_identical_as_git_blobs": {
+    "activity_ingestion_checkpoint.py": {
+      "bytes": 12488,
+      "sha256": "0a699b5ef529dab269fe46d5f17091c33f353bf11d180987552355908124d2f2",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/activity_ingestion_checkpoint.py"
+    },
+    "fetch_account_activities.py": {
+      "bytes": 26558,
+      "sha256": "359eccb5b6b6ae5ef7752819ef749cfcc3a3d74110701ba89922055b15821d5d",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/fetch_account_activities.py"
+    },
+    "db.py": {
+      "bytes": 195605,
+      "sha256": "cdadff4d2236b21e8cc2cf244316f6fc8e7b00d8a2f62779087fb878eea01692",
+      "source": "/home/RasPatrick/jbravo_screener/scripts/db.py"
+    }
+  },
+  "deployed": false,
+  "database_or_broker_calls": 0
+}

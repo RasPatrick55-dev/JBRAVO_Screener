@@ -118,6 +118,9 @@ SOURCE_FILES += ('scripts/executor_health.py', 'scripts/metrics.py', 'scripts/db
                  'scripts/trade_allocation.py', 'scripts/trade_performance.py',
                  'dashboards/data_io.py', 'dashboards/dashboard_app.py')
 SOURCE_FILES += ('dashboards/operational_status.py',)
+SOURCE_FILES += ('scripts/pythonanywhere_primary_pipeline.py',
+                 'scripts/ops/run_pythonanywhere_primary_pipeline.sh',
+                 'scripts/candidate007_worker_fence.py')
 MAX_REPORT_BYTES = 64 * 1024
 MAX_SOURCE_BYTES = 1024 * 1024
 ML_PROVENANCE_FIELDS = ('monitor_run_date', 'monitor_run_date_source', 'monitor_artifact_run_date',

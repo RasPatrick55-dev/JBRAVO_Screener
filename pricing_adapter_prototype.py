@@ -8,7 +8,7 @@ from datetime import datetime, date, timedelta
 from types import SimpleNamespace
 import re
 
-POLICY = 'RAW_SIP_AH_OR_REGULAR_15M_CLOSE_PLUS_0_5_PCT_V2'
+POLICY = 'RAW_IEX_AH_OR_REGULAR_15M_CLOSE_PLUS_0_5_PCT_V2'
 
 
 def pricing_contract(native_rules, native_selection):
@@ -33,7 +33,7 @@ def pricing_contract(native_rules, native_selection):
         """
         close=datetime.combine(date.fromisoformat(signal_session),datetime.min.time().replace(hour=16),NY)
         start=close-timedelta(minutes=15)
-        require(feed=='sip' and adjustment=='raw' and currency=='USD' and complete is True and
+        require(feed=='iex' and adjustment=='raw' and currency=='USD' and complete is True and
             utc(observed_at)>=utc(close)+timedelta(hours=4,minutes=15),
             'execution_regular_reference_capture_invalid')
         require(isinstance(bars,list) and len(bars)<=15,'execution_regular_reference_population_invalid')
@@ -90,13 +90,14 @@ def pricing_contract(native_rules, native_selection):
         status=('ACTIVITY_UNKNOWN' if error else 'INCOMPLETE_RAW_ACTIVITY' if not complete else
             'TRADES_WITHOUT_ELIGIBLE_BAR' if observations else
             'ADMINISTRATIVE_MESSAGES_ONLY' if trades else 'NO_RAW_TRADES')
-        summary=dict(status=status,complete=complete,error=error,raw_record_count=len(trades),
+        summary=dict(status=status,feed='iex',venue_scope='single_exchange',
+            market_wide_activity_known=False,complete=complete,error=error,raw_record_count=len(trades),
             observed_trade_count=len(observations),administrative_message_count=administrative,
             odd_lot_trade_count=odd_lots,extended_hours_trade_count=extended,
             extended_hours_odd_lot_count=extended_odd_lots,
             latest_observed_trade=observations[0] if observations else None)
         return dict(symbol=symbol,signal_session=signal_session,observed_at=utc(observed_at).isoformat(),
-            feed='sip',currency='USD',window_start=utc(start).isoformat(),window_end=utc(cutoff).isoformat(),
+            feed='iex',currency='USD',window_start=utc(start).isoformat(),window_end=utc(cutoff).isoformat(),
             summary=summary,trades=deepcopy(trades),trades_sha256=digest(trades))
 
     def pipeline_price_reference(after_hours, regular_close=None, activity=None):
@@ -170,7 +171,7 @@ def pricing_contract(native_rules, native_selection):
             price=(rules.number(checked['price'],positive=True)*Decimal('1.005')).quantize(Decimal('.01'),rounding=ROUND_FLOOR)
             require(price>0,'pipeline_limit_nonpositive')
             chosen=checked['after_hours'] if kind=='AFTER_HOURS_BAR' else checked['regular_close']
-            provenance=dict(provider='alpaca',feed='sip',adjustment='raw',currency='USD',
+            provenance=dict(provider='alpaca',feed='iex',adjustment='raw',currency='USD',
                 policy=PIPELINE_LIMIT_POLICY,reference_kind=kind,reference_price=checked['price'],
                 reference_at=checked['reference_at'],captured_at=checked['observed_at'],
                 reference_id=checked['reference_id'],bars_sha256=chosen['bars_sha256'],

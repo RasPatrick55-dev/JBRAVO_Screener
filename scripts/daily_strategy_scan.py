@@ -51,7 +51,7 @@ def load_config(path=CONFIG):
         require(1<=len(cfg['symbols'])<=100 and len(symbols)==len(set(symbols)) and all(
             isinstance(s,str) and 1<=len(s)<=12 and all(c.isupper() or c.isdigit() or c in '.-' for c in s) for s in symbols),'INVALID_DAILY_UNIVERSE')
         require(1<=cfg['max_provider_gets']<=24 and 1<=cfg['max_scan_seconds']<=600,'INVALID_DAILY_DATA_CONTRACT')
-    require(cfg['feed']=='sip' and cfg['currency']=='USD','INVALID_DAILY_DATA_CONTRACT')
+    require(cfg['feed']=='iex' and cfg['currency']=='USD','INVALID_DAILY_DATA_CONTRACT')
     require(date.fromisoformat(cfg['warmup_start'])<date.fromisoformat(cfg['episode_start']),'INVALID_DAILY_EPISODE')
     return cfg
 
@@ -178,7 +178,7 @@ def capture(provider,cfg,calendar,session,root,*,now):
         text=io.StringIO(newline='');writer=csv.DictWriter(text,fieldnames=list(records[0]));writer.writeheader();writer.writerows(records)
         bind_member('alpaca_'+adjustment+'_daily.csv',text.getvalue().encode())
     bind_member('provider-requests.json',json.dumps(provider.receipts,sort_keys=True).encode())
-    save_json(folder/'manifest.json',dict(research_qualified=False,execution_authorized=False,bindings=pins))
+    save_json(folder/'manifest.json',dict(research_qualified=False,execution_authorized=False,feed=cfg['feed'],bindings=pins))
     actions={}
     params=dict(symbols=','.join(symbols),start=cfg['warmup_start'],end=now.astimezone(NY).date().isoformat(),limit=1000,sort='asc')
     for page,value,raw in pages(provider,DATA+'/v1/corporate-actions',params):

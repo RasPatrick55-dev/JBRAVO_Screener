@@ -121,7 +121,7 @@ def test_sharded_capture_accounts_for_every_symbol_and_every_page(cfg,tmp_path):
     assert data.raw['AAA'].index[-1].strftime('%Y-%m-%d')=='2026-10-26'
     assert any('page_token' in p for url,p in provider.requests if url.endswith('/bars'))
     assert all(len(p['symbols'].split(','))<=2 for url,p in provider.requests if url.endswith('/bars'))
-    assert all(p['feed']=='sip' and p['adjustment'] in ('raw','split') for url,p in provider.requests if url.endswith('/bars'))
+    assert all(p['feed']=='iex' and p['adjustment'] in ('raw','split') for url,p in provider.requests if url.endswith('/bars'))
     assert (root/'coverage-pending.json').is_file()
 
 
@@ -367,3 +367,32 @@ def test_sparse_market_replay_preserves_competition_consumption_fills_and_exits(
     assert normal['funnel']==sparse['funnel']
     assert [(r['symbol'],r['reason']) for r in normal['latest_observations']]==[(r['symbol'],r['reason']) for r in sparse['latest_observations']]
     assert any(r['reason']=='REARM_REQUIRES_PULLBACK_AFTER_CONSUMED_CLOSE' for r in sparse['observations'])
+
+
+def test_iex_capture_is_not_relabelled_sip_and_old_sip_is_preserved(cfg,tmp_path):
+    root,spec=capture(tmp_path,cfg,MarketProvider())
+    manifest_path=Path(spec['capture_manifest'])
+    original=json.loads(manifest_path.read_text())
+    assert original['schema']=='jbravo.market-capture.v2' and original['feed']=='iex'
+    assert load_dataset(spec).provenance['feed']=='iex'
+    manifest_path.write_text(json.dumps(dict(original,feed='sip')))
+    with pytest.raises(ValueError,match='FEED_BINDING_CHANGED'):load_dataset(spec)
+    # A legacy v1 manifest can only represent its original SIP contract.
+    invalid=dict(original,schema='jbravo.market-capture.v1')
+    manifest_path.write_text(json.dumps(invalid))
+    with pytest.raises(ValueError,match='MARKET_FEED_CONTRACT'):load_dataset(spec)
+    invalid=dict(original);invalid.pop('feed')
+    manifest_path.write_text(json.dumps(invalid))
+    with pytest.raises(ValueError,match='MARKET_FEED_CONTRACT'):load_dataset(spec)
+
+
+def test_sip_cache_identity_cannot_be_reused_for_iex(cfg):
+    assert u._cache_key(asset('AAA'),cfg)!=u._cache_key(asset('AAA'),dict(cfg,feed='sip'))
+
+
+def test_original_v1_sip_capture_keeps_its_historical_feed(cfg,tmp_path):
+    root,spec=capture(tmp_path,dict(cfg,feed='sip'),MarketProvider())
+    path=Path(spec['capture_manifest']);manifest=json.loads(path.read_text())
+    manifest['schema']='jbravo.market-capture.v1';manifest.pop('feed');manifest.pop('currency')
+    path.write_text(json.dumps(manifest))
+    assert load_dataset(spec).provenance['feed']=='sip'

@@ -2074,7 +2074,8 @@ def emit_import_sentinel() -> None:
         f"version={version}",
     ]
     try:
-        subprocess.run(cmd, check=False)
+        from scripts import candidate007_worker_fence as generation_fence
+        subprocess.run(cmd, check=False, **generation_fence.child_options())
     except Exception as exc:  # pragma: no cover - telemetry best effort
         LOGGER.debug("Import sentinel emission failed: %s", exc)
 

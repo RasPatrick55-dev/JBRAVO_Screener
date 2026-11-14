@@ -29,6 +29,7 @@ import zoneinfo
 import pandas as pd
 import requests
 
+from scripts import candidate007_worker_fence as generation_fence
 from scripts import db
 from scripts import db_migrate
 from scripts.db_queries import get_latest_screener_candidates
@@ -1245,7 +1246,7 @@ def _maybe_fallback(base_dir: Path | None = None) -> int:
 
 def run_cmd(cmd: Sequence[str], name: str) -> int:
     try:
-        subprocess.check_call(list(cmd), cwd=PROJECT_ROOT)
+        subprocess.check_call(list(cmd), cwd=PROJECT_ROOT, **generation_fence.child_options())
         return 0
     except subprocess.CalledProcessError as exc:  # pragma: no cover - legacy shim
         return exc.returncode
@@ -2625,6 +2626,7 @@ def run_step(
                     env=child_env,
                     text=True,
                     bufsize=1,
+                    **generation_fence.child_options(),
                 )
             else:
                 proc = subprocess.Popen(
@@ -2634,6 +2636,7 @@ def run_step(
                     cwd=PROJECT_ROOT,
                     env=child_env,
                     text=True,
+                    **generation_fence.child_options(),
                 )
         except Exception as exc:
             LOG.error("Failed to launch step %s: %s", name, exc)
@@ -4340,6 +4343,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     cwd=PROJECT_ROOT,
                     check=True,
                     env=env,
+                    **generation_fence.child_options(),
                 )
                 LOG.info("[INFO] TRADE_PERFORMANCE_CACHE_REFRESHED")
             except Exception:
@@ -5594,6 +5598,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 cwd=PROJECT_ROOT,
                 check=True,
                 env=env,
+                **generation_fence.child_options(),
             )
             LOG.info("ACCOUNT_EQUITY_REFRESH_OK")
         except Exception:

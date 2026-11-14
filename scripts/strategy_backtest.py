@@ -140,7 +140,7 @@ def report_from_replay(batch, replay, *, primary_run_id, dataset, specification)
             proposal['signal_session']==as_of and proposal['side']=='BUY' and
             proposal['paper_only'] is True and proposal['order_submission_authorized'] is False,
             'backtest_candidate_outside_declared_scope')
-    require(dataset.provenance['feed']=='sip' and dataset.provenance['currency']=='USD' and
+    require(dataset.provenance['feed'] in {'sip','iex'} and dataset.provenance['currency']=='USD' and
         dataset.provenance['execution_prices']=='raw' and dataset.provenance['feature_prices']=='split',
         'backtest_data_convention_mismatch')
     result=dict(schema='jbravo.candidate-strategy-backtest.v1',mode='REPORT_ONLY',

@@ -183,7 +183,7 @@ def after_hours_reference(bars, *, symbol, signal_session, observed_at,
     """Preserve the latest observed after-hours bar; never invent a 20:00 print."""
     cutoff=datetime.combine(date.fromisoformat(signal_session),datetime.min.time().replace(hour=20),NY)
     start=cutoff-timedelta(hours=4)
-    require(feed=='sip' and adjustment=='raw' and currency=='USD' and complete is True and
+    require(feed=='iex' and adjustment=='raw' and currency=='USD' and complete is True and
         utc(observed_at)>=utc(cutoff)+timedelta(minutes=15), 'execution_reference_capture_invalid')
     require(isinstance(bars,list) and len(bars)<=240, 'execution_reference_population_invalid')
     previous=None
@@ -223,7 +223,7 @@ def build_entry_order(handoff, *, signal_id, account_id, cash, reference,
     proposal=matches[0]
     require(reference['status']=='AVAILABLE' and reference['symbol']==proposal['symbol'] and
         reference['signal_session']==handoff['session']['signal_session'] and
-        reference['feed']=='sip' and reference['adjustment']=='raw' and reference['currency']=='USD' and
+        reference['feed']=='iex' and reference['adjustment']=='raw' and reference['currency']=='USD' and
         utc(reference['observed_at'])<utc(handoff['execution_policy']['entry_open_at']) and
         digest({k:v for k,v in reference.items() if k!='reference_id'})==reference['reference_id'],
         'execution_after_hours_reference_unavailable_or_changed')
@@ -246,7 +246,7 @@ def build_entry_order(handoff, *, signal_id, account_id, cash, reference,
             extended_hours=True,client_order_id=client_order_id(account_id,signal_id)),lineage=lineage,
         sizing=dict(cash=str(number(cash)),reserved_cash=str(number(reserved_cash)),
             reference_price=str(reference['price']),reference_at=reference['last_bar_at'],
-            maximum_fill_price=str(price),reference_required='RAW_SIP_AFTER_HOURS',allocation_pct=.05,occupied_slots=occupied_slots,
+            maximum_fill_price=str(price),reference_required='RAW_IEX_AFTER_HOURS',allocation_pct=.05,occupied_slots=occupied_slots,
             prepared_at=now.isoformat()),order_submission_authorized=False,broker_operations=0)
 
 

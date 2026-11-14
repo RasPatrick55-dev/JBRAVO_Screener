@@ -210,7 +210,7 @@ def test_capture_is_bounded_sip_and_never_uses_raw_trade_price(contract):
     def get(path,params):calls.append((path,params));return replies.pop(0)
     result=capture_prices({'selected_setups':[{'proposal':{'symbol':'X'}}]},{'session':SESSION},rules=rules,contract=c,get=get,now=lambda:datetime.fromisoformat(OBSERVED))
     assert result['X']['price']=='6.7' and result['X']['reference_kind']=='REGULAR_SESSION_FALLBACK'
-    assert len(calls)==3 and all(p['feed']=='sip' for _,p in calls)
+    assert len(calls)==3 and all(p['feed']=='iex' for _,p in calls)
     assert calls[1][1]['start'].endswith('15:45:00-05:00')
 
 

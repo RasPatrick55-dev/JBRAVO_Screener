@@ -104,7 +104,7 @@ def test_premarket_uses_calendar_offset_and_next_session_clock_through_dst():
 def reference(bars=None):
     if bars is None:bars=[dict(t='2026-10-23T23:59:00+00:00',o=100.,h=100.,l=100.,c=100.,v=1000.)]
     return ex.after_hours_reference(bars,symbol='SRRK',signal_session='2026-10-23',
-        observed_at='2026-10-24T00:15:00+00:00',feed='sip',adjustment='raw',currency='USD',complete=True)
+        observed_at='2026-10-24T00:15:00+00:00',feed='iex',adjustment='raw',currency='USD',complete=True)
 
 
 def test_bound_signal_produces_a_premarket_limit_plan_with_explicit_backtest_gap():
@@ -259,3 +259,10 @@ def test_live_or_lookalike_origin_is_denied_before_claim_or_post(origin):
     with pytest.raises(ValueError,match='paper_authority'):
         submit(store,broker)
     assert not store.claims and broker.posts == 0
+
+
+def test_runtime_reference_rejects_sip_without_relabeling_historical_data():
+    with pytest.raises(ValueError,match='reference_capture_invalid'):
+        ex.after_hours_reference([],symbol='SRRK',signal_session='2026-10-23',
+            observed_at='2026-10-24T00:15:00+00:00',feed='sip',adjustment='raw',
+            currency='USD',complete=True)
