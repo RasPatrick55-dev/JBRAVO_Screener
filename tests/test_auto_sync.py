@@ -73,6 +73,7 @@ class AutomaticConfig(TestCase):
                 sys.modules,
                 {
                     "scripts.db": MagicMock(),
+                    "dotenv": MagicMock(),
                     "scripts.fetch_account_activities": fake_ingest,
                 },
             ),
@@ -111,6 +112,7 @@ class AutomaticConfig(TestCase):
                 sys.modules,
                 {
                     "scripts.db": MagicMock(),
+                    "dotenv": MagicMock(),
                     "scripts.fetch_account_activities": MagicMock(),
                 },
             ),

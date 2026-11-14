@@ -17,3 +17,7 @@ This is compatibility with the existing PythonAnywhere deployment, not a complet
 The hourly outer adapter owns its generation lease and invokes this data phase in-process. Do not nest a second lease wrapper or assume its dynamically loaded helper shares module state with the canonical helper. These retained modules do not spawn children. New release guards must bind this exact dependency closure, task entrypoint and source/config hashes. Preserve existing authorization configuration semantics and do not reuse consumed operations.
 
 This source preparation is not evidence of a successful hourly run, a complete production cutover or whole-bot readiness. No database connection or PythonAnywhere runtime qualification occurred in this task.
+
+## Offline qualification result
+
+65 tests and 11 subtests passed on Windows and Linux Python 3.10.22. CLI fixtures explicitly mock dotenv, broker and database ports. Ruff, Python 3.10 syntax and Git whitespace checks passed. PostgreSQL integration and actual PythonAnywhere runtime qualification were not performed.
