@@ -3,8 +3,8 @@ tests/fixtures/ownership_native_engine.py text eol=lf
 tests/fixtures/ownership_native_rules.py text eol=lf
 tests/fixtures/ownership_native_broker.py text eol=lf whitespace=-blank-at-eof
 frontend/qa/fixtures/combinedGrossWire.synthetic.json text eol=lf
-scripts/strategy_fill_auto_sync.py -text
-scripts/strategy_data_projection.py -text
-scripts/strategy_fill_sync_adapter.py -text
-scripts/strategy_fill_linkage.py -text
-scripts/strategy_fill_linkage_store.py -text
+scripts/strategy_fill_auto_sync.py -text whitespace=cr-at-eol
+scripts/strategy_data_projection.py -text whitespace=cr-at-eol
+scripts/strategy_fill_sync_adapter.py -text whitespace=cr-at-eol
+scripts/strategy_fill_linkage.py -text whitespace=cr-at-eol
+scripts/strategy_fill_linkage_store.py -text whitespace=cr-at-eol
