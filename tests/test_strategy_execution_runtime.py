@@ -46,7 +46,7 @@ def test_failed_unified_handoff_replaces_stale_entry_receipt_before_broker(monke
     runtime.write_report(dict(status='skipped',finished_at='yesterday'),role='entry',base_dir=tmp_path)
     monkeypatch.setattr(runtime,'environment',lambda:{})
     monkeypatch.setattr(runtime,'source_lease',lambda *a:nullcontext())
-    monkeypatch.setattr(runtime,'load_config',lambda *a:{})
+    monkeypatch.setattr(runtime,'load_config',lambda *a:dict(execution_model=rules.EXECUTION_MODEL))
     monkeypatch.setattr(runtime,'source_guard',lambda *a,**k:True)
     monkeypatch.setattr(runtime,'readonly_handoff',lambda *a,**k:handoff())
     def unavailable(*a,**k):raise ValueError('unified_selection_not_published')
@@ -64,7 +64,7 @@ def test_no_signal_and_dry_run_do_not_construct_broker_or_write_order_state(monk
     if not dry_run:value['proposals']=[]
     monkeypatch.setattr(runtime,'environment',lambda:{})
     monkeypatch.setattr(runtime,'source_lease',lambda *a:nullcontext())
-    monkeypatch.setattr(runtime,'load_config',lambda *a:{})
+    monkeypatch.setattr(runtime,'load_config',lambda *a:dict(execution_model=rules.EXECUTION_MODEL))
     monkeypatch.setattr(runtime,'source_guard',lambda *a,**kw:True)
     monkeypatch.setattr(runtime,'readonly_handoff',lambda *a,**kw:deepcopy(value))
     def unified(env,parent,**kwargs):
@@ -89,7 +89,7 @@ def test_no_signal_and_dry_run_do_not_construct_broker_or_write_order_state(monk
     ('disable_open_position_cap',True),('paper_research_entries',False),('extended_hours',False),
     ('reconcile_only',True),('diagnostic',True),('reconcile_auto',False)])
 def test_changed_task_risk_or_reconciliation_settings_refuse_before_network(monkeypatch,tmp_path,field,value):
-    monkeypatch.setattr(runtime,'load_config',lambda *a:{})
+    monkeypatch.setattr(runtime,'load_config',lambda *a:dict(execution_model=rules.EXECUTION_MODEL))
     monkeypatch.setattr(runtime,'environment',lambda:pytest.fail('Invalid settings accessed credentials'))
     with pytest.raises(ValueError):runtime.run_entry(config(**{field:value}),base_dir=tmp_path)
 
@@ -170,7 +170,7 @@ def test_paper_process_environment_cannot_be_changed_by_private_configuration(mo
 def test_monitor_failure_replaces_prior_healthy_receipt_and_closes_adapter(monkeypatch,tmp_path):
     monkeypatch.setenv('JBR_STRATEGY_EXECUTION','true')
     monkeypatch.setattr(runtime,'environment',lambda:{})
-    monkeypatch.setattr(runtime,'load_config',lambda *a:{})
+    monkeypatch.setattr(runtime,'load_config',lambda *a:dict(execution_model=rules.EXECUTION_MODEL))
     monkeypatch.setattr(runtime,'source_lease',lambda *a:nullcontext())
     from scripts import strategy_execution_broker
     class BrokenBroker:
@@ -190,7 +190,7 @@ def test_missing_unified_selection_keeps_owned_lifecycle_running(monkeypatch,tmp
     from scripts import strategy_execution_broker,strategy_execution_engine
     monkeypatch.setenv('JBR_STRATEGY_EXECUTION','true')
     monkeypatch.setattr(runtime,'environment',lambda:{})
-    monkeypatch.setattr(runtime,'load_config',lambda *a:{})
+    monkeypatch.setattr(runtime,'load_config',lambda *a:dict(execution_model=rules.EXECUTION_MODEL))
     monkeypatch.setattr(runtime,'source_lease',lambda *a:nullcontext())
     monkeypatch.setattr(runtime,'source_guard',lambda *a,**k:True)
     template=handoff()
