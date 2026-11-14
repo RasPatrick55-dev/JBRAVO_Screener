@@ -1,6 +1,5 @@
 """The native deployment config preserves published pipeline limits, offline."""
 import json
-from pathlib import Path
 import pytest
 from scripts import strategy_execution_runtime as runtime
 from scripts import strategy_execution as rules
@@ -38,3 +37,11 @@ def test_configuration_drift_fails_closed(tmp_path, change):
     with pytest.raises(ValueError, match='strategy_execution_configuration_changed'):
         runtime.load_config(tmp_path)
 
+
+
+def test_legacy_frozen_entry_refuses_pipeline_policy_before_credentials(monkeypatch):
+    from tests.test_strategy_execution_runtime import config
+    monkeypatch.setattr(runtime, 'environment',
+                        lambda: pytest.fail('Legacy path read credentials'))
+    with pytest.raises(ValueError, match='legacy_frozen_entry_disabled_for_pipeline_policy'):
+        runtime._run_entry(config(), progress={})

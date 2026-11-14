@@ -289,7 +289,9 @@ def _run_entry(config,*,base_dir=ROOT,wait=None,progress):
     """Called by the existing task after its normal reconciliation gate."""
     from scripts.strategy_execution_broker import PaperBroker
     from scripts.strategy_execution_engine import Engine
-    load_config(base_dir)
+    policy=load_config(base_dir)
+    require(policy.get('execution_model')==rules.EXECUTION_MODEL,
+        'legacy_frozen_entry_disabled_for_pipeline_policy')
     require(config.paper_research_entries is True and config.source=='db' and
         config.reconcile_auto is True and not config.reconcile_only and not config.diagnostic,
         'strategy_entry_process_options_incompatible')
