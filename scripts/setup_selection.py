@@ -9,7 +9,7 @@ from scripts.strategy_backtest import require,digest
 ROOT=Path(__file__).resolve().parents[1]
 MODEL='COMMON_TECHNICAL_COMPOSITE_V1'
 POLICY='UNIFIED_BEST_SETUPS_V1'
-PIPELINE_LIMIT_POLICY='RAW_SIP_AFTER_HOURS_CLOSE_PLUS_0_5_PCT_V1'
+PIPELINE_LIMIT_POLICY='RAW_IEX_AFTER_HOURS_CLOSE_PLUS_0_5_PCT_V1'
 
 
 def model_sha256():
@@ -288,7 +288,7 @@ def build_pipeline_limit_orders(selection,parent,price_inputs,*,published_at):
             proposal['next_session']==parent['session']['next_session'],
             'pipeline_limit_proposal_session_changed')
         require(isinstance(reference,dict),'pipeline_limit_reference_unavailable')
-        # Reuse the exact former reference validator, including SIP/raw/USD,
+        # Reuse the exact former reference validator, including IEX/raw/USD,
         # the 16:00-20:00 New York session and >=20:15 capture availability.
         checked=rules.after_hours_reference(reference['bars'],symbol=symbol,
             signal_session=parent['session']['signal_session'],observed_at=reference['observed_at'],
@@ -298,7 +298,7 @@ def build_pipeline_limit_orders(selection,parent,price_inputs,*,published_at):
             rules.utc(checked['observed_at'])<=published,'pipeline_limit_reference_unavailable')
         price=(rules.number(checked['price'],positive=True)*Decimal('1.005')).quantize(Decimal('.01'),rounding=ROUND_FLOOR)
         require(price>0,'pipeline_limit_nonpositive')
-        provenance=dict(provider='alpaca',feed='sip',adjustment='raw',currency='USD',
+        provenance=dict(provider='alpaca',feed='iex',adjustment='raw',currency='USD',
             policy=PIPELINE_LIMIT_POLICY,reference_price=str(rules.number(checked['price'],positive=True)),
             reference_at=checked['last_bar_at'],captured_at=checked['observed_at'],
             reference_id=checked['reference_id'],bars_sha256=checked['bars_sha256'],

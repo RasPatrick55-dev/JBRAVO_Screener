@@ -34,6 +34,10 @@ class PaperBroker:
                 'strategy_paper_credentials_unavailable')
         require(type(market_data) is bool,'strategy_broker_data_scope_invalid')
         self.market_data=market_data
+        # Paper runtime uses the owner-selected IEX entitlement. Never silently
+        # upgrade to SIP or label an IEX quote as consolidated NBBO.
+        self.quote_feed=env.get('ALPACA_DATA_FEED','iex') if market_data else None
+        require(not market_data or self.quote_feed=='iex','strategy_quote_feed_requires_iex')
         if session is None:
             import requests
             session=requests.Session();session.trust_env=False
@@ -122,17 +126,17 @@ class PaperBroker:
         start=datetime.combine(day,time(16),NY);end=datetime.combine(day,time(20),NY)-timedelta(microseconds=1)
         require(utc(now)>=utc(end)+timedelta(minutes=15),'strategy_reference_not_available')
         value=self.request('GET','/v2/stocks/bars',data=True,params=dict(symbols=','.join(symbols),
-            start=start.isoformat(),end=end.isoformat(),timeframe='1Min',adjustment='raw',feed='sip',
+            start=start.isoformat(),end=end.isoformat(),timeframe='1Min',adjustment='raw',feed='iex',
             currency='USD',sort='asc',limit=1000))
         require(isinstance(value.get('bars'),dict) and value.get('next_page_token') is None and
             set(value['bars'])<=set(symbols),'strategy_reference_response_incomplete')
         return {s:after_hours_reference(value['bars'].get(s,[]),symbol=s,signal_session=signal_session,
-            observed_at=utc(self.now()).isoformat(),feed='sip',adjustment='raw',currency='USD',complete=True) for s in symbols}
+            observed_at=utc(self.now()).isoformat(),feed='iex',adjustment='raw',currency='USD',complete=True) for s in symbols}
 
     def quotes(self,symbols,*,now):
         if not symbols:return {}
         value=self.request('GET','/v2/stocks/quotes/latest',data=True,
-            params=dict(symbols=','.join(sorted(symbols)),feed='sip'))
+            params=dict(symbols=','.join(sorted(symbols)),feed='iex'))
         require(isinstance(value.get('quotes'),dict),'strategy_quote_response_unavailable')
         observed=utc(self.now())
         result={}
@@ -143,7 +147,9 @@ class PaperBroker:
                 (observed-stamp).total_seconds()<=60,'strategy_quote_stale_or_future')
             bid,ask=number(quote['bp'],positive=True),number(quote['ap'],positive=True)
             require(bid<=ask,'strategy_quote_crossed')
-            result[symbol]=dict(bid=str(bid),ask=str(ask),timestamp=stamp.isoformat())
+            result[symbol]=dict(bid=str(bid),ask=str(ask),timestamp=stamp.isoformat(),
+                observed_at=observed.isoformat(),provider='alpaca',feed='iex',
+                is_nbbo=False,venue_scope='single_exchange')
         return result
 
     def find_by_client_order_id(self,key):

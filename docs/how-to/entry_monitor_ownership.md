@@ -100,3 +100,34 @@ Run the focused tests plus native execution regressions and
 `python -m scripts.docs_consistency_check` before publication. Pinned native
 source fixtures exist only to test the deployed interface without rewriting
 the canonical historical implementation.
+
+
+## IEX-only operational broker
+
+The native paper broker now requires `ALPACA_DATA_FEED=iex` for market-data
+access; an omitted value defaults to IEX. An explicit SIP or unknown value fails
+before a request instead of silently using a paid feed. Its latest quotes and
+legacy after-hours reference capture request IEX. Quote provenance says
+`single_exchange` and `is_nbbo=false`; freshness, crossed-book and missing-data
+checks are unchanged. No Webull activation or quote fallback is added here.
+
+The buy-only broker (`market_data=False`) remains independent of quote-feed
+configuration and cannot make market-data requests. Daily screening now requests
+IEX. New market capture manifests use v2 with explicit feed provenance; v1
+captures retain SIP identity. Cache keys include feed, so old SIP bars are not
+silently reused as IEX. Historical backtest readers accept either explicitly
+identified feed without relabeling archived evidence. Legacy screener/backtest
+implicit SIP fallback is disabled. The capture and shared limit-order lineage
+must be rebuilt under IEX before publishing a new handoff.
+
+IEX is single-exchange data and may have less volume or missing symbols/sessions.
+No missing bars are invented, no freshness checks are relaxed, and a historical
+SIP backtest does not qualify a new IEX strategy. Fresh IEX captures may require a
+full history download because old feed caches cannot be reused. Old SIP
+operational references are not accepted as new IEX references.
+
+Deploy source/configuration pins together and verify on PythonAnywhere before
+cutover. This change does not activate Webull, prove usable premarket quotes,
+place orders, or establish profitability. The pure historical SIP research
+capture tools and provenance labels remain for reproducibility, not runtime
+fallback.

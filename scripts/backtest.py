@@ -186,7 +186,7 @@ def _fetch_bars_from_api(symbol: str, end_date: date, lookback_days: int) -> pd.
         hours=23, minutes=59, seconds=59
     )
     start_dt = end_dt - timedelta(days=max(lookback_days, 1) * 2)
-    allow_sip = os.getenv("BACKTEST_SIP_FALLBACK", "true").strip().lower() != "false"
+    allow_sip = False  # IEX-only runtime: no implicit subscription upgrade.
     for feed in ("iex", "sip"):
         if feed == "sip" and not allow_sip:
             continue

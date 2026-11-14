@@ -92,7 +92,7 @@ class IsolatedPricing:
             order_submission_authorized=False)
         review=self.contract.prepare_review(record,price_inputs,published_at=published_at)
         pricing=dict(schema=SCHEMA,status='COMPLETED_ISOLATED_PRICING',run_id=self.pricing_id(record['run_id']),
-            specification=dict(policy='RAW_SIP_AH_OR_REGULAR_15M_CLOSE_PLUS_0_5_PCT_V2',
+            specification=dict(policy='RAW_IEX_AH_OR_REGULAR_15M_CLOSE_PLUS_0_5_PCT_V2',
                 adapter_binding=deepcopy(self.binding)),review=review,paper_only=True,
             execution_authorized=False,order_submission_authorized=False)
         return record,pricing
@@ -128,7 +128,7 @@ class IsolatedPricing:
         need(pricing.get('schema')==SCHEMA and pricing.get('status')=='COMPLETED_ISOLATED_PRICING' and
             pricing.get('run_id')==self.pricing_id(record['run_id']) and pricing.get('paper_only') is True and
             pricing.get('execution_authorized') is False and pricing.get('order_submission_authorized') is False and
-            pricing.get('specification')==dict(policy='RAW_SIP_AH_OR_REGULAR_15M_CLOSE_PLUS_0_5_PCT_V2',adapter_binding=self.binding) and
+            pricing.get('specification')==dict(policy='RAW_IEX_AH_OR_REGULAR_15M_CLOSE_PLUS_0_5_PCT_V2',adapter_binding=self.binding) and
             spec_hash.strip()==self.rules.digest(pricing['specification']) and result_hash.strip()==self.rules.digest(pricing),
             'isolated_pricing_artifact_changed')
         review=pricing['review']
@@ -268,22 +268,22 @@ def capture_prices(selection,parent,*,rules,contract,get,now,broker_error_type=(
         return get(path,params)
     def bars(group,start,end):
         value=read('/v2/stocks/bars',dict(symbols=','.join(group),start=start.isoformat(),end=end.isoformat(),
-            timeframe='1Min',adjustment='raw',feed='sip',currency='USD',sort='asc',limit=1000))
+            timeframe='1Min',adjustment='raw',feed='iex',currency='USD',sort='asc',limit=1000))
         need(isinstance(value,dict) and isinstance(value.get('bars'),dict) and 'next_page_token' in value and
             value['next_page_token'] is None and set(value['bars'])<=set(group),'isolated_price_capture_incomplete')
         return value['bars']
     after=bars(symbols,close,end);observed=now().isoformat()
     ah={s:rules.after_hours_reference(after.get(s,[]),symbol=s,signal_session=day,observed_at=observed,
-        feed='sip',adjustment='raw',currency='USD',complete=True) for s in symbols}
+        feed='iex',adjustment='raw',currency='USD',complete=True) for s in symbols}
     missing=[s for s in symbols if ah[s]['status']=='NO_AFTER_HOURS_REFERENCE']
     regular={};activities={}
     if missing:
         raw=bars(missing,close-timedelta(minutes=15),close-timedelta(microseconds=1));captured=now().isoformat()
         regular={s:contract.regular_close_reference(raw.get(s,[]),symbol=s,signal_session=day,observed_at=captured,
-            feed='sip',adjustment='raw',currency='USD',complete=True) for s in missing}
+            feed='iex',adjustment='raw',currency='USD',complete=True) for s in missing}
         for s in missing:
             try:
-                trades=read('/v2/stocks/trades',dict(symbols=s,start=close.isoformat(),end=end.isoformat(),feed='sip',currency='USD',sort='desc',limit=100))
+                trades=read('/v2/stocks/trades',dict(symbols=s,start=close.isoformat(),end=end.isoformat(),feed='iex',currency='USD',sort='desc',limit=100))
                 need(isinstance(trades,dict) and isinstance(trades.get('trades'),dict) and set(trades['trades'])<={s} and
                     'next_page_token' in trades and (trades['next_page_token'] is None or isinstance(trades['next_page_token'],str)),
                     'isolated_trade_capture_incomplete')

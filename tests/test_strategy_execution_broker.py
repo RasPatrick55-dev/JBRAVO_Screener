@@ -68,12 +68,12 @@ def test_reference_capture_keeps_actual_after_hours_timestamp_and_explicit_missi
     assert result['SRRK']['status']=='NO_AFTER_HOURS_REFERENCE'
     args,kw=session.calls[0]
     assert args==('GET','https://data.alpaca.markets/v2/stocks/bars')
-    assert (kw['params']['feed'],kw['params']['adjustment'],kw['params']['currency'])==('sip','raw','USD')
+    assert (kw['params']['feed'],kw['params']['adjustment'],kw['params']['currency'])==('iex','raw','USD')
     assert kw['params']['start']=='2026-10-23T16:00:00-04:00'
     assert response.closed
 
 
-def test_truncated_reference_population_does_not_fall_back_to_iex_or_daily_close():
+def test_truncated_reference_population_does_not_fall_back_to_other_feed_or_daily_close():
     session=Session(Response(dict(bars={},next_page_token='more')))
     broker=PaperBroker(ENV,session=session)
     with pytest.raises(ValueError,match='incomplete'):
@@ -100,3 +100,33 @@ def test_readonly_order_absence_is_distinct_from_failed_broker_lookup():
     broker=PaperBroker(ENV,session=Session(Response({},404),Response({},503)))
     assert broker.find_by_client_order_id('jbr2-'+'a'*40) is None
     with pytest.raises(BrokerError,match='http_503'):broker.find_by_client_order_id('jbr2-'+'a'*40)
+
+
+@pytest.mark.parametrize('feed',[None,'iex'])
+def test_latest_quotes_use_iex_without_claiming_nbbo(feed):
+    from datetime import datetime, timezone
+    now=datetime(2026,11,16,14,45,tzinfo=timezone.utc)
+    env=dict(ENV)
+    if feed is not None:env['ALPACA_DATA_FEED']=feed
+    session=Session(Response(dict(quotes={'ALK':dict(t=now.isoformat(),bp=44,ap=44.1)})))
+    broker=PaperBroker(env,session=session,now=lambda:now)
+    quote=broker.quotes(['ALK'],now=now)['ALK']
+    assert session.calls[0][1]['params']['feed']=='iex'
+    assert quote['feed']=='iex' and quote['is_nbbo'] is False
+    assert quote['venue_scope']=='single_exchange' and quote['provider']=='alpaca'
+
+
+@pytest.mark.parametrize('feed',['sip','SIP','',None,'delayed_sip','unknown'])
+def test_non_iex_data_configuration_fails_before_network(feed):
+    session=Session()
+    with pytest.raises(ValueError,match='requires_iex'):
+        PaperBroker(ENV|{'ALPACA_DATA_FEED':feed},session=session)
+    assert session.calls==[]
+
+
+def test_buy_only_broker_does_not_depend_on_market_data_entitlement():
+    session=Session()
+    broker=PaperBroker(ENV|{'ALPACA_DATA_FEED':'sip'},session=session,market_data=False)
+    with pytest.raises(ValueError,match='entry_market_data_forbidden'):
+        broker.quotes(['ALK'],now='2026-11-16T14:45:00Z')
+    assert session.calls==[]

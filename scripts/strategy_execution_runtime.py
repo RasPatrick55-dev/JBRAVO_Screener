@@ -34,7 +34,7 @@ def load_config(base_dir=ROOT):
     require(value==dict(schema='jbravo.premarket-paper-execution-config.v1',enabled=True,paper_only=True,
         strategy_id='trend_pullback_reclaim_qualifying_close_v2',execution_model=rules.EXECUTION_MODEL,
         allocation_pct=.05,max_positions=4,limit_buffer_pct=.5,cancel_after_minutes=35,
-        reference_feed='sip',reference_adjustment='raw',currency='USD',research_qualified=False),
+        reference_feed='iex',reference_adjustment='raw',currency='USD',research_qualified=False),
         'strategy_execution_configuration_changed')
     return value
 

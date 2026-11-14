@@ -24,7 +24,7 @@ from scripts.research_dataset import bounded_read, canonical_hash, strict_json
 from scripts.research_testing import save_json
 
 ASSETS = 'https://paper-api.alpaca.markets/v2/assets'
-SCHEMA = 'jbravo.market-capture.v1'
+SCHEMA = 'jbravo.market-capture.v2'
 MAX_MEMBER = 4 * 1024 * 1024
 EXCHANGES = {'AMEX', 'ARCA', 'BATS', 'NYSE', 'NASDAQ', 'NYSEARCA'}
 # Match the existing paper order-state schema and broker adapter. Anything
@@ -354,7 +354,7 @@ def capture_market(provider, cfg, calendar, session, root, *, now, cache_dir=Non
     require(all(r['reason'] != 'DATA_PENDING' for r in coverage['assets']), 'UNIVERSE_COVERAGE_INCOMPLETE')
     eligible = sorted(s for s in shards if s != cfg['benchmark'])
     excluded = {r['symbol']: r['reason'] for r in coverage['assets'] if r['reason'] not in {'EVALUATED', 'BENCHMARK_ONLY'}}
-    coverage.update(status='COMPLETE', evaluated_symbols=eligible, exclusions=excluded,
+    coverage.update(status='COMPLETE', feed=cfg['feed'], currency=cfg['currency'], evaluated_symbols=eligible, exclusions=excluded,
                     discovered_count=len(assets), evaluated_count=len(eligible), excluded_count=len(excluded), **stats)
     save_member('coverage.json', json.dumps(coverage, sort_keys=True, allow_nan=False).encode())
     save_member('calendar.json', json.dumps(calendar, sort_keys=True).encode())
@@ -367,6 +367,7 @@ def capture_market(provider, cfg, calendar, session, root, *, now, cache_dir=Non
         coverage_sha256=pins[-2]['sha256'], symbols_sha256=canonical_hash(eligible), policy=cfg['universe'])
     save_json(folder/'manifest.json', dict(schema=SCHEMA, research_qualified=False, execution_authorized=False,
         signal_session=session, asof=now.astimezone(NY).date().isoformat(), selection=compact,
+        feed=cfg['feed'], currency=cfg['currency'],
         bindings=pins, shards=shards))
     save_json(root/'actions.json', dict(schema='jbravo.sharded-actions.v1', capture_manifest=str(folder/'manifest.json')))
     spec = dict(schema='jbravo.strategy-study.v1', purpose='exploratory_research',
@@ -401,7 +402,7 @@ class MarketDataset:
         self.dividends = ()
         self.market_wide = True
         self.provenance = dict(capture_manifest=str(path), capture_manifest_sha256=binding(path.read_bytes())['sha256'],
-            selection=manifest['selection'], feed='sip', currency='USD', execution_prices='raw', feature_prices='split',
+            selection=manifest['selection'], feed=('sip' if manifest['schema']=='jbravo.market-capture.v1' else manifest['feed']), currency='USD', execution_prices='raw', feature_prices='split',
             asof=manifest['asof'], historical_availability='CACHED_HISTORY_WITH_FRESH_OVERLAP_AND_CURRENT_SNAPSHOT',
             research_qualified=False, execution_authorized=False,
             limitations=['Current active/tradable universe; historical survivorship and no untouched holdout',
@@ -455,6 +456,10 @@ class MarketDataset:
 
 def load_market_dataset(spec, manifest, path):
     path = Path(path).resolve()
+    require((manifest.get('schema')=='jbravo.market-capture.v1' and
+             manifest.get('feed','sip')=='sip') or
+            (manifest.get('schema')==SCHEMA and manifest.get('feed') in {'iex','sip'} and
+             manifest.get('currency')=='USD'), 'INVALID_MARKET_FEED_CONTRACT')
     require(manifest.get('research_qualified') is False and manifest.get('execution_authorized') is False and
             manifest['signal_session'] == spec['folds'][0]['test_end'], 'INVALID_MARKET_MANIFEST')
     pins = {}
@@ -468,6 +473,11 @@ def load_market_dataset(spec, manifest, path):
     member = bounded_read(path.parent/'coverage.json',16*1024*1024)
     require(binding(member) == {k:pins['analysis/coverage.json'][k] for k in ('bytes', 'sha256')}, 'COVERAGE_CHANGED')
     coverage = strict_json(member)
+    if manifest['schema']==SCHEMA:
+        require(coverage.get('feed')==manifest['feed'] and coverage.get('currency')=='USD',
+                'MARKET_FEED_BINDING_CHANGED')
+    else:
+        require(coverage.get('feed','sip')=='sip','MARKET_FEED_BINDING_CHANGED')
     eligible = spec['universe']['symbols']
     require(coverage['status'] == 'COMPLETE' and coverage['signal_session'] == manifest['signal_session'] and
         coverage['evaluated_symbols'] == eligible and eligible == sorted(set(eligible)) and

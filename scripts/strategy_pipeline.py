@@ -1,6 +1,6 @@
 """Primary Screener adapter for verified strategy scans; no broker order capability.
 
-The primary scheduler consumes the earlier daily SIP scan, publishes one atomic
+The primary scheduler consumes the earlier daily source-bound scan, publishes one atomic
 candidate batch, and freezes an identity-preserving handoff. An empty batch is a
 successful screen, never permission to borrow yesterday's symbols. Strategy
 simulation metrics stay in research; they are not broker performance records.

@@ -60,13 +60,18 @@ def load_dataset(spec):
     root = manifest_path.parent.parent
     manifest_body = bounded_read(manifest_path)
     manifest = strict_json(manifest_body)
-    if manifest.get('schema') == 'jbravo.market-capture.v1':
+    if manifest.get('schema') in {'jbravo.market-capture.v1','jbravo.market-capture.v2'}:
         from scripts.strategy_universe import load_market_dataset
         return load_market_dataset(spec, manifest, manifest_path)
     if manifest.get("research_qualified") is not False:
         raise DataError("Expected original unqualified capture status")
     bindings = {item["path"].replace("\\", "/"): item for item in manifest["bindings"]}
     consumed = []
+    # Older immutable captures had a SIP-only contract; new captures declare
+    # their feed. Validate every raw/split row before carrying this provenance.
+    declared_feed = manifest.get("feed", "sip")
+    if declared_feed not in {"sip", "iex"}:
+        raise DataError("Unsupported captured feed")
 
     def member(name):
         key = manifest_path.parent.name + "/" + name
@@ -91,7 +96,7 @@ def load_dataset(spec):
             raise DataError("Missing required captured bar columns")
         if frame.duplicated(["symbol", "session"]).any():
             raise DataError("Duplicate symbol/session input")
-        for column, expected in (("provider", "alpaca"), ("feed", "sip"), ("currency", "USD"), ("adjustment", adjustment)):
+        for column, expected in (("provider", "alpaca"), ("feed", declared_feed), ("currency", "USD"), ("adjustment", adjustment)):
             if not frame[column].eq(expected).all():
                 raise DataError("Mixed or incorrect input " + column)
         if frame["asof"].nunique() != 1:
@@ -198,7 +203,7 @@ def load_dataset(spec):
             dividends.append(dict(event))
     consumed.append({"path": str(Path(actions_spec["path"]).resolve()), "sha256": digest_bytes(action_body), "bytes": len(action_body)})
     provenance = {"capture_manifest": str(manifest_path), "capture_manifest_sha256": digest_bytes(manifest_body),
-                  "inputs": consumed, "selection": universe, "feed": "sip", "currency": "USD",
+                  "inputs": consumed, "selection": universe, "feed": declared_feed, "currency": "USD",
                   "execution_prices": "raw", "feature_prices": "split", "asof": frames["raw"]["asof"].iloc[0],
                   "historical_availability": "REVISED_SNAPSHOT_WITH_ASSUMED_20_15_ET_FINALIZATION",
                   "research_qualified": False, "execution_authorized": False,

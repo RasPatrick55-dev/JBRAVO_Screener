@@ -43,7 +43,7 @@ class CapturedProvider:
         return value,raw
 
 def test_legacy_config_remains_a_regression_fixture(cfg):
-    assert len(cfg['symbols'])==10 and cfg['feed']=='sip'
+    assert len(cfg['symbols'])==10 and cfg['feed']=='iex'
     assert cfg['order_submission_authorized'] is False
     assert cfg['strategy_id']=='trend_pullback_reclaim_qualifying_close_v2'
 
@@ -75,7 +75,7 @@ def test_daily_fresh_capture_runs_same_kernel_and_archives_valid_zero(cfg,tmp_pa
     assert len(archived)==1 and value['provider_gets']==4
     assert archived[0]['strategies'][0]['funnel']['observations']==len(pd.bdate_range(cfg['episode_start'],'2026-10-23'))*len(cfg['symbols'])
     raw=[p for u,p in provider.requests if u.endswith('/bars')]
-    assert [p['adjustment'] for p in raw]==['raw','split'] and all(p['feed']=='sip' for p in raw)
+    assert [p['adjustment'] for p in raw]==['raw','split'] and all(p['feed']=='iex' for p in raw)
     assert all(p['asof']=='2026-10-25' for p in raw)
     assert json.loads((tmp_path/'2026-10-23/scan/paper_handoff.json').read_bytes())['order_submission_authorized'] is False
     again=CapturedProvider(cfg)
@@ -198,3 +198,11 @@ def test_changed_unbound_request_spec_is_refused_before_database(cfg,tmp_path,mo
     monkeypatch.setattr(research_store,'connect',reject)
     with pytest.raises(daily.DailyError,match='SCANNED_SPECIFICATION_CHANGED'):
         daily.archive_scan(summary,tmp_path,cfg,env={})
+
+
+def test_default_daily_config_rejects_sip(tmp_path):
+    cfg=daily.load_config()
+    assert cfg['feed']=='iex'
+    cfg['feed']='sip'
+    path=tmp_path/'config.json';path.write_text(json.dumps(cfg))
+    with pytest.raises(ValueError,match='INVALID_DAILY_DATA_CONTRACT'):daily.load_config(path)

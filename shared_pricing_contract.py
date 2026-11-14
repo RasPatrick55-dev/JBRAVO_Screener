@@ -65,7 +65,7 @@ class SharedPricingContract:
         review=self.adapter.contract.prepare_review(ranking,pricing['review']['price_inputs'],published_at=ranking['finished_at'])
         expected_pricing=dict(schema='jbravo.isolated-pipeline-pricing.v1',status='COMPLETED_ISOLATED_PRICING',
             run_id=self.adapter.pricing_id(ranking['run_id']),
-            specification=dict(policy='RAW_SIP_AH_OR_REGULAR_15M_CLOSE_PLUS_0_5_PCT_V2',adapter_binding=deepcopy(self.adapter.binding)),
+            specification=dict(policy='RAW_IEX_AH_OR_REGULAR_15M_CLOSE_PLUS_0_5_PCT_V2',adapter_binding=deepcopy(self.adapter.binding)),
             review=review,paper_only=True,execution_authorized=False,order_submission_authorized=False)
         need(pricing==expected_pricing,'shared_price_reconstruction_changed')
         self.adapter.contract.entry_preview(ranking,review,handoffs)

@@ -37,11 +37,12 @@ def bar(t,p=6.7):return dict(t=t,o=p,h=p,l=p,c=p,v=100)
 def ref(contract,symbol,*,ah=False,regular=True):
     c,rules,_=contract
     a=rules.after_hours_reference([bar('2026-11-09T22:00:00Z')] if ah else [],symbol=symbol,
-        signal_session=SESSION['signal_session'],observed_at=OBSERVED,feed='sip',adjustment='raw',currency='USD',complete=True)
+        signal_session=SESSION['signal_session'],observed_at=OBSERVED,feed='iex',adjustment='raw',currency='USD',complete=True)
     if ah:return c.pipeline_price_reference(a)
     r=c.regular_close_reference([bar('2026-11-09T20:59:00Z')] if regular else [],symbol=symbol,
-        signal_session=SESSION['signal_session'],observed_at=OBSERVED,feed='sip',adjustment='raw',currency='USD',complete=True)
+        signal_session=SESSION['signal_session'],observed_at=OBSERVED,feed='iex',adjustment='raw',currency='USD',complete=True)
     activity=c.after_hours_activity([],symbol=symbol,signal_session=SESSION['signal_session'],observed_at=OBSERVED,complete=True)
+    assert activity['summary']['feed']=='iex' and activity['summary']['market_wide_activity_known'] is False
     return c.pipeline_price_reference(a,r,activity)
 
 
@@ -94,12 +95,12 @@ def test_all_missing_excludes_without_native_order_request(contract):
 def test_prior_day_or_nonminute_fallback_rejected(contract):
     c,_,_=contract
     for stamp in ('2026-11-08T20:59:00Z','2026-11-09T20:59:01Z'):
-        with pytest.raises(ValueError):c.regular_close_reference([bar(stamp)],symbol='X',signal_session=SESSION['signal_session'],observed_at=OBSERVED,feed='sip',adjustment='raw',currency='USD',complete=True)
+        with pytest.raises(ValueError):c.regular_close_reference([bar(stamp)],symbol='X',signal_session=SESSION['signal_session'],observed_at=OBSERVED,feed='iex',adjustment='raw',currency='USD',complete=True)
 
 
 def test_incomplete_reference_cannot_be_empty_fallback(contract):
     c,_,_=contract
-    with pytest.raises(ValueError):c.regular_close_reference([],symbol='X',signal_session=SESSION['signal_session'],observed_at=OBSERVED,feed='sip',adjustment='raw',currency='USD',complete=False)
+    with pytest.raises(ValueError):c.regular_close_reference([],symbol='X',signal_session=SESSION['signal_session'],observed_at=OBSERVED,feed='iex',adjustment='raw',currency='USD',complete=False)
 
 
 def test_canonical_runtime_does_not_admit_unreviewed_lifecycle_compatibility(contract):
@@ -113,7 +114,7 @@ def test_canonical_runtime_does_not_admit_unreviewed_lifecycle_compatibility(con
 
 def test_old_primary_publisher_remains_legacy_and_rejects_empty_afterhours(contract):
     _,rules,selection=contract;p=parent(contract,['X'])
-    raw=rules.after_hours_reference([],symbol='X',signal_session=SESSION['signal_session'],observed_at=OBSERVED,feed='sip',adjustment='raw',currency='USD',complete=True)
+    raw=rules.after_hours_reference([],symbol='X',signal_session=SESSION['signal_session'],observed_at=OBSERVED,feed='iex',adjustment='raw',currency='USD',complete=True)
     with pytest.raises(ValueError,match='reference_unavailable'):
         selection.build_pipeline_limit_orders(p['selection'],p,{'X':raw},published_at=PUBLISHED)
-    assert selection.PIPELINE_LIMIT_POLICY=='RAW_SIP_AFTER_HOURS_CLOSE_PLUS_0_5_PCT_V1'
+    assert selection.PIPELINE_LIMIT_POLICY=='RAW_IEX_AFTER_HOURS_CLOSE_PLUS_0_5_PCT_V1'
