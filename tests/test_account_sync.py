@@ -31,6 +31,11 @@ class WorkflowTests(unittest.TestCase):
         self.storage = tempfile.TemporaryDirectory()
         self.state = Path(self.storage.name) / 'account_sync'
         self.addCleanup(self.storage.cleanup)
+        # Workflow/result tests isolate the separately tested POSIX entry lease.
+        lease = mock.patch('scripts.candidate007_worker_fence.run_guarded',
+                           side_effect=lambda directory, work: work())
+        lease.start()
+        self.addCleanup(lease.stop)
 
     def test_successful_stage_order_and_saved_health(self):
         calls = []
@@ -734,7 +739,10 @@ class CompletionContractTests(unittest.TestCase):
         self.assertEqual(visited, ['activities', 'reconciliation'])
         self.assertEqual(report['status'], 'degraded')
         self.assertEqual(report['stages'][2]['status'], 'not_run')
-        with mock.patch.object(sync, 'run_workflow', return_value=report), contextlib.redirect_stdout(io.StringIO()):
+        with mock.patch.object(sync, 'run_workflow', return_value=report), \
+             mock.patch('scripts.candidate007_worker_fence.run_guarded',
+                        side_effect=lambda directory, work: work()), \
+             contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(sync.main([]), 1)
 
 
@@ -827,7 +835,10 @@ class PublicationUniquenessTests(unittest.TestCase):
         self.assertEqual(visited, ['activities', 'reconciliation'])
         self.assertEqual(report['stages'][2]['status'], 'not_run')
         self.assertEqual(report['status'], 'failed')
-        with mock.patch.object(sync, 'run_workflow', return_value=report), contextlib.redirect_stdout(io.StringIO()):
+        with mock.patch.object(sync, 'run_workflow', return_value=report), \
+             mock.patch('scripts.candidate007_worker_fence.run_guarded',
+                        side_effect=lambda directory, work: work()), \
+             contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(sync.main([]), 1)
 
 

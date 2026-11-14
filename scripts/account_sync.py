@@ -212,7 +212,8 @@ def run_stage(stage: Stage, timeout: float, lock_fd: int) -> dict:
             child_environment[ingestion_checkpoint.ENV_CUTOFF]=cutoff.isoformat()
         options['env'] = child_environment
     if os.name == 'posix':
-        options.update(start_new_session=True, pass_fds=(lock_fd,))
+        from scripts import candidate007_worker_fence as generation_fence
+        options.update(start_new_session=True, **generation_fence.child_options(lock_fd))
     reason = None
     started = time.monotonic()
     with tempfile.TemporaryFile() as output:
@@ -375,7 +376,9 @@ def main(argv=None) -> int:
     parser.add_argument('--stage-timeout-seconds', type=float, default=300)
     args = parser.parse_args(argv)
     try:
-        report = run_workflow(args.state_dir, args.stage_timeout_seconds)
+        from scripts import candidate007_worker_fence as generation_fence
+        report = generation_fence.run_guarded(generation_fence.DIRECTORY,
+            lambda: run_workflow(args.state_dir, args.stage_timeout_seconds))
     except Exception as failure:
         # Existing files retain primary stage results even if latest recording fails.
         print(json.dumps({'status': 'failed', 'reason': 'workflow_or_recording_failure',

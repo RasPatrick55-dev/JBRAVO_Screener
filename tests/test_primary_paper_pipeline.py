@@ -48,6 +48,12 @@ class PrimaryPaperTests(unittest.TestCase):
         self.environment = mock.patch.dict(os.environ, {}, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        # These existing tests isolate paper-context policy, not the POSIX lease.
+        # Real acquisition, refusal and descendant retention are tested separately.
+        fence = mock.patch('scripts.candidate007_worker_fence.run_guarded',
+                           side_effect=lambda directory, work: work())
+        fence.start()
+        self.addCleanup(fence.stop)
         # A mistaken provider/process call must fail rather than reach a target.
         for target in ('socket.socket', 'socket.create_connection', 'subprocess.Popen'):
             guard = mock.patch(target, side_effect=AssertionError('external effect forbidden'))
