@@ -269,7 +269,13 @@ def read_rows(cursor,limit):
 
 def read_extensions(cursor,records,identity,policy_revision,excluded_ids,*,allocation_type,attest):
     """Called by canonical A under its existing shared policy lock."""
-    D=policy_module();need(len(records)<=2,'ALLOCATION_SCOPE')
+    need(len(records)<=2,'ALLOCATION_SCOPE')
+    return _read_extensions(cursor,records,identity,policy_revision,excluded_ids,
+        allocation_type=allocation_type,attest=attest,validator=validate_group)
+
+
+def _read_extensions(cursor,records,identity,policy_revision,excluded_ids,*,allocation_type,attest,validator):
+    D=policy_module()
     if not records:return [],{},[]
     attest(cursor);groups=[];all_orders=[];all_ids=[];seen_trades=set();seen_cases=set();allocation_ids=[]
     for row in records:
@@ -286,7 +292,8 @@ def read_extensions(cursor,records,identity,policy_revision,excluded_ids,*,alloc
         expected_receipt=dict(allocation_id=allocation_id,trade_id=manifest['trade_id'],state=state,allocation_revision=revision,
             policy_revision=audit_revision,approval_ref=request['approval_ref'])
         need(D.document(audit_result)==expected_receipt,'ALLOCATION_AUDIT')
-        info=validate_group(manifest,identity);tid=manifest['trade_id']
+        info=validator(manifest,identity)
+        tid=manifest['trade_id']
         need(manifest['case'] not in seen_cases,'ALLOCATION_CASE_REUSED');seen_cases.add(manifest['case'])
         need(tid not in seen_trades and (state!='ACTIVE' or tid not in excluded_ids),'ALLOCATION_COLLISION');seen_trades.add(tid)
         need(not set(info['orders']).intersection(all_orders) and not set(info['activity_ids']).intersection(all_ids),'ALLOCATION_REUSED')
