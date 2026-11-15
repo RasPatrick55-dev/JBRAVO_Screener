@@ -55,7 +55,8 @@ def test_monitor_installs_correct_derived_base_and_refuses_double_install(native
 
 def test_entry_install_preserves_outer_report_handler_and_only_replaces_inner(native):
     old = lambda *a, **k: 'outer'
-    runtime = SimpleNamespace(ROOT='unused', run_entry=old, _run_entry=object())
+    runtime = SimpleNamespace(ROOT='unused', run_entry=old, _run_entry=object(),
+                              validate_entry_recognition=lambda *a, **k: None)
     calendar = lambda *a, **k: None
     guard = lambda *a, **k: None
     monitor = SimpleNamespace(calendar_session=calendar)
@@ -67,3 +68,15 @@ def test_entry_install_preserves_outer_report_handler_and_only_replaces_inner(na
     assert runtime.run_entry is old
     with pytest.raises(ValueError, match='duplicate_install'):
         install.install_entry(runtime, native.Engine, monitor, entry, lifecycle, preflight)
+
+
+@pytest.mark.parametrize("validator", [None, False, object()])
+def test_entry_install_refuses_missing_recognition_before_any_install(validator):
+    runtime = SimpleNamespace(ROOT='unused', validate_entry_recognition=validator)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('no installation or lifecycle assembly permitted')
+    life = SimpleNamespace(monitor_engine=forbidden)
+    with pytest.raises(ValueError, match='entry_recognition_validator_missing'):
+        install.install_entry(runtime, object, None, None, life, None)
+    assert not hasattr(runtime, '_entry_monitor_ownership_installed')
+    assert not hasattr(runtime, '_run_entry')

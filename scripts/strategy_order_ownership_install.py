@@ -17,6 +17,8 @@ def require(value, reason):
 def install_entry(runtime, NativeEngine, monitor, entry, lifecycle, preflight):
     require(not getattr(runtime, '_entry_monitor_ownership_installed', False),
             'entry_ownership_duplicate_install')
+    require(callable(getattr(runtime, 'validate_entry_recognition', None)),
+            'entry_recognition_validator_missing')
     # Fail before any CLI/account operation if the monitor cannot interpret the
     # native Engine's close contract. This is source verification, not health.
     lifecycle.monitor_engine(NativeEngine)
