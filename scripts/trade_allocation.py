@@ -491,9 +491,13 @@ def read_active(cursor, expected_identity, policy_revision, excluded_ids):
     reservation_cases = []
     seen = set()
     extensions = []
+    whole_positions = []      
     for record in rows(cursor, 16):
         case_id, state, case_revision, saved_request, saved_manifest, digest, audit_request, audit_result, audit_revision, group_ref = record
         candidate = D.document(saved_manifest)
+        if candidate.get('classification') == 'WHOLE_POSITION_MULTI_ORDER_V1':
+            whole_positions.append(record)
+            continue     
         if candidate.get('classification') == 'OWNED_EXIT_COHORT_V1':
             extensions.append(record)
             continue
@@ -529,6 +533,12 @@ def read_active(cursor, expected_identity, policy_revision, excluded_ids):
         extra, claims, cases = O.read_extensions(cursor,extensions,expected_identity,policy_revision,excluded_ids,
             allocation_type=Allocation,attest=X.attest_extension)
         require(not set(claims).intersection(reserved) and not {x.trade_id for x in extra}.intersection(seen),'RESERVED_OWNER_CONFLICT')
+        active.extend(extra);reserved.update(claims);reservation_cases.extend(cases)
+    if whole_positions:
+        from scripts import whole_position_allocation as W
+        extra, claims, cases = W.read_extensions(cursor,whole_positions,expected_identity,policy_revision,excluded_ids,
+            allocation_type=Allocation)
+        require(not set(claims).intersection(reserved) and not {x.trade_id for x in extra}.intersection(x.trade_id for x in active),'RESERVED_OWNER_CONFLICT')
         active.extend(extra);reserved.update(claims);reservation_cases.extend(cases)
     return result_read('VALIDATED', active, expected_identity, policy_revision, reserved, reservation_cases)
 
