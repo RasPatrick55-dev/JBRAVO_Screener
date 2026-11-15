@@ -30,6 +30,24 @@ BEGIN
 END
 """
 FUNCTION_SHA=hashlib.sha256(CASE_GUARD_BODY.encode()).hexdigest()
+# The old guard remains recognized for backward-compatible reader deployment.
+# Only the new exact body permits the separately validated GTLB contract.
+MULTI_CASE_GUARD_BODY=CASE_GUARD_BODY.replace(
+ "IF NEW.trade_id<=0 OR NEW.manifest->>'classification' IS DISTINCT FROM 'OWNED_EXIT_COHORT_V1'\n   OR COALESCE(NEW.manifest->>'case','') NOT IN ('3','6') OR NEW.group_approval_ref IS NULL THEN",
+ "IF NEW.group_approval_ref IS NULL OR NOT (\n   (NEW.trade_id>0 AND NEW.manifest->>'classification'='OWNED_EXIT_COHORT_V1' AND COALESCE(NEW.manifest->>'case','') IN ('3','6'))\n   OR (NEW.trade_id=131 AND NEW.manifest->>'classification'='WHOLE_POSITION_MULTI_ORDER_V1' AND NEW.manifest->>'case'='GTLB131')) IS TRUE THEN")
+MULTI_CASE_GUARD_BODY=MULTI_CASE_GUARD_BODY.replace(
+ " RETURN NEW;\nEND", """ IF NEW.manifest->>'classification'='WHOLE_POSITION_MULTI_ORDER_V1' AND NOT EXISTS (
+  SELECT 1 FROM public.jbravo_owned_exit_correction_audit
+  WHERE approval_ref=NEW.group_approval_ref
+   AND payload->>'schema'='JBRAVO_GTLB131_ACTIVATION_V1'
+   AND payload->'request'->>'action'='APPLY_GTLB131'
+   AND payload->'request'->>'approval_ref'=NEW.group_approval_ref
+   AND payload->'request'->>'source_manifest_sha256' ~ '^[0-9a-f]{64}$'
+ ) THEN RAISE EXCEPTION 'MULTI_AUDIT_SCHEMA'; END IF;
+ RETURN NEW;
+END""")
+MULTI_FUNCTION_SHA=hashlib.sha256(MULTI_CASE_GUARD_BODY.encode()).hexdigest()
+
 CREATE_AUDIT="""CREATE TABLE public.jbravo_owned_exit_correction_audit (
  approval_ref text PRIMARY KEY,request_digest text NOT NULL,preview_digest text NOT NULL,
  payload jsonb NOT NULL,allocation_bindings jsonb NOT NULL,receipt jsonb NOT NULL,
@@ -70,13 +88,14 @@ def attest_extension(cursor):
     grouped={}
     for kind,body in rows:grouped.setdefault(kind,[]).append(D.document(body))
     O.need({k:len(v) for k,v in grouped.items()}=={'FUNCTION':1,'AUDIT':1,'TRIGGER':2,'FK':1},'EXTENSION_NOT_INSTALLED')
-    fn=grouped['FUNCTION'][0];O.need(type(fn['body']) is str and hashlib.sha256(fn['body'].encode()).hexdigest()==FUNCTION_SHA
+    fn=grouped['FUNCTION'][0];O.need(type(fn['body']) is str and hashlib.sha256(fn['body'].encode()).hexdigest() in (FUNCTION_SHA,MULTI_FUNCTION_SHA)
         and fn['owner'] and not fn['definer'] and fn['config'] and fn['language']=='plpgsql' and fn['trigger'] and fn['args']==0,'EXTENSION_FUNCTION')
     audit=grouped['AUDIT'][0]
     O.need(set(audit)=={'owner','ordinary','private','columns','primary_key'} and all(v is True for v in audit.values()) and grouped['FK'][0]['valid'] is True,'EXTENSION_SCHEMA_OR_ACL')
     triggers={t['name']:t for t in grouped['TRIGGER']}
     for name,bits,function in [('trade_owned_exit_case_guard',23,'trade_owned_exit_case_guard'),('jbravo_owned_exit_audit_immutable',58,'trade_allocation_immutable')]:
         O.need(triggers[name]['enabled'] is True and triggers[name]['bits']==bits and triggers[name]['function']==function and triggers[name]['public_function'] is True,'EXTENSION_TRIGGER')
+    return hashlib.sha256(fn['body'].encode()).hexdigest()
 
 class Budget:
     def __init__(self,raw,*,maximum=256,seconds=8,clock=time.monotonic):
