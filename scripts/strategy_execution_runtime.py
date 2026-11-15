@@ -622,3 +622,67 @@ class EntryRecognitionStore:
 
 COMPATIBLE_EXECUTOR_SOURCES=frozenset({"scripts/strategy_execution_broker.py",
     "scripts/strategy_execution_engine.py","scripts/strategy_execution_runtime.py"})
+
+def validate_entry_recognition(signal,orders,*,positions,open_orders,account_id,current_source_bindings):
+    """Recognize an expressly adopted manual position without managing its orders.
+
+    Historical handoff, proposal and fills remain immutable. The append-only
+    ownership record binds the exact prepared release and original payload.
+    Any position/order drift blocks entry until separately reconciled.
+    """
+    payload=signal['payload'];owner=payload.get('execution_owner',{});handoff=payload['handoff']
+    require(owner.get('schema')=='jbravo.execution-entry-recognition.v1' and
+        owner.get('scope')=='ENTRY_RECOGNITION_ONLY_NO_POSITION_ORDERS' and
+        owner.get('model')==rules.PIPELINE_LIMIT_MODEL,'strategy_recognition_scope_invalid')
+    manual=handoff.get('manual_paper_test');context=manual.get('context') if isinstance(manual,dict) else None
+    require(signal['state']=='OPEN' and payload.get('account_id')==account_id and
+        isinstance(context,dict) and manual.get('automatic_sells') is False and
+        context.get('schema')=='jbravo.manual-paper-pipeline-entry.v1' and
+        context.get('max_quantity')==1 and context.get('paper_orders_authorized') is True and
+        manual.get('context_sha256')==rules.digest(context) and
+        context.get('signals',{}).get(payload['proposal']['symbol'])==signal['signal_id'] and
+        handoff.get('execution_policy',{}).get('model')=='MANUAL_PAPER_PIPELINE_ENTRY_TEST_V1',
+        'strategy_recognition_original_context_invalid')
+    original={k:v for k,v in payload.items() if k not in {'execution_owner','ownership_history'}}
+    history=payload.get('ownership_history')
+    require(isinstance(history,list) and 1<=len(history)<=64 and history[0]==owner and
+        owner.get('signal_id')==signal['signal_id'] and
+        type(owner.get('original_revision')) is int and
+        owner['original_revision']+len(history)==signal['revision'] and
+        owner.get('original_payload_sha256')==rules.digest(original) and
+        owner.get('original_orders_sha256')==rules.digest(orders), 'strategy_recognition_audit_changed')
+    binding=owner.get('release_source_bindings_sha256');operations={owner.get('operation_id')}
+    for index,event in enumerate(history[1:],start=1):
+        require(isinstance(event,dict) and set(event)=={'schema','operation_id','scope','signal_id',
+            'previous_revision','previous_history_sha256','previous_release_source_bindings_sha256',
+            'release_source_bindings_sha256','recorded_at'} and
+            event['schema']=='jbravo.execution-entry-recognition-release-compat.v1' and
+            event['scope']=='ENTRY_RECOGNITION_ONLY_NO_POSITION_ORDERS' and
+            event['signal_id']==signal['signal_id'] and
+            event['previous_revision']==owner['original_revision']+index and
+            event['previous_history_sha256']==rules.digest(history[:index]) and
+            event['previous_release_source_bindings_sha256']==binding and
+            isinstance(event['operation_id'],str) and 1<=len(event['operation_id'])<=128 and
+            event['operation_id'] not in operations,
+            'strategy_recognition_compatibility_audit_changed')
+        rules.utc(event['recorded_at'])
+        binding=event['release_source_bindings_sha256'];operations.add(event['operation_id'])
+    require(binding==rules.digest(current_source_bindings),'strategy_recognition_release_changed')
+    position=payload.get('position');symbol=payload['proposal']['symbol']
+    require(isinstance(position,dict) and position.get('symbol')==symbol and
+        rules.number(position.get('qty'),positive=True)==1 and
+        len(orders)==1,'strategy_recognition_position_or_orders_changed')
+    record=orders[0];observed=record.get('observation') or {};native=positions.get(symbol,{})
+    require(record['state']=='OBSERVED' and record['role']=='entry' and record['operation']=='POST' and
+        observed.get('status')=='filled' and observed.get('side')=='buy' and
+        observed.get('symbol')==symbol and observed.get('id')==owner.get('entry_order_id') and
+        record['client_order_id']==owner.get('entry_client_order_id') and
+        rules.number(observed.get('qty'),positive=True)==1 and
+        rules.number(observed.get('filled_qty'),positive=True)==1 and
+        rules.number(observed.get('filled_avg_price'),positive=True)==rules.number(position['entry_price'],positive=True),
+        'strategy_recognition_fill_changed')
+    require(native.get('side')=='long' and rules.number(native.get('qty'),positive=True)==1 and
+        rules.number(native.get('avg_entry_price'),positive=True)==rules.number(position['entry_price'],positive=True) and
+        not any(o.get('symbol')==symbol for o in open_orders),'strategy_recognition_broker_position_changed')
+    return dict(signal_id=signal['signal_id'],symbol=symbol,qty=1,
+        scope=owner['scope'],ownership_operation_id=owner['operation_id'])
