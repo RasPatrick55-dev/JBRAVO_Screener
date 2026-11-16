@@ -76,8 +76,9 @@ class MarketProvider:
         return value,raw
 
 
-def capture(tmp_path,cfg,provider,*,now=NOW,cache=None):
-    root=tmp_path/now.astimezone(daily.NY).date().isoformat();root.mkdir()
+def capture(tmp_path,cfg,provider,*,now=NOW,cache=None,versioned=False):
+    from scripts.strategy_archive_identity import session_root
+    root=(session_root(tmp_path,now.astimezone(daily.NY).date().isoformat(),cfg) if versioned else tmp_path/now.astimezone(daily.NY).date().isoformat());root.mkdir(parents=True)
     calendar=daily.normalize_calendar(provider.calendar)
     day=daily.signal_session(calendar,now)
     return root,u.capture_market(provider,cfg,calendar,day,root,now=now,cache_dir=cache)
@@ -288,7 +289,8 @@ def test_capture_then_scan_complete_current_decisions_and_real_no_signal_kernel(
 def test_new_symbol_signal_survives_verified_primary_backtest_and_metrics(cfg,tmp_path,monkeypatch):
     from scripts import strategy_pipeline as pipeline,strategy_backtest,strategy_metrics
     from scripts.research_dataset import canonical_hash
-    root,spec=capture(tmp_path,cfg,MarketProvider())
+    from scripts.strategy_archive_identity import archive_id
+    root,spec=capture(tmp_path,cfg,MarketProvider(),versioned=True)
     def prepare(self,raw,split,fold):
         frame=raw.loc[raw.index>=fold['test_start']].copy()
         frame['score']=np.nan;frame['ATR14']=2.;frame['ema20']=1.
@@ -304,8 +306,7 @@ def test_new_symbol_signal_survives_verified_primary_backtest_and_metrics(cfg,tm
     summary=json.loads(json.dumps(summary))
     session=pipeline.session_context(MarketProvider().calendar,NOW)
     value=dict(schema='jbravo.daily-strategy-scan.v1',status='COMPLETED_PAPER_SCREEN',
-        run_id=canonical_hash(dict(schema='jbravo.daily-strategy-archive-id.v1',pipeline=daily.PIPELINE,
-            strategy_id=cfg['strategy_id'],signal_session='2026-10-26')),
+        run_id=archive_id(cfg,'2026-10-26'),
         scan_run_id=summary['run_id'],signal_session='2026-10-26',pipeline=daily.PIPELINE,
         strategy_id=cfg['strategy_id'],configuration_sha256=canonical_hash(cfg),
         scan_manifest_sha256=u.binding((root/'scan/manifest.json').read_bytes())['sha256'],summary=summary,
@@ -315,7 +316,7 @@ def test_new_symbol_signal_survives_verified_primary_backtest_and_metrics(cfg,tm
     pipeline.validate_archive((spec_sha,canonical_hash(value),value),cfg,session)
     base=tmp_path/'base';(base/'config').mkdir(parents=True)
     (base/'config/strategy_scan_daily.json').write_text(json.dumps(cfg))
-    (base/'config/strategy_pipeline.json').write_text(json.dumps(dict(producer_root=str(root.parent))))
+    (base/'config/strategy_pipeline.json').write_text(json.dumps(dict(producer_root=str(tmp_path))))
     dataset=pipeline.verified_dataset(value,spec_sha,base_dir=base)
     selected=pipeline.selection_batch(value,session)
     assert selected['proposals'][0]['symbol']=='AAA' and selected['coverage']==summary['coverage']

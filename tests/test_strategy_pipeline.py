@@ -13,6 +13,7 @@ from scripts import strategy_pipeline as p
 from scripts import daily_strategy_scan as daily
 from scripts import pipeline_postflight as health
 from scripts.research_dataset import canonical_hash
+from scripts.strategy_archive_identity import archive_id, session_root
 from scripts.strategy_library import get_strategy
 from scripts.strategy_scanner import SOURCE_FILES
 from strategy_fixtures import pilot_config
@@ -48,8 +49,7 @@ def archive(*, positive=False):
         top_candidates=proposals, research_qualified=False, order_submission_authorized=False,
         dataset_sha256='c'*64, broker_operations=0)
     value = dict(schema='jbravo.daily-strategy-scan.v1', status='COMPLETED_PAPER_SCREEN', pipeline=daily.PIPELINE,
-        run_id=canonical_hash(dict(schema='jbravo.daily-strategy-archive-id.v1', pipeline=daily.PIPELINE,
-            strategy_id=p.STRATEGY, signal_session=day)), strategy_id=p.STRATEGY, signal_session=day,
+        run_id=archive_id(cfg, day, p.STRATEGY), strategy_id=p.STRATEGY, signal_session=day,
         scan_run_id=summary['run_id'], configuration_sha256=canonical_hash(cfg), summary=summary,
         handoff=dict(schema='jbravo.strategy-paper-proposals.v1', as_of=day, scan_run_id=summary['run_id'],
             proposals=proposals, paper_only=True, order_submission_authorized=False),
@@ -188,3 +188,16 @@ def test_primary_pipeline_dispatches_strategy_before_legacy_scan(monkeypatch):
     monkeypatch.setattr(run_pipeline,'_refresh_logger',lambda: pytest.fail('legacy pipeline must not run'))
     args=['--handoff-invocation','a'*32]
     assert run_pipeline.main(args)==0 and called==[args]
+
+
+def test_legacy_identity_and_wrong_feed_cannot_be_relabelled():
+    cfg,session,value=archive()
+    legacy=deepcopy(value)
+    legacy['run_id']=canonical_hash(dict(schema='jbravo.daily-strategy-archive-id.v1',pipeline=daily.PIPELINE,strategy_id=p.STRATEGY,signal_session=session['signal_session']))
+    with pytest.raises(ValueError,match='strategy_archive_scope_mismatch'):
+        p.validate_archive(row(legacy),cfg,session)
+    sip=dict(cfg,feed='sip');wrong=deepcopy(value)
+    wrong['configuration_sha256']=canonical_hash(sip)
+    wrong['run_id']=archive_id(sip,session['signal_session'])
+    with pytest.raises(ValueError,match='strategy_archive_scope_mismatch'):
+        p.validate_archive(row(wrong),cfg,session)

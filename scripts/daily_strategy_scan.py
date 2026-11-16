@@ -140,10 +140,10 @@ def pages(provider,url,params,*,max_pages=6):
         seen.add(token)
     raise DailyError('PROVIDER_PAGE_LIMIT_EXCEEDED')
 
-def capture(provider,cfg,calendar,session,root,*,now):
+def capture(provider,cfg,calendar,session,root,*,now,cache_dir=None):
     from scripts.strategy_universe import capture_market,market_config
     if market_config(cfg):
-        return capture_market(provider,cfg,calendar,session,root,now=now,cache_dir=root.parent/'market-cache')
+        return capture_market(provider,cfg,calendar,session,root,now=now,cache_dir=cache_dir if cache_dir is not None else root.parent/'market-cache')
     symbols=cfg['symbols']+[cfg['benchmark']]
     folder=root/'capture/analysis';folder.mkdir(parents=True,mode=0o700)
     raw_dir=root/'provider-responses';raw_dir.mkdir(mode=0o700)
@@ -216,12 +216,13 @@ def archive_scan(summary,root,cfg,*,env):
     require({'result.json','paper_handoff.json','specification.json'}<=bound,'SCAN_MANIFEST_INCOMPLETE')
     spec_raw=(root/'scan/specification.json').read_bytes()
     require(spec_raw==(root/'study.json').read_bytes(),'SCANNED_SPECIFICATION_CHANGED')
-    run_id=canonical_hash(dict(schema='jbravo.daily-strategy-archive-id.v1',pipeline=PIPELINE,
-        strategy_id=cfg['strategy_id'],signal_session=summary['as_of']))
+    from scripts.strategy_archive_identity import archive_id, configuration_hash, PRIMARY
+    run_id=archive_id(cfg,summary['as_of'])
     handoff=strict_json((root/'scan/paper_handoff.json').read_bytes())
     require(handoff['scan_run_id']==summary['run_id'] and handoff['order_submission_authorized'] is False,'SCAN_HANDOFF_IDENTITY_CHANGED')
     result=dict(schema='jbravo.daily-strategy-scan.v1',status='COMPLETED_PAPER_SCREEN',run_id=run_id,
         scan_run_id=summary['run_id'],signal_session=summary['as_of'],pipeline=PIPELINE,strategy_id=cfg['strategy_id'],
+        archive_identity_version=2,capture_revision_sha256=configuration_hash(cfg,PRIMARY),
         configuration_sha256=canonical_hash(cfg),scan_manifest_sha256=binding(manifest_raw)['sha256'],summary=summary,handoff=handoff,output_root=str(root),
         research_qualified=False,execution_authorized=False,order_submission_authorized=False)
     body=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False)
@@ -256,13 +257,14 @@ def run_daily(cfg,provider,output,*,now=None,bootstrap_latest=False,archive=None
     output=Path(output).resolve();output.mkdir(parents=True,exist_ok=True)
     require(not output.is_relative_to(Path(__file__).resolve().parents[1]),'DAILY_OUTPUT_INSIDE_REPOSITORY')
     # An interrupted session never reuses its claim or partially saved input batch.
-    root=output/session;root.mkdir(mode=0o700,exist_ok=False)
+    from scripts.strategy_archive_identity import create_session_root
+    root=create_session_root(output,session,cfg)
     save_json(root/'claim.json',dict(status='CLAIMED_NO_REPLAY',signal_session=session,started_at_utc=now.isoformat(),
         configuration=cfg,pipeline=PIPELINE,bootstrap_latest=bootstrap_latest))
     phase = 'CAPTURE'
     try:
         (root/'calendar-response.json').write_bytes(raw)
-        spec=capture(provider,cfg,calendar,session,root,now=now)
+        spec=capture(provider,cfg,calendar,session,root,now=now,cache_dir=output/'market-cache')
         from scripts.strategy_universe import market_config
         dataset = None
         if market_config(cfg):

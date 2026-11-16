@@ -1,8 +1,10 @@
 """Daily capture, calendar, replay and immutable research archive contracts."""
 from datetime import datetime,timezone
 import json
+import os
 import pandas as pd
 import pytest
+from scripts.strategy_archive_identity import session_root
 from scripts import daily_strategy_scan as daily
 from test_research_testing import featured_source
 from strategy_fixtures import pilot_config
@@ -77,7 +79,7 @@ def test_daily_fresh_capture_runs_same_kernel_and_archives_valid_zero(cfg,tmp_pa
     raw=[p for u,p in provider.requests if u.endswith('/bars')]
     assert [p['adjustment'] for p in raw]==['raw','split'] and all(p['feed']=='iex' for p in raw)
     assert all(p['asof']=='2026-10-25' for p in raw)
-    assert json.loads((tmp_path/'2026-10-23/scan/paper_handoff.json').read_bytes())['order_submission_authorized'] is False
+    assert json.loads((session_root(tmp_path,'2026-10-23',cfg)/'scan/paper_handoff.json').read_bytes())['order_submission_authorized'] is False
     again=CapturedProvider(cfg)
     with pytest.raises(FileExistsError):
         daily.run_daily(cfg,again,tmp_path,now=datetime.fromisoformat('2026-10-25T22:30:00+00:00'),bootstrap_latest=True,archive=archive)
@@ -94,8 +96,8 @@ def test_invalid_data_never_archives_and_keeps_failed_claim(cfg,tmp_path,problem
     provider=CapturedProvider(cfg,**{problem:True});calls=[]
     with pytest.raises(ValueError):
         daily.run_daily(cfg,provider,tmp_path,now=datetime.fromisoformat('2026-10-25T22:30:00+00:00'),bootstrap_latest=True,archive=lambda *a:calls.append(a))
-    assert calls==[] and (tmp_path/'2026-10-23/claim.json').is_file()
-    assert (tmp_path/'2026-10-23/failure.json').is_file()
+    assert calls==[] and (session_root(tmp_path,'2026-10-23',cfg)/'claim.json').is_file()
+    assert (session_root(tmp_path,'2026-10-23',cfg)/'failure.json').is_file()
 
 def test_pagination_consumes_all_pages_and_refuses_repeated_token():
     class P:
@@ -206,3 +208,29 @@ def test_default_daily_config_rejects_sip(tmp_path):
     cfg['feed']='sip'
     path=tmp_path/'config.json';path.write_text(json.dumps(cfg))
     with pytest.raises(ValueError,match='INVALID_DAILY_DATA_CONTRACT'):daily.load_config(path)
+
+
+def test_new_feed_capture_preserves_legacy_and_refuses_replay(cfg,tmp_path):
+    legacy=tmp_path/'2026-10-23';legacy.mkdir()
+    (legacy/'claim.json').write_text('immutable old SIP claim')
+    calls=[]
+    provider=CapturedProvider(cfg)
+    out=daily.run_daily(cfg,provider,tmp_path,now=datetime.fromisoformat('2026-10-25T22:30:00+00:00'),bootstrap_latest=True,archive=lambda *a:calls.append(a) or {'status':'TEST_ARCHIVE_VERIFIED'})
+    assert out['status']=='DAILY_STRATEGY_SCAN_COMPLETE'
+    assert (legacy/'claim.json').read_text()=='immutable old SIP claim'
+    assert len(calls)==1 and calls[0][1]==session_root(tmp_path,'2026-10-23',cfg)
+    assert all(params['feed']=='iex' for url,params in provider.requests if url.endswith('/bars'))
+    with pytest.raises(FileExistsError):
+        daily.run_daily(cfg,CapturedProvider(cfg),tmp_path,now=datetime.fromisoformat('2026-10-25T22:30:00+00:00'),bootstrap_latest=True,archive=lambda *a:calls.append(a))
+    assert len(calls)==1
+
+
+@pytest.fixture(autouse=True)
+def portable_capture_fixture(monkeypatch):
+    if os.name != 'nt': return
+    from scripts import strategy_archive_identity as identity
+    def create(output, session, config):
+        root=identity.session_root(output,session,config)
+        root.mkdir(mode=0o700,parents=True,exist_ok=False)
+        return root
+    monkeypatch.setattr(identity,'create_session_root',create)

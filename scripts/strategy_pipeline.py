@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 NY = ZoneInfo('America/New_York')
 STRATEGY = 'trend_pullback_reclaim_qualifying_close_v2'
 SCHEMA = 'jbravo.primary-strategy-screen.v1'
-EXTRA_SOURCES = ('scripts/strategy_pipeline.py', 'config/strategy_pipeline.json',
+EXTRA_SOURCES = ('scripts/strategy_archive_identity.py','scripts/strategy_archive_companions.py', 'scripts/strategy_pipeline.py', 'config/strategy_pipeline.json',
                  'config/strategy_scan_daily.json', 'scripts/daily_strategy_scan.py',
                  'scripts/strategy_pipeline_store.py', 'scripts/strategy_dashboard.py',
                  'scripts/strategy_backtest.py', 'scripts/strategy_metrics.py')
@@ -101,8 +101,8 @@ def validate_archive(row, cfg, session, *, base_dir=ROOT, strategy_id=STRATEGY):
     spec_sha, result_sha, value = row
     require(isinstance(value, dict) and digest(encoded(value)) == result_sha.strip(), 'strategy_archive_hash_mismatch')
     day = session['signal_session']
-    expected_id = canonical_hash(dict(schema='jbravo.daily-strategy-archive-id.v1', pipeline=PIPELINE,
-        strategy_id=strategy_id, signal_session=day))
+    from scripts.strategy_archive_identity import archive_id
+    expected_id = archive_id(cfg, day, strategy_id)
     require(value.get('schema') == 'jbravo.daily-strategy-scan.v1' and
         value.get('status') == 'COMPLETED_PAPER_SCREEN' and value.get('pipeline') == PIPELINE and
         value.get('run_id') == expected_id and value.get('signal_session') == day and
@@ -163,7 +163,8 @@ def verified_dataset(value, spec_sha, *, base_dir=ROOT, strategy_id=STRATEGY, da
     cfg = dict(cfg, strategy_id=strategy_id)
     market = market_config(cfg)
     root = Path(value['output_root'])
-    expected = Path(json.loads((Path(base_dir)/'config/strategy_pipeline.json').read_bytes())['producer_root']) / value['signal_session']
+    from scripts.strategy_archive_identity import session_root
+    expected = session_root(json.loads((Path(base_dir)/'config/strategy_pipeline.json').read_bytes())['producer_root'], value['signal_session'], cfg)
     if strategy_id != STRATEGY:
         from scripts.pattern_strategy import PATTERNS
         require(strategy_id in PATTERNS, 'unknown_companion_strategy')
@@ -381,8 +382,8 @@ def main(argv, *, base_dir=ROOT):
     finally:
         provider.close()
     session = session_context(calendar, started)
-    archive_id = canonical_hash(dict(schema='jbravo.daily-strategy-archive-id.v1', pipeline='pullback-reclaim-daily-paper-v1',
-        strategy_id=STRATEGY, signal_session=session['signal_session']))
+    from scripts.strategy_archive_identity import archive_id as versioned_archive_id
+    archive_id = versioned_archive_id(cfg, session['signal_session'], STRATEGY)
     conn = connect(env=env)
     try:
         with conn.cursor() as cur:
@@ -444,7 +445,8 @@ def main(argv, *, base_dir=ROOT):
 
 
 def finish_strategy_handoff(record, *, env, base_dir=ROOT, dataset=None):
-    from scripts.bull_flag_companion import prepare_primary, _status
+    from scripts.strategy_archive_companions import prepare_primary
+    from scripts.bull_flag_companion import _status
     from scripts.setup_selection import publish, required_strategies
     from scripts.research_strategies import CHALLENGER
     unavailable=[]

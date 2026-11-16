@@ -493,3 +493,36 @@ def test_module_is_python310_and_has_no_runtime_or_provider_import_side_effects(
               and (n.module or "").startswith("scripts")]
     assert native == ["scripts.research_store"]
     assert "swing_scorecard" not in source and "strategy_execution" not in source
+
+
+def test_versioned_archive_display_preserves_bound_lifecycle_and_legacy():
+    f = fixture()
+    legacy = score.archive_metadata(f.record, now=NOW)
+    archive = deepcopy(f.record[2])
+    archive.update(archive_identity_version=2, configuration_sha256="a"*64,
+                   capture_revision_sha256="a"*64)
+    archive["run_id"] = score.digest(dict(schema="jbravo.daily-strategy-archive-id.v2",
+        pipeline=archive["pipeline"], strategy_id=SID, signal_session=archive["signal_session"],
+        configuration_sha256=archive["configuration_sha256"]))
+    archive["output_root"] += "/revisions/"+archive["capture_revision_sha256"]
+    record = (f.record[0], score.digest(archive), archive)
+    identity = score.archive_metadata(record, now=NOW)
+    assert identity == legacy
+    folder = archive["output_root"]+"/scan/"
+    def reader(path, limit):
+        assert path.startswith(folder)
+        raw = f.files[path[len(folder):]]
+        assert len(raw) <= limit
+        return raw
+    snapshot, episode = score.bound_lifecycle(record, identity, reader, PRODUCER)
+    assert snapshot["identity"] == identity
+    archive["capture_revision_sha256"] = "b"*64
+    with pytest.raises(score.EvidenceError, match="archive_revision_invalid"):
+        score.archive_metadata((f.record[0], score.digest(archive), archive), now=NOW)
+
+
+@pytest.mark.parametrize("version", [True, 0, 3, "2"])
+def test_archive_version_is_strict(version):
+    f = fixture(); value = deepcopy(f.record[2]); value["archive_identity_version"] = version
+    with pytest.raises(score.EvidenceError, match="archive_version_invalid"):
+        score.archive_metadata((f.record[0], score.digest(value), value), now=NOW)

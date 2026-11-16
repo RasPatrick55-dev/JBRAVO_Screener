@@ -240,7 +240,7 @@ def test_companion_archive_is_distinct_and_cannot_replace_primary():
     from scripts.research_dataset import canonical_hash
     cfg,session,value=archive(positive=True)
     cfg=dict(cfg,strategy_id=BULL_FLAG)
-    value.update(strategy_id=BULL_FLAG,run_id=companion.archive_id(session['signal_session']),
+    value.update(strategy_id=BULL_FLAG,run_id=__import__('scripts.strategy_archive_identity',fromlist=['archive_id']).archive_id(cfg,session['signal_session']),
                  configuration_sha256=canonical_hash(cfg))
     description=get_strategy(BULL_FLAG).describe()
     entry=value['summary']['strategies'][0]
@@ -269,3 +269,35 @@ def test_failed_companion_preserves_parent_and_never_replays_claim(tmp_path,monk
     evidence=marker.read_bytes()
     assert companion.produce(tmp_path,parent,{},**kwargs)['status']=='COMPANION_UNAVAILABLE_PRIMARY_PRESERVED'
     assert marker.read_bytes()==evidence
+
+
+@pytest.mark.parametrize('strategy_id', [BULL_FLAG, 'double_bottom_breakout_v1'])
+def test_companion_revision_identity_matches_producer_and_separates_feed(strategy_id):
+    from scripts.strategy_archive_identity import archive_id
+    cfg = dict(strategy_id=CHALLENGER, feed='iex', portfolio={'top_n': 3})
+    original = deepcopy(cfg)
+    expected = archive_id(dict(cfg, strategy_id=strategy_id), '2026-11-13')
+    assert archive_id(cfg, '2026-11-13', strategy_id) == expected
+    assert expected != archive_id(dict(cfg, feed='sip'), '2026-11-13', strategy_id)
+    assert expected != archive_id(cfg, '2026-11-13')
+    assert cfg == original
+    assert companion.archive_id('2026-11-13', strategy_id) != expected
+
+
+def test_companion_primary_lookup_uses_exact_configuration_without_legacy_retry(monkeypatch):
+    from scripts import daily_strategy_scan, strategy_pipeline, research_store, strategy_archive_companions as revised
+    cfg = dict(strategy_id=CHALLENGER, feed='iex', portfolio={'top_n': 3})
+    observed = []
+    class Connection:
+        def rollback(self): pass
+        def close(self): pass
+    monkeypatch.setattr(revised, 'policy_for', lambda *a: {'enabled': True})
+    monkeypatch.setattr(daily_strategy_scan, 'load_config', lambda *a: deepcopy(cfg))
+    monkeypatch.setattr(research_store, 'connect', lambda **kw: Connection())
+    monkeypatch.setattr(revised, '_row', lambda conn, key: observed.append(key))
+    monkeypatch.setattr(revised, '_status', lambda *a: None)
+    def reject(*a, **kw): raise ValueError('missing_exact_revision')
+    monkeypatch.setattr(strategy_pipeline, 'validate_archive', reject)
+    result = revised.prepare_primary({'run_id': 'a'*32, 'session': {'signal_session': '2026-11-13'}}, env={})
+    assert observed == [revised.archive_id(cfg, '2026-11-13', BULL_FLAG)]
+    assert result['status'] == 'COMPANION_UNAVAILABLE_PRIMARY_PRESERVED'
