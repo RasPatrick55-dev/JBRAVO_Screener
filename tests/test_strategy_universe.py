@@ -1,3 +1,4 @@
+from scripts.strategy_archive_identity import session_root
 """Market-wide coverage, immutable data, cache revisions and portfolio parity."""
 from copy import deepcopy
 from datetime import datetime, timezone
