@@ -141,9 +141,19 @@ def archive_metadata(record, *, now):
     require(session <= now.date().isoformat(), "future_archive")
     sid = value["strategy_id"]
     require(isinstance(sid, str) and IDENTIFIER.fullmatch(sid), "strategy_identity_invalid")
-    require(value["run_id"] == digest(dict(schema="jbravo.daily-strategy-archive-id.v1",
-            pipeline=value["pipeline"], strategy_id=sid, signal_session=session)),
-            "archive_identity_mismatch")
+    version = value.get("archive_identity_version", 1)
+    require(type(version) is int and version in (1, 2), "archive_version_invalid")
+    archive_key = dict(schema="jbravo.daily-strategy-archive-id.v"+str(version),
+                       pipeline=value["pipeline"], strategy_id=sid, signal_session=session)
+    if version == 2:
+        for field in ("configuration_sha256", "capture_revision_sha256"):
+            require(isinstance(value.get(field), str) and HEX.fullmatch(value[field]),
+                    "archive_revision_invalid")
+        archive_key["configuration_sha256"] = value["configuration_sha256"]
+        if sid == "trend_pullback_reclaim_qualifying_close_v2":
+            require(value["capture_revision_sha256"] == value["configuration_sha256"],
+                    "archive_revision_invalid")
+    require(value["run_id"] == digest(archive_key), "archive_identity_mismatch")
     summary, handoff = value["summary"], value["handoff"]
     require(summary.get("schema") == "jbravo.strategy-scan.v1" and
             summary.get("status") == "COMPLETED_PAPER_SIMULATION" and
@@ -417,6 +427,10 @@ def bound_lifecycle(record, identity, reader, producer_root, *, charge_expanded=
     require(root.is_absolute() and ".." not in root.parts and "\\" not in producer_root,
             "producer_root_invalid")
     primary = root/identity["as_of"]
+    if archive.get("archive_identity_version", 1) == 2:
+        revision = archive.get("capture_revision_sha256")
+        require(isinstance(revision, str) and HEX.fullmatch(revision), "archive_revision_invalid")
+        primary = primary/"revisions"/revision
     expected = primary if archive["strategy_id"] == "trend_pullback_reclaim_qualifying_close_v2" else (
         primary/"companions"/archive["strategy_id"])
     require(archive["output_root"] == str(expected), "archive_path_mismatch")
