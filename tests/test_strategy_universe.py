@@ -152,8 +152,8 @@ def test_provider_failure_never_archives_partial_universe(cfg,tmp_path):
     provider=MarketProvider();provider.fail_symbol='BBB';archived=[]
     with pytest.raises(daily.DailyError,match='429'):
         daily.run_daily(cfg,provider,tmp_path,now=NOW,archive=lambda *args:archived.append(args))
-    assert not archived and (tmp_path/'2026-10-26/failure.json').is_file()
-    assert not (tmp_path/'2026-10-26/completion.json').exists()
+    assert not archived and (session_root(tmp_path,'2026-10-26',cfg)/'failure.json').is_file()
+    assert not (session_root(tmp_path,'2026-10-26',cfg)/'completion.json').exists()
 
 
 @pytest.mark.parametrize('change,reason',[
