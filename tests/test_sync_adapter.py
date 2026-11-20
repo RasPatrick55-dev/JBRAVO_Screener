@@ -1,11 +1,13 @@
 """Production-adapter contract tests; broker/DB are mocks only."""
 
 from datetime import datetime, timezone
+from hashlib import sha256
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 from scripts import strategy_fill_sync_adapter as adapter
 from scripts import strategy_fill_linkage as core
 from scripts import activity_ingestion_checkpoint as cp
+from scripts import strategy_lot_hourly_phase as phase
 from test_strategy_fill_linkage import fixtures, A
 
 
@@ -91,14 +93,46 @@ class Adapter(TestCase):
                 core, "persist_verified_plan", side_effect=core.CommitUncertain("sha")
             ) as linker,
             patch.object(
-                core, "recover_receipt", return_value={"status": "COMMITTED_VERIFIED"}
-            ),
+                core,
+                "recover_receipt",
+                return_value={
+                    "status": "COMMITTED_VERIFIED",
+                    "plan_sha256": plan["plan_sha256"],
+                },
+            ) as recover,
         ):
             result = self.apply()
             self.assertEqual(result["linkage"]["status"], "COMMITTED_VERIFIED")
             self.assertFalse(result["accounting_complete"])
+            receipt_bytes = dict.fromkeys(phase.REQUIRED, b"{}")
+            receipt_bytes["linkage_result.json"] = core.encoded(result).encode()
+            completion = core.encoded(
+                {
+                    "status": "COMPLETED",
+                    "native_run_id": "a" * 32,
+                    "slot": "20261106T06",
+                    "trading_operations": 0,
+                    "accounting_complete": False,
+                    "checkpoint": proof,
+                    "native_receipts": {
+                        name: {
+                            "bytes": len(raw),
+                            "sha256": sha256(raw).hexdigest(),
+                        }
+                        for name, raw in receipt_bytes.items()
+                    },
+                }
+            ).encode()
+            _, handed_off = phase.validate_sync(
+                completion_bytes=completion,
+                expected_completion_sha256=sha256(completion).hexdigest(),
+                receipt_bytes=receipt_bytes,
+                expected_slot="20261106T06",
+            )
+            self.assertEqual(handed_off["linkage"]["plan_sha256"], plan["plan_sha256"])
             persist.assert_called_once()
             linker.assert_called_once()
+            recover.assert_called_once()
             self.assertEqual(
                 [x.args[0] for x in self.connect.call_args_list],
                 [False, True, False, True],
