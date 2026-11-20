@@ -46,6 +46,38 @@ class Handoff(TestCase):
             self.invoke()
         self.loader.assert_called_once()
 
+    def change_linkage(self, *, status="LINKED", commit="COMMITTED_VERIFIED"):
+        name = "linkage_result.json"
+        receipt = json.loads(self.receipts[name])
+        receipt["status"] = status
+        receipt["linkage"]["status"] = commit
+        raw = json.dumps(receipt).encode()
+        self.receipts[name] = raw
+        self.c["native_receipts"][name] = {
+            "bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        }
+
+    def test_verified_commit_reaches_loader_with_original_bindings(self):
+        self.change_linkage()
+        with self.assertRaisesRegex(ValueError, "READONLY_LOADER_REACHED"):
+            self.invoke()
+        self.loader.assert_called_once_with(
+            run_id="a" * 32, checkpoint_id="fixture", plan_sha256="fixture"
+        )
+
+    def test_verified_commit_with_fill_gaps_does_not_load(self):
+        self.change_linkage(status="LINKED_WITH_GAPS")
+        with self.assertRaisesRegex(ValueError, "COMMITTED_LINKAGE_REQUIRED"):
+            self.invoke()
+        self.loader.assert_not_called()
+
+    def test_unresolved_commit_does_not_load(self):
+        self.change_linkage(commit="ABSENT_UNRESOLVED")
+        with self.assertRaisesRegex(ValueError, "COMMITTED_LINKAGE_REQUIRED"):
+            self.invoke()
+        self.loader.assert_not_called()
+
     def test_skipped_run_does_not_load(self):
         self.c["status"] = "SKIPPED_ALREADY_COMPLETE"
         with self.assertRaisesRegex(ValueError, "NO_COMPLETED_SYNC"):

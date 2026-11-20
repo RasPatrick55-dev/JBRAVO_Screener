@@ -59,7 +59,7 @@ def validate_sync(
     linkage = json.loads(receipt_bytes["linkage_result.json"])
     core.require(
         linkage["status"] == "LINKED"
-        and linkage["linkage"]["status"] == "COMMITTED"
+        and linkage["linkage"]["status"] in {"COMMITTED", "COMMITTED_VERIFIED"}
         and linkage["trading_operations"] == 0,
         "COMMITTED_LINKAGE_REQUIRED",
     )
