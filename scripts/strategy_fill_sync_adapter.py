@@ -127,9 +127,77 @@ def apply_packet(
     )
 
 
-def _apply_verified_packet(packet, *, account_id, connect, policy_lock, verify_broker):
+def validate_manual_sell_hold(hold):
+    """Check an exact manual sell disposition from the pinned automatic config."""
+    core.require(
+        isinstance(hold, dict)
+        and set(hold) == {
+            "activity_id", "order_id", "client_order_id", "symbol",
+            "transaction_time", "qty", "price", "reason",
+        }
+        and hold["reason"] == "OWNER_CONFIRMED_MANUAL_SELL"
+        and all(
+            isinstance(hold[key], str) and 0 < len(hold[key]) <= 128
+            for key in ("activity_id", "client_order_id", "symbol", "transaction_time", "qty", "price")
+        ),
+        "MANUAL_SELL_HOLD_INVALID",
+    )
+    core.uuid(hold["order_id"])
+    cp.utc(hold["transaction_time"])
+    core.number(hold["qty"], positive=True)
+    core.number(hold["price"], positive=True)
+
+
+def _manual_sell_receipt(cur, plan, account_id, hold):
+    if hold is None:
+        return None
+    core.require(
+        not any(f["activity_id"] == hold["activity_id"] or f["broker_order_id"] == hold["order_id"]
+                for f in plan["fills"]),
+        "MANUAL_SELL_HAS_STRATEGY_LINK",
+    )
+    if not plan["unmatched"]:
+        return None
+    cur.execute(
+        "SELECT activity_pk,order_id::text,symbol,side,transaction_time,qty,price "
+        "FROM public.alpaca_activities WHERE activity_type='FILL' AND activity_id=%s",
+        (hold["activity_id"],),
+    )
+    rows = cur.fetchall()
+    core.require(len(rows) <= 1, "MANUAL_SELL_NOT_UNIQUE")
+    if not rows:
+        return None
+    pk, order_id, symbol, side, at, qty, price = rows[0]
+    if {"activity_pk": pk, "reason": "ORDER_NOT_STRATEGY_OWNED"} not in plan["unmatched"]:
+        return None
+    core.require(
+        order_id == hold["order_id"] and symbol == hold["symbol"] and side == "sell"
+        and cp.utc(at) == cp.utc(hold["transaction_time"])
+        and core.number(qty, positive=True) == core.number(hold["qty"], positive=True)
+        and core.number(price, positive=True) == core.number(hold["price"], positive=True),
+        "MANUAL_SELL_EVIDENCE_CHANGED",
+    )
+    cur.execute(
+        "SELECT EXISTS (SELECT 1 FROM public.strategy_execution_orders_app "
+        "WHERE account_id=%s AND (client_order_id=%s OR observation->>'id'=%s) "
+        "UNION ALL SELECT 1 FROM public.strategy_broker_orders_app "
+        "WHERE account_id=%s AND (client_order_id=%s OR broker_order_id=%s) "
+        "UNION ALL SELECT 1 FROM public.strategy_fill_links_app "
+        "WHERE account_id=%s AND activity_pk=%s)",
+        (account_id, hold["client_order_id"], order_id,
+         account_id, hold["client_order_id"], order_id, account_id, pk),
+    )
+    core.require(cur.fetchone() == (False,), "MANUAL_SELL_STRATEGY_OWNERSHIP_CONFLICT")
+    return dict(hold, activity_pk=pk, side="sell")
+
+
+def _apply_verified_packet(
+    packet, *, account_id, connect, policy_lock, verify_broker, manual_sell_hold=None
+):
     """Shared write implementation. Call only behind manual or reviewed auto scope."""
     validate(packet, account_id)
+    if manual_sell_hold is not None:
+        validate_manual_sell_hold(manual_sell_hold)
     core.require(
         cp.manifestation(verify_broker(packet)) == packet["manifest"],
         "BROKER_EVIDENCE_CHANGED",
@@ -181,9 +249,25 @@ def _apply_verified_packet(packet, *, account_id, connect, policy_lock, verify_b
                 expected_source=packet["source"],
                 expected_recipe=packet["recipe_sha256"],
             )
+            hold_receipt = _manual_sell_receipt(cur, plan, account_id, manual_sell_hold)
     finally:
         conn.rollback()
         conn.close()
+    def recheck(cur):
+        fresh = store.load_plan(
+            cur,
+            account_id=account_id,
+            checkpoint_id=proof["checkpoint_id"],
+            expected_source=packet["source"],
+            expected_recipe=packet["recipe_sha256"],
+            lock=True,
+        )
+        core.require(
+            _manual_sell_receipt(cur, fresh, account_id, manual_sell_hold) == hold_receipt,
+            "MANUAL_SELL_PROOF_CHANGED",
+        )
+        return fresh
+
     conn = connect(False)
     try:
         try:
@@ -191,14 +275,7 @@ def _apply_verified_packet(packet, *, account_id, connect, policy_lock, verify_b
                 conn,
                 plan,
                 policy_lock=policy_lock,
-                recheck=lambda cur: store.load_plan(
-                    cur,
-                    account_id=account_id,
-                    checkpoint_id=proof["checkpoint_id"],
-                    expected_source=packet["source"],
-                    expected_recipe=packet["recipe_sha256"],
-                    lock=True,
-                ),
+                recheck=recheck,
             )
         except core.CommitUncertain:
             conn.close()
@@ -207,10 +284,12 @@ def _apply_verified_packet(packet, *, account_id, connect, policy_lock, verify_b
     finally:
         conn.close()
     confirmed = result.get("status") in {"COMMITTED", "COMMITTED_VERIFIED"}
-    gaps = bool(plan["unmatched"]) or any(
+    confirmed_hold = hold_receipt if confirmed else None
+    unresolved = len(plan["unmatched"]) - int(confirmed_hold is not None)
+    gaps = bool(unresolved) or any(
         x["status"] != "MATCHED" for x in plan["coverage"]
     )
-    return {
+    receipt = {
         "status": "COMMIT_UNRESOLVED"
         if not confirmed
         else "LINKED_WITH_GAPS"
@@ -220,10 +299,13 @@ def _apply_verified_packet(packet, *, account_id, connect, policy_lock, verify_b
         "checkpoint": proof,
         "linkage": result,
         "coverage": plan["coverage"],
-        "unmatched_fills": len(plan["unmatched"]),
+        "unmatched_fills": unresolved,
         "accounting_complete": False,
         "trading_operations": 0,
     }
+    if confirmed_hold is not None:
+        receipt["manual_fill_holds"] = [confirmed_hold]
+    return receipt
 
 
 def main(argv=None):
