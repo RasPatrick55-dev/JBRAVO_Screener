@@ -235,6 +235,87 @@ class Adapter(TestCase):
             self.assertEqual(result["status"], "LINKED_WITH_GAPS")
             self.assertEqual(result["unmatched_fills"], 1)
 
+    def apply_with_manual_sell(self, *, other_gap=False, coverage_gap=False, price="12.34",
+                               ownership_changed=False, commit="COMMITTED"):
+        hold = {
+            "activity_id": "manual-sell-fill",
+            "order_id": "00000000-0000-4000-8000-000000000009",
+            "client_order_id": "broker-manual-order",
+            "symbol": "TEST",
+            "transaction_time": "2026-11-04T00:05:00Z",
+            "qty": "1",
+            "price": "12.34",
+            "reason": "OWNER_CONFIRMED_MANUAL_SELL",
+        }
+        plan = core.build_plan(**self.f)
+        plan["unmatched"] = [{"activity_pk": 99, "reason": "ORDER_NOT_STRATEGY_OWNED"}]
+        if other_gap:
+            plan["unmatched"].append({"activity_pk": 100, "reason": "ORDER_NOT_STRATEGY_OWNED"})
+        if coverage_gap:
+            plan["coverage"][0]["status"] = "MISSING_FILL_ACTIVITIES"
+        proof = {
+            "checkpoint_id": self.f["checkpoint"]["checkpoint_id"],
+            "manifest_sha256": cp.digest(self.packet["manifest"]),
+        }
+        first, fresh = MagicMock(), MagicMock()
+        row = (99, hold["order_id"], "TEST", "sell", cp.utc(hold["transaction_time"]), "1", price)
+        first.fetchall.return_value = fresh.fetchall.return_value = [row]
+        first.fetchone.return_value = (False,)
+        fresh.fetchone.return_value = (ownership_changed,)
+        read_conn = MagicMock()
+        read_conn.cursor.return_value.__enter__.return_value = first
+
+        def connect(readonly):
+            return read_conn if readonly else MagicMock()
+
+        def persist(conn, original, *, policy_lock, recheck):
+            self.assertIs(original, plan)
+            self.assertEqual(recheck(fresh), original)
+            return {"status": commit, "plan_sha256": plan["plan_sha256"]}
+
+        with (
+            patch.object(cp, "persist") as ingest,
+            patch.object(cp, "consume", return_value=proof),
+            patch.object(adapter.store, "load_plan", return_value=plan),
+            patch.object(core, "persist_verified_plan", side_effect=persist) as linker,
+        ):
+            result = adapter._apply_verified_packet(
+                self.packet, account_id=A, connect=connect, policy_lock=lambda _: None,
+                verify_broker=lambda _: self.f["checkpoint_rows"], manual_sell_hold=hold,
+            )
+            ingest.assert_called_once()
+            linker.assert_called_once()
+        self.assertEqual(plan["unmatched"][0]["reason"], "ORDER_NOT_STRATEGY_OWNED")
+        self.assertFalse(any(fill["activity_pk"] == 99 for fill in plan["fills"]))
+        return result, dict(hold, activity_pk=99, side="sell")
+
+    def test_verified_manual_sell_is_reported_without_linking_it(self):
+        receipt, hold = self.apply_with_manual_sell(commit="COMMITTED_VERIFIED")
+        self.assertEqual(receipt["status"], "LINKED")
+        self.assertEqual(receipt["manual_fill_holds"], [hold])
+        self.assertEqual(receipt["unmatched_fills"], 0)
+
+    def test_manual_sell_cannot_hide_another_unowned_or_missing_fill(self):
+        for gap in ("other_gap", "coverage_gap"):
+            with self.subTest(gap=gap):
+                receipt, hold = self.apply_with_manual_sell(**{gap: True})
+                self.assertEqual(receipt["status"], "LINKED_WITH_GAPS")
+                self.assertEqual(receipt["manual_fill_holds"], [hold])
+
+    def test_manual_sell_rechecks_ownership_under_link_write_lock(self):
+        with self.assertRaisesRegex(ValueError, "MANUAL_SELL_STRATEGY_OWNERSHIP_CONFLICT"):
+            self.apply_with_manual_sell(ownership_changed=True)
+
+    def test_manual_sell_changed_execution_evidence_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "MANUAL_SELL_EVIDENCE_CHANGED"):
+            self.apply_with_manual_sell(price="12.35")
+
+    def test_unresolved_link_commit_cannot_report_a_verified_hold(self):
+        receipt, _ = self.apply_with_manual_sell(commit="ABSENT_UNRESOLVED")
+        self.assertEqual(receipt["status"], "COMMIT_UNRESOLVED")
+        self.assertEqual(receipt["unmatched_fills"], 1)
+        self.assertNotIn("manual_fill_holds", receipt)
+
     def test_transport_blocks_other_hosts_and_mutation_paths(self):
         request = MagicMock()
         transport = adapter.PaperGetTransport(request)

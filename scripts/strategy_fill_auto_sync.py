@@ -48,6 +48,8 @@ def verify_config(config, expected_sha256, root):
         "PAGE_LIMIT",
     )
     cp.utc(config["initial_required_after"])
+    if "manual_sell_hold" in config:
+        adapter.validate_manual_sell_hold(config["manual_sell_hold"])
     core.require(set(config["source_pins"]) == PIN_FILES, "CONFIG_SOURCE_SCOPE")
     root = Path(root).resolve()
     for name, expected in config["source_pins"].items():
@@ -177,6 +179,7 @@ def run(
         account_id=account,
         connect=connect,
         policy_lock=policy_lock,
+        manual_sell_hold=config.get("manual_sell_hold"),
         verify_broker=lambda p: [
             cp.row_value(normalize(x)[0])
             for x in fetch_activities(p["after"], p["until"], config["max_pages"])
@@ -241,6 +244,8 @@ def run(
     }
     if snapshot["unresolved_claims"] or snapshot["protected_observation_differences"]:
         summary["status"] = "LINKED_WITH_GAPS"
+    if "manual_fill_holds" in result:
+        summary["manual_fill_holds"] = result["manual_fill_holds"]
     journal("summary", summary)
     return summary
 
