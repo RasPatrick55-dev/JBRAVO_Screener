@@ -2,7 +2,7 @@ import { pollRead, readJson } from "../ui/readLifecycle";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { NavbarDesktopProps } from "../../types/ui";
 import StatusBadge from "../badges/StatusBadge";
-import MarketClockGroup, { type MarketClockRecord } from "../header/MarketClockGroup";
+import MarketClockGroup, { paperClockReachable, type MarketClockRecord } from "../header/MarketClockGroup";
 import ThemeToggle from "../ui/ThemeToggle";
 
 export default function NavbarDesktop({ tabs, rightBadges, onTabSelect }: NavbarDesktopProps) {
@@ -12,6 +12,12 @@ export default function NavbarDesktop({ tabs, rightBadges, onTabSelect }: Navbar
   const rootRef = useRef<HTMLDivElement | null>(null);
   const navRef = useRef<HTMLElement | null>(null);
   const activeLabel = tabs.find((tab) => tab.isActive)?.label;
+  const clockReachable = paperClockReachable(market, Date.parse(localUtc));
+  const displayedBadges = rightBadges.map(badge =>
+    badge.label === "API check unknown/stale" && clockReachable
+      ? {label: "Paper API clock reachable", tone: "success" as const, showDot: true}
+      : badge
+  );
 
   useLayoutEffect(() => {
     const nav = navRef.current;
@@ -136,7 +142,7 @@ export default function NavbarDesktop({ tabs, rightBadges, onTabSelect }: Navbar
             </nav>
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
-                {rightBadges.map((badge) => (
+                {displayedBadges.map((badge) => (
                   <StatusBadge
                     key={badge.label}
                     label={badge.label}

@@ -766,3 +766,40 @@ def test_latest25_orders_by_exact_updated_instant_not_signal_hash():
     assert history["rows"][0]["signal_id"] == signals[-1]["signal_id"]
     assert history["source_as_of"] == "2001-02-03T12:00:00.000000001+00:00"
     assert len(result["rows"]) == 31
+
+
+def test_overlapping_combined_requests_share_one_read_without_caching(monkeypatch):
+    from concurrent.futures import Future, ThreadPoolExecutor
+    from threading import Event
+    from unittest.mock import Mock
+    from dashboards import combined_trade_gross as combined
+
+    started, joined, finish = Event(), Event(), Event()
+    payload = {"ok": True}
+
+    class ObservedFuture(Future):
+        def result(self, timeout=None):
+            joined.set()
+            return super().result(timeout=timeout)
+
+    def read(*args):
+        started.set()
+        assert finish.wait(5)
+        return payload
+
+    read_once = Mock(side_effect=read)
+    monkeypatch.setattr(combined, "snapshot", read_once)
+    monkeypatch.setattr(combined, "Future", ObservedFuture)
+    args = (object(), object(), ("deployment", "database"))
+    with ThreadPoolExecutor(max_workers=2) as worker:
+        first = worker.submit(combined.current_snapshot, *args)
+        assert started.wait(5)
+        second = worker.submit(combined.current_snapshot, *args)
+        try:
+            assert joined.wait(5)
+        finally:
+            finish.set()
+        assert first.result() is second.result() is payload
+    read_once.assert_called_once_with(*args)
+    assert combined.current_snapshot(*args) is payload
+    assert read_once.call_count == 2

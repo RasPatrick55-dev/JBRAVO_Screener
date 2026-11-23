@@ -381,6 +381,7 @@ MONITOR_HELPERS = (
     "_monitor_log_type",
     "_monitor_observation_metadata",
     "_fetch_pythonanywhere_monitor_log_source",
+    "_read_strategy_monitor_receipt",
     "_strategy_monitor_log_entries",
     "_positions_logs_live",
 )
@@ -449,7 +450,7 @@ def test_monitor_receipt_is_observation_not_invented_event_time_and_keeps_pendin
     )
     path.write_text(json.dumps(receipt))
     ns = helpers(*MONITOR_HELPERS, BASE_DIR=tmp_path)
-    row = ns["_strategy_monitor_log_entries"]()[0]
+    row = ns["_strategy_monitor_log_entries"](ns["_read_strategy_monitor_receipt"]())[0]
     assert row["source_kind"] == "monitor_receipt" and row["run_id"] is None
     assert row["timestamp_kind"] == "monitor_report_observation"
     assert row["ts_utc"] == row["report_observed_at"] == receipt["finished_at"]
@@ -473,7 +474,7 @@ def test_invalid_monitor_receipt_never_claims_success(tmp_path, receipt):
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(receipt))
     ns = helpers(*MONITOR_HELPERS, BASE_DIR=tmp_path)
-    assert ns["_strategy_monitor_log_entries"]() == []
+    assert ns["_strategy_monitor_log_entries"](ns["_read_strategy_monitor_receipt"]()) == []
 
 
 def test_dedupe_does_not_erase_source_or_run_provenance(tmp_path):
@@ -874,3 +875,62 @@ def test_partial_enabled_task_coverage_stays_unknown_in_both_feed_orders(reverse
         _task_logfile_from_detail=lambda *a: None,
         _fetch_pythonanywhere_file=read)
     assert ns["_fetch_pythonanywhere_execute_task_log"]() is None
+
+
+def test_fresh_zero_event_monitor_receipt_does_not_refresh_old_logs(tmp_path):
+    folder = tmp_path / "reports/strategy_execution/monitor"
+    folder.mkdir(parents=True)
+    (folder / "latest.json").write_text(json.dumps({
+        "paper_only": True, "status": "ok", "finished_at": NOW.isoformat(), "events": [],
+    }), encoding="utf-8")
+    stale = {"ts_utc": (NOW - timedelta(days=19)).isoformat(), "freshness": "stale"}
+    logs = Mock(return_value=([stale], "local-fallback"))
+    ns = helpers("api_positions_logs", "_read_strategy_monitor_receipt",
+        "_monitor_observation_metadata", BASE_DIR=tmp_path,
+        request=SimpleNamespace(args={}), _positions_logs_live=logs)
+
+    result = ns["api_positions_logs"]()
+    assert result["status"] == "stale"
+    assert result["source_as_of"] == stale["ts_utc"]
+    assert result["monitor_receipt"]["status"] == "completed"
+    assert result["monitor_receipt"]["freshness"] == "fresh"
+    assert result["monitor_receipt"]["event_count"] == 0
+    assert logs.call_args.kwargs["receipt"]["paper_only"] is True
+
+    logs.return_value = ([], "none")
+    empty = ns["api_positions_logs"]()
+    assert empty["status"] == "unavailable"
+    assert empty["monitor_receipt"]["event_count"] == 0
+
+
+def test_resources_use_one_snapshot_and_preserve_mixed_freshness():
+    read = Mock(return_value={"generated_at": (NOW - timedelta(days=19)).isoformat(),
+        "file_storage": {"used_bytes": 15, "limit_bytes": 10},
+        "postgres_storage": {"used_bytes": 3, "limit_bytes": 10}})
+    ns = helpers("api_pythonanywhere_resources", "_pythonanywhere_cpu_usage",
+        "_pythonanywhere_file_storage_usage", "_pythonanywhere_postgres_usage",
+        "_usage_metric", "_usage_first", "_percent_used", _pythonanywhere_usage_snapshot=read,
+        _pythonanywhere_api_get_json=lambda _: {
+            "daily_cpu_total_usage_seconds": 4, "daily_cpu_limit_seconds": 100,
+        })
+    result = ns["api_pythonanywhere_resources"]()
+    read.assert_called_once_with()
+    assert result["status"] == "partial"
+    cpu, disk, postgres = result["resources"]
+    assert cpu["status"] == "fresh"
+    assert disk["status"] == postgres["status"] == "stale"
+    assert disk["value"] == 150 and disk["over_quota"]
+
+
+def test_trades_overview_uses_current_physical_history_contract():
+    history = Mock(return_value={"ok": True, "rows": [{"symbol": "FICT"}]})
+    metrics = {"validation_status": "HELD_UNVALIDATED_PERFORMANCE"}
+    ns = helpers("api_trades_overview", source_contracts=SimpleNamespace(physical_history=history),
+        db=SimpleNamespace(get_db_conn=Mock()), _metrics_summary_db=lambda: metrics,
+        _dashboard_broker_positions=lambda: {"status": "empty", "positions": [],
+            "summary": {"totalOpenPL": 0}})
+    payload = ns["api_trades_overview"]()
+    history.assert_called_once_with(ns["db"].get_db_conn, limit=100)
+    assert payload["trades"] == [{"symbol": "FICT"}]
+    assert payload["performance_status"] == "HELD_UNVALIDATED_PERFORMANCE"
+    assert payload["open_positions"]["count"] == 0

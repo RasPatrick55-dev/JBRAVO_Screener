@@ -6,11 +6,13 @@ Native policy/execution readers are reused, never replaced or initialized.
 """
 
 from collections import Counter, defaultdict
+from concurrent.futures import Future, TimeoutError
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 import json
 import re
+from threading import Lock
 import time
 from uuid import UUID
 
@@ -890,6 +892,40 @@ def context_unavailable():
     return result
 
 
+_inflight = {}
+_inflight_lock = Lock()
+
+
+def current_snapshot(connection_factory, client, identity):
+    """Concurrent reads of the same report share one observation per web worker."""
+    if client is None or type(identity) is not tuple or len(identity) != 2 or not all(
+        type(value) is str and value for value in identity
+    ):
+        return context_unavailable()
+    key = (connection_factory, id(client), identity)
+    with _inflight_lock:
+        pending = _inflight.get(key)
+        owns_read = pending is None
+        if owns_read:
+            pending = _inflight[key] = Future()
+    if not owns_read:
+        try:
+            return pending.result(timeout=15)
+        except TimeoutError:
+            return dict(envelope(datetime.now(timezone.utc)),
+                        reason="source_timeout", failure_stage="shared_observation")
+    try:
+        result = snapshot(connection_factory, client, identity)
+        pending.set_result(result)
+        return result
+    except BaseException as failure:
+        pending.set_exception(failure)
+        raise
+    finally:
+        with _inflight_lock:
+            del _inflight[key]
+
+
 def snapshot(connection_factory, client, identity, *, now=None, read=H.bounded_read):
     now = now or datetime.now(timezone.utc)
     result = envelope(now)
@@ -934,6 +970,10 @@ def snapshot(connection_factory, client, identity, *, now=None, read=H.bounded_r
         )
     except Exception as error:
         code = str(error)
+        if code == "EXECUTION_DEADLINE_OR_SQL_CAP":
+            code = "read_budget_exceeded"
+        if code == "EXECUTION_CANONICAL_INPUT_DRIFT":
+            code = "cohort_changed"
         if code in {
             "EXECUTION_SQL_OVERSIZE_OR_NULL",
             "EXECUTION_SHARED_BUDGET",
@@ -946,6 +986,7 @@ def snapshot(connection_factory, client, identity, *, now=None, read=H.bounded_r
             in {
                 "source_busy",
                 "source_timeout",
+                "read_budget_exceeded",
                 "population_overflow",
                 "cohort_changed",
                 "paper_context_unavailable",

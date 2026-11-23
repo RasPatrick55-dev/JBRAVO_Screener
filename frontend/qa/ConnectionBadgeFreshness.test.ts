@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseTradingStatus, buildNavbarBadges, watchTradingStatus, type ApiHealthResponse } from "../src/components/navbar/liveStatus";
 
+import { paperClockReachable } from "../src/components/header/MarketClockGroup";
+
 const NOW=Date.parse("2026-10-27T22:00:00Z");
 function payload(age=30): ApiHealthResponse {
   return {freshness:{age_seconds:72000,freshness_level:"gray"},trading_ok:false,
@@ -78,4 +80,13 @@ describe("bounded connection polling and expiry",()=>{
     await vi.advanceTimersByTimeAsync(15000);expect(events[events.length-1]).toBeNull();
     stop();const count=events.length;await vi.advanceTimersByTimeAsync(20000);expect(events).toHaveLength(count);
   });
+});
+
+it("labels only a fresh, explicitly paper Alpaca clock as reachable", () => {
+  const market = {source: "alpaca_exchange_clock", broker_context: "configured_paper_broker",
+    status: "ready", is_open: false, observed_at: new Date(NOW - 10_000).toISOString()};
+  expect(paperClockReachable(market, NOW)).toBe(true);
+  expect(paperClockReachable(market, NOW + 61_000)).toBe(false);
+  expect(paperClockReachable({...market, broker_context: "unknown"}, NOW)).toBe(false);
+  expect(paperClockReachable({...market, status: "unavailable"}, NOW)).toBe(false);
 });

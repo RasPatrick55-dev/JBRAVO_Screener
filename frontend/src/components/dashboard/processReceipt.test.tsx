@@ -15,6 +15,10 @@ describe("current process receipts", () => {
   it.each([{ok:false},{rc:1},{status:"PENDING"},{finished_utc:"2026-11-05T01:00:00Z"},{finished_utc:"2026-11-07T01:00:00Z"},{finished_utc:"2026-11-06T03:47:00"}])("never promotes unavailable, failed, pending, stale or future receipts", change => {
     expect(receiptStatus({...receipt,...change},NOW)).not.toBe("COMPLETED");
   });
+  it("distinguishes a clean executor skip from a completed order run", () => {
+    expect(receiptStatus({...receipt, source:"executor_receipt", process_health:"skipped"}, NOW)).toBe("SKIPPED");
+    expect(receiptStatus({...receipt, source:"executor_receipt", process_health:"skipped", rc:1}, NOW)).toBe("FAILED");
+  });
   it("renders an execution failure explicitly instead of calling it overdue",()=>{
     const html=renderToStaticMarkup(<ExecuteTradesStatusCard lastRun={{date:"Nov 6",start:"09:00",end:"09:35",duration:"35m"}} ordersPlaced={0} totalValue={Number.NaN} successRate={Number.NaN} isCycleComplete={false} status="FAILED"/>);
     expect(html).toContain("FAILED");expect(html).not.toContain("OVERDUE");
