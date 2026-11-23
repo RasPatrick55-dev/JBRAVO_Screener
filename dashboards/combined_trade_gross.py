@@ -108,6 +108,23 @@ PLANS = {
     CLAIMS_SQL: dict(kind="canonical", arity=1, order="(q.c0::jsonb->'row'->>'trade_id')::bigint"),
 }
 
+# These fixed controls are used for their transaction effects only. A following
+# read can carry them in order in the same driver call. Each is still charged
+# by the canonical cursor and preceded by its own bounded statement timeout.
+DEFERRED_CONTROLS = frozenset(
+    {
+        "SET LOCAL lock_timeout = '500ms'",
+        "SET LOCAL idle_in_transaction_session_timeout = '8000ms'",
+        "SET LOCAL search_path = pg_catalog",
+        "SET LOCAL lock_timeout = '1500ms'",
+        "SET LOCAL statement_timeout = '5000ms'",
+        "SET LOCAL TIME ZONE 'UTC'",
+        "SELECT pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtext('jbravo:trade-disposition:policy'))",
+        "LOCK TABLE public.trades,public.alpaca_activities IN ACCESS SHARE MODE",
+        E.LOCK_SQL,
+    }
+)
+
 
 def fingerprint(value):
     return hashlib.sha256(
@@ -259,16 +276,12 @@ class LegacyInputCapture:
 
 
 class TimedStatementTransport:
-    """Send the guarded timeout and its query in one psycopg2 round trip.
-
-    The shared cursor still computes each timeout and charges both SQL
-    statements. PostgreSQL executes them in order and psycopg2 exposes the
-    last statement's result. No evidence or database state is cached here.
-    """
+    """Group fixed transaction controls with the next bounded PostgreSQL read."""
 
     def __init__(self, cursor):
         self.cursor = cursor
         self.timeout = None
+        self.controls = []
 
     @property
     def connection(self):
@@ -282,7 +295,12 @@ class TimedStatementTransport:
             self.timeout = sql
             return
         timeout, self.timeout = self.timeout, None
-        prefix = timeout + "; "
+        if isinstance(sql, str) and sql in DEFERRED_CONTROLS:
+            H.need(params is None, "projection_control_params_invalid")
+            self.controls.extend((timeout, sql))
+            return
+        prefix = "; ".join((*self.controls, timeout, ""))
+        self.controls.clear()
         if isinstance(sql, bytes):
             prefix = prefix.encode("ascii")
         return self.cursor.execute(prefix + sql, params)
@@ -291,7 +309,7 @@ class TimedStatementTransport:
         return self.cursor.mogrify(sql, params)
 
     def fetchmany(self, size):
-        H.need(self.timeout is None, "projection_timeout_sequence_changed")
+        H.need(self.timeout is None and not self.controls, "projection_timeout_sequence_changed")
         return self.cursor.fetchmany(size)
 
 
@@ -356,6 +374,7 @@ def read_cohort(connection_factory, identity, account):
     cursor = None
     phase = "connect"
     started = time.monotonic()
+    failed = False
     try:
         connection = connection_factory()
         H.need(
@@ -401,19 +420,37 @@ def read_cohort(connection_factory, identity, account):
             cursor.check()
             return policy, records, execution, signal_rows, order_rows, claim_rows, capture.fills, fingerprint(binding)
     except Exception as error:
-        if str(error) == "EXECUTION_DEADLINE_OR_SQL_CAP" or getattr(error, "pgcode", None) == "57014":
-            logger.warning(
-                "Combined Trades %s stopped after %.3fs (%s logical statements, %s rows)",
-                phase, time.monotonic() - started,
-                cursor.statements if cursor else 0, cursor.rows if cursor else 0,
-            )
+        failed = True
+        logger.warning(
+            "Combined Trades %s stopped after %.3fs (%s logical statements, %s rows): %s",
+            phase, time.monotonic() - started,
+            cursor.statements if cursor else 0, cursor.rows if cursor else 0,
+            cohort_failure_reason(error) or "unclassified",
+        )
         raise
     finally:
         if connection is not None:
             try:
-                connection.rollback()
-            finally:
-                connection.close()
+                try:
+                    connection.rollback()
+                finally:
+                    connection.close()
+            except Exception:
+                logger.warning("Combined Trades database cleanup failed after %s", phase)
+                if not failed:
+                    raise
+
+
+def cohort_failure_reason(error):
+    code = str(error)
+    if code == "EXECUTION_DEADLINE_OR_SQL_CAP":
+        return "read_budget_exceeded"
+    sqlstate = getattr(error, "pgcode", None)
+    if sqlstate in ("57014", "25P03", "57P05"):
+        return "source_timeout"
+    if sqlstate == "55P03":
+        return "source_busy"
+    return None
 
 
 def decimal_text(value):
@@ -1067,10 +1104,8 @@ def snapshot(connection_factory, client, identity, *, now=None, read=H.bounded_r
         )
     except Exception as error:
         code = str(error)
-        if code == "EXECUTION_DEADLINE_OR_SQL_CAP":
-            code = "read_budget_exceeded"
-        if stage == "database_cohort_read" and getattr(error, "pgcode", None) == "57014":
-            code = "source_timeout"
+        if stage == "database_cohort_read":
+            code = cohort_failure_reason(error) or code
         if code == "EXECUTION_CANONICAL_INPUT_DRIFT":
             code = "cohort_changed"
         if code in {

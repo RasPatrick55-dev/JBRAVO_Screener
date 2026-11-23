@@ -299,6 +299,20 @@ class ReplayBindings:
         self.replay_bindings[int(ordinal.rstrip(","))] = params
         return sql.encode("utf-8")
 
+    @staticmethod
+    def execute_control_prefix(sql, execute):
+        while sql.startswith("SET LOCAL statement_timeout = "):
+            timeout, separator, tail = sql.partition("; ")
+            if not separator:
+                break
+            execute(timeout)
+            control, separator, rest = tail.partition("; ")
+            if not separator or control not in C.DEFERRED_CONTROLS:
+                return tail
+            execute(control)
+            sql = rest
+        return sql
+
 
 class CombinedCursor(ReplayBindings, Cursor):
     def execute(self, sql, params=None):
@@ -306,10 +320,7 @@ class CombinedCursor(ReplayBindings, Cursor):
             sql = sql.decode("utf-8")
         self.conn.round_trips.append((sql, params))
         self.conn.advance_clock()
-        timeout, separator, statement = sql.partition("; ")
-        if separator and timeout.startswith("SET LOCAL statement_timeout = "):
-            super().execute(timeout)
-            sql = statement
+        sql = self.execute_control_prefix(sql, super().execute)
         if sql.startswith("/* combined-canonical-replay */"):
             self.conn.replaying_combined = True
             try:
@@ -424,7 +435,38 @@ def test_timeout_and_guarded_query_share_one_driver_call_without_changing_limits
     assert len(conn.calls) <= C.T.MAX_SQL
     assert all(sql.startswith("SET LOCAL statement_timeout = '") and "; " in sql
                for sql, _ in pairs)
+    assert any("SET LOCAL search_path = pg_catalog; SET LOCAL statement_timeout" in sql
+               for sql, _ in pairs)
     assert conn.source_reads == 2 and conn.policy_reads == 4
+
+
+def test_cohort_cleanup_cannot_replace_the_primary_budget_error(monkeypatch):
+    conn = connection()
+    conn.rollback.side_effect = RuntimeError("private cleanup detail")
+    deadline_failure = ValueError("EXECUTION_DEADLINE_OR_SQL_CAP")
+    monkeypatch.setattr(C.D, "read_policy", Mock(side_effect=deadline_failure))
+    client = SimpleNamespace(get_account=lambda: SimpleNamespace(id=S.ACCOUNT))
+
+    result = C.snapshot(lambda: conn, client, IDENTITY, now=NOW, read=lambda fn, **kw: fn())
+
+    assert result["reason"] == "read_budget_exceeded"
+    assert result["failure_stage"] == "database_cohort_read"
+    assert "private cleanup detail" not in json.dumps(result)
+    conn.rollback.assert_called_once()
+    conn.close.assert_called_once()
+
+
+@pytest.mark.parametrize(("sqlstate", "reason"), [
+    ("57014", "source_timeout"),
+    ("25P03", "source_timeout"),
+    ("57P05", "source_timeout"),
+    ("55P03", "source_busy"),
+    ("XX000", None),
+])
+def test_postgres_failure_classification(sqlstate, reason):
+    error = RuntimeError("private diagnostic")
+    error.pgcode = sqlstate
+    assert C.cohort_failure_reason(error) == reason
 
 
 def test_batched_replay_rejects_changed_row_version_after_both_cohort_reads(monkeypatch):

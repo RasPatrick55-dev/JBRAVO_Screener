@@ -123,3 +123,56 @@ def test_log_endpoints_preserve_per_source_evidence_before_filtering(monkeypatch
         assert receipts["pipeline.log"]["latest_event_at"].startswith("2026-11-08T13:00:00")
         assert receipts["screener.log"]["unknown_timestamp_count"] == 1
         assert data["latest_event_at"].startswith("2026-11-08T13:00:00")
+
+
+@pytest.mark.parametrize("preferred_source", ["schedule", "configured"])
+def test_execute_pipeline_log_prefers_the_enabled_primary_task(
+    monkeypatch, tmp_path, preferred_source,
+):
+    from test_dashboard_api import _prepare_dashboard_data, _reload_dashboard_app
+
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+    task_id = 1568726
+    task_path = f"/var/log/schedule-log-{task_id}.log"
+    old_source = "https://www.pythonanywhere.com/api/v0/user/tester/files/path/var/log/schedule-log-1322138.log"
+    command = """bash -lc 'set -e; cd /home/tester/jbravo_screener; ENV_FILE=/tmp/example bash scripts/ops/run_pythonanywhere_primary_pipeline.sh --example'"""
+    monkeypatch.setenv("PYTHONANYWHERE_PIPELINE_LOG_URL", old_source)
+    monkeypatch.setattr(module, "_screener_logs_from_db", lambda *_: ([], "postgres:none"))
+    monkeypatch.setattr(module, "_pythonanywhere_schedule_tasks", lambda: [
+        {"id": task_id, "enabled": preferred_source == "schedule", "command": command, "logfile": task_path},
+        {"id": 1322138, "enabled": True, "command": "echo scripts/ops/run_pythonanywhere_primary_pipeline.sh"},
+    ])
+    file_reads = []
+
+    def provider_file(url, path):
+        file_reads.append((url, path))
+        if path == task_path:
+            return "2026-11-23 03:46:05 -- Completed task, return code was 0.", task_path
+        return "2026-10-27 03:46:02 INFO scheduled output", old_source
+
+    monkeypatch.setattr(module, "_fetch_pythonanywhere_file", provider_file)
+    assert module._runs_primary_pipeline(command)
+    assert not module._runs_primary_pipeline("echo scripts/ops/run_pythonanywhere_primary_pipeline.sh")
+    assert not module._runs_primary_pipeline("bash -lc 'echo scripts/ops/run_pythonanywhere_primary_pipeline.sh'")
+    expected, date, reads = {
+        "schedule": (f"pythonanywhere:schedule/{task_id}/", "2026-11-23", [(None, task_path)]),
+        "configured": (f"pythonanywhere:{old_source}", "2026-10-27", [(old_source, None)]),
+    }[preferred_source]
+    with module.server.test_client() as client:
+        data = client.get("/api/execute/logs?stage=pipeline&limit=5").get_json()
+        assert data["ok"] and data["source"] == "pythonanywhere"
+        assert len(data["rows"]) == 1
+        assert data["rows"][0]["ts_utc"].startswith(date)
+        assert data["source_detail"] == f"postgres:none;{expected}"
+        assert file_reads == reads
+        if preferred_source == "schedule":
+            monkeypatch.setattr(module, "_execute_summary_payload", lambda: {"ok": True})
+            monkeypatch.setattr(module, "_execute_orders_payload", lambda **_: {})
+            monkeypatch.setattr(module, "_execute_trailing_stops_payload", lambda **_: {})
+            monkeypatch.setattr(module, "_execute_logs_from_order_events", lambda *_: ([], "postgres:none"))
+            monkeypatch.setattr(module, "_execute_log_file_payload",
+                lambda stage, original=module._execute_log_file_payload:
+                    original(stage) if stage == "pipeline" else (None, "files:none"))
+            state = client.get("/api/execute/state").get_json()
+            assert state["logs"]["pipeline"] == data
