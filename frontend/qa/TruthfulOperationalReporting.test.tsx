@@ -137,6 +137,14 @@ describe("resource snapshot provenance", () => {
     const html = renderToStaticMarkup(<PythonAnywhereResources resources={[{ label: "CPU Usage", value: 5, status: "fresh" }]} />);
     expect(html).toContain("UNKNOWN"); expect(html).not.toContain(">FRESH<");
   });
+  it("shows measured bytes without a quota percentage when the limit is unknown", () => {
+    const html = renderToStaticMarkup(<PythonAnywhereResources resources={[
+      { label: "File Storage", value: null, used: 2048, quota: null, unit: "bytes", captured_at: "2026-11-23T13:00:00Z", status: "partial" },
+    ]} />);
+    expect(html).toContain("Quota unknown");
+    expect(html).toContain("2,048 / unknown bytes");
+    expect(html).not.toContain("bg-progress-fill");
+  });
 });
 
 describe("scheduled task provenance", () => {

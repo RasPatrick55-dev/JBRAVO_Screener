@@ -10,11 +10,11 @@ def test_build_payload_pythonanywhere_file_storage_percent_from_du(monkeypatch):
     used_bytes_from_du = 4329684992
 
     monkeypatch.setattr(pythonanywhere_usage, "pythonanywhere_cpu_usage", lambda: None)
-    monkeypatch.setattr(pythonanywhere_usage, "postgres_size_bytes", lambda mode: None)
+    monkeypatch.setattr(pythonanywhere_usage, "get_pg_used_bytes_and_pretty", lambda _: (None, None))
     monkeypatch.setattr(
         pythonanywhere_usage.subprocess,
         "check_output",
-        lambda *args, **kwargs: str(used_bytes_from_du),
+        lambda *args, **kwargs: f"100\t/tmp\n{used_bytes_from_du - 100}\t/home/test\n{used_bytes_from_du}\ttotal\n",
     )
     monkeypatch.setenv("PYTHONANYWHERE_DISK_QUOTA_GB", "10")
 
@@ -31,6 +31,23 @@ def test_build_payload_pythonanywhere_file_storage_percent_from_du(monkeypatch):
     assert file_storage["file_quota_bytes"] == 10 * 1024**3
     assert file_storage["file_storage_percent"] == 40
     assert file_storage["percent"] == 40
+    assert file_storage["captured_at"] is not None
+
+
+@pytest.mark.alpaca_optional
+def test_failed_disk_measurement_does_not_publish_zero_usage(monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise pythonanywhere_usage.subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(pythonanywhere_usage, "pythonanywhere_cpu_usage", lambda: None)
+    monkeypatch.setattr(pythonanywhere_usage, "get_pg_used_bytes_and_pretty", lambda _: (None, None))
+    monkeypatch.setattr(pythonanywhere_usage.subprocess, "check_output", unavailable)
+    monkeypatch.setenv("PYTHONANYWHERE_DISK_QUOTA_GB", "10")
+
+    storage = pythonanywhere_usage.build_payload(Path("."), "25g", None, "pythonanywhere", "database")["file_storage"]
+
+    assert storage["limit_bytes"] == 25 * 1024**3
+    assert storage["used_bytes"] is storage["percent"] is storage["captured_at"] is None
 
 
 @pytest.mark.alpaca_optional

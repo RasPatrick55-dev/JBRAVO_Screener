@@ -131,6 +131,14 @@ def _pythonanywhere_usage_snapshot() -> Optional[dict[str, Any]]:
     remote_url = os.environ.get("PYTHONANYWHERE_USAGE_URL")
     remote_path = os.environ.get("PYTHONANYWHERE_USAGE_PATH")
     if not remote_url and not remote_path:
+        try:
+            with (Path(BASE_DIR) / "data" / "pythonanywhere_usage.json").open(encoding="utf-8") as handle:
+                contents = handle.read(262145)
+            snapshot = json.loads(contents) if len(contents) <= 262144 else None
+            if isinstance(snapshot, dict):
+                return {**snapshot, "_source": "local usage snapshot"}
+        except (OSError, ValueError):
+            pass
         username = _pythonanywhere_username()
         if username:
             remote_path = f"/home/{username}/JBRAVO_Screener/data/pythonanywhere_usage.json"
@@ -190,8 +198,6 @@ def _usage_metric(
     value = _percent_used(used_value, quota_value)
     if value is None and used is None and quota is None:
         value = _to_float(percent)
-    elif value is None and used_value is not None and quota is None:
-        value = _to_float(percent)
     if value is not None and (not math.isfinite(value) or value < 0):
         value = None
     stamp = _coerce_datetime_utc(captured_at)
@@ -200,7 +206,13 @@ def _usage_metric(
     max_age = 24 * 60 * 60
     known_age = age is not None and age >= 0
     stale = age > max_age if known_age else None
-    status = "unknown" if value is None or not known_age else "stale" if stale else "fresh"
+    measured_without_quota = used_value is not None and quota is None
+    if not known_age or (value is None and not measured_without_quota):
+        status = "unknown"
+    elif stale:
+        status = "stale"
+    else:
+        status = "fresh" if value is not None else "partial"
     return {
         "label": label,
         "value": round(value, 2) if value is not None else None,
@@ -277,11 +289,13 @@ def _pythonanywhere_file_storage_usage(*, snapshot_reader=None) -> Optional[dict
     if snapshot:
         storage = snapshot.get("file_storage") or snapshot.get("storage")
         if isinstance(storage, dict):
+            # Version 1 used an implicit account quota without recording its origin.
+            quota_unverified = snapshot.get("version") == 1 and storage.get("mode") != "path"
             return _usage_metric(
                 "File Storage",
                 used=_usage_first(storage, "used_bytes", "file_used_bytes", "used"),
-                quota=_usage_first(storage, "limit_bytes", "file_quota_bytes", "limit"),
-                percent=_usage_first(storage, "percent", "file_storage_percent"),
+                quota=None if quota_unverified else _usage_first(storage, "limit_bytes", "file_quota_bytes", "limit"),
+                percent=None if quota_unverified else _usage_first(storage, "percent", "file_storage_percent"),
                 source=snapshot.get("_source") or "snapshot",
                 captured_at=_usage_first(storage, "captured_at", "generated_at")
                 or snapshot.get("generated_at"),
@@ -298,11 +312,12 @@ def _pythonanywhere_postgres_usage(*, snapshot_reader=None) -> Optional[dict[str
     if snapshot:
         storage = snapshot.get("postgres_storage") or snapshot.get("postgres")
         if isinstance(storage, dict):
+            quota_unverified = snapshot.get("version") == 1
             return _usage_metric(
                 "Postgres Storage",
                 used=_usage_first(storage, "used_bytes", "pg_used_bytes", "used"),
-                quota=_usage_first(storage, "limit_bytes", "pg_quota_bytes", "limit"),
-                percent=_usage_first(storage, "pg_storage_percent", "percent"),
+                quota=None if quota_unverified else _usage_first(storage, "limit_bytes", "pg_quota_bytes", "limit"),
+                percent=None if quota_unverified else _usage_first(storage, "pg_storage_percent", "percent"),
                 source=snapshot.get("_source") or "snapshot",
                 captured_at=_usage_first(storage, "captured_at", "generated_at")
                 or snapshot.get("generated_at"),
@@ -1158,6 +1173,8 @@ def _strategy_monitor_log_entries(receipt: Mapping[str, Any] | None, limit: int 
         if not code:
             continue
         event_stamp = _coerce_datetime_utc(event.get("ts_utc") or event.get("timestamp"))
+        if event_stamp is not None and event_stamp > finished:
+            event_stamp = None
         event_dt = event_stamp or finished
         message = "Monitor observation: " + code.replace("_", " ").lower()
         if event.get("protection_confirmed") is False:
@@ -1184,7 +1201,7 @@ def _strategy_monitor_log_entries(receipt: Mapping[str, Any] | None, limit: int 
                     "native_stops_trigger_only_regular_hours"
                 ),
                 **_monitor_observation_metadata(
-                    finished,
+                    event_dt,
                     timestamp_kind="monitor_event" if event_stamp else "monitor_report_observation",
                     max_age_seconds=300,
                 ),
@@ -5896,7 +5913,7 @@ def api_pythonanywhere_resources():
     postgres_usage = _pythonanywhere_postgres_usage(snapshot_reader=snapshot_reader)
     if postgres_usage:
         resources.append(postgres_usage)
-    present = [row for row in resources if row.get("value") is not None]
+    present = [row for row in resources if row.get("value") is not None or row.get("used") is not None]
     status = ("ready" if all(row.get("status") == "fresh" for row in resources) else "partial") if present else "unavailable"
     return _json_no_store({"ok": bool(present), "status": status, "resources": resources})
 
@@ -8095,34 +8112,20 @@ def _execute_logs_from_files(stage: str, fetch_limit: int) -> tuple[list[dict[st
     parsed_rows: list[dict[str, Any]] = []
     for line in lines[-tail_limit:]:
         parsed = _screener_parse_log_line(line)
-        if parsed:
-            ts_dt = _coerce_datetime_utc(parsed.get("_ts") or parsed.get("ts_utc"))
-            level = _execute_log_level(parsed.get("level"))
-            message = str(parsed.get("message") or "").strip() or str(line).strip()
-        else:
-            ts_dt = _coerce_datetime_utc(_parse_log_timestamp(line))
-            upper = str(line).upper()
-            if "ERROR" in upper:
-                level = "ERROR"
-            elif "WARN" in upper:
-                level = "WARNING"
-            elif "SUCCESS" in upper:
-                level = "SUCCESS"
-            else:
-                level = "INFO"
-            message = str(line).strip()
+        if parsed is None:
+            continue
         parsed_rows.append(
             {
-                "ts_utc": _execute_iso_utc(ts_dt),
-                "level": level,
-                "message": message,
-                "_ts": ts_dt,
+                "ts_utc": _execute_iso_utc(parsed["_ts"]),
+                "level": _execute_log_level(parsed["level"]),
+                "message": parsed["message"],
+                "_ts": parsed["_ts"],
                 "_side": "",
             }
         )
 
     parsed_rows.sort(
-        key=lambda item: item.get("_ts") or datetime.fromtimestamp(0, tz=timezone.utc),
+        key=lambda item: (item["_ts"] is not None, item["_ts"]),
         reverse=True,
     )
     return parsed_rows, source
@@ -10094,9 +10097,6 @@ def _screener_metrics_rows_from_file(
     return rows[:limit], f"file:{path}"
 
 
-_SCREENER_LOG_TS_RE = re.compile(
-    r"(?P<date>\d{4}-\d{2}-\d{2})[ T](?P<time>\d{2}:\d{2}:\d{2})(?:[.,](?P<frac>\d{1,6}))?"
-)
 _SCREENER_LOG_LEVEL_RE = re.compile(
     r"\b(ERROR|ERR|WARN|WARNING|INFO|SUCCESS|OK|DEBUG)\b", re.IGNORECASE
 )
@@ -10114,34 +10114,15 @@ def _screener_normalize_log_level(level: str) -> str:
 
 
 def _screener_parse_log_line(line: str) -> Optional[dict[str, Any]]:
+    from dashboards.log_reporting import split_log_event
+
     text = str(line or "").strip()
     if not text:
         return None
 
-    timestamp = None
-    match = _SCREENER_LOG_TS_RE.search(text)
-    if match:
-        date_text = match.group("date")
-        time_text = match.group("time")
-        frac_text = (match.group("frac") or "").ljust(6, "0")[:6]
-        dt_text = f"{date_text} {time_text}"
-        try:
-            timestamp = datetime.strptime(dt_text, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-            if frac_text:
-                timestamp = timestamp.replace(microsecond=int(frac_text))
-        except Exception:
-            timestamp = None
-
+    timestamp, message = split_log_event(text)
     level_match = _SCREENER_LOG_LEVEL_RE.search(text)
     level = _screener_normalize_log_level(level_match.group(1) if level_match else "")
-
-    message = re.sub(
-        r"^\s*\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\s*",
-        "",
-        text,
-    ).strip()
-    if not message:
-        message = text
 
     return {
         "ts_utc": _screener_iso_utc(timestamp),
@@ -10197,7 +10178,7 @@ def _screener_filter_log_rows(
         )
 
     filtered.sort(
-        key=lambda item: item.get("_ts") or datetime.fromtimestamp(0, tz=timezone.utc),
+        key=lambda item: (item["_ts"] is not None, item["_ts"]),
         reverse=True,
     )
 
@@ -10339,6 +10320,32 @@ def _screener_logs_from_files(stage: str, fetch_limit: int) -> tuple[list[dict[s
     if not parsed_rows:
         return [], "files:none"
     return parsed_rows, ";".join(sources)
+
+
+def _screener_stage_receipt_log(stage: str) -> dict[str, Any] | None:
+    from dashboards.operational_status import pipeline_task
+
+    receipt = pipeline_task(BASE_DIR)
+    stages = receipt.get("stage_statuses") or {}
+    status = stages.get(stage)
+    finished = _coerce_datetime_utc(receipt.get("finished_utc"))
+    label, complete = {
+        "screener": ("Screener", "COMPLETED"),
+        "backtest": ("Backtest", "COMPLETED_CANDIDATE_BACKTEST"),
+        "metrics": ("Metrics", "COMPLETED_STRATEGY_METRICS"),
+    }[stage]
+    if receipt.get("ok") is not True or receipt.get("source") != "primary_receipt" or not finished:
+        return None
+    if status != complete and not (stage != "screener" and status == "SKIPPED_NO_CANDIDATES"):
+        return None
+    message = (
+        f"Primary run recorded {label} completion."
+        if status == complete else f"{label} skipped because the Screener produced no candidates."
+    )
+    return {
+        "ts_utc": finished.isoformat(), "_ts": finished, "level": "INFO",
+        "message": message, "source": "primary_receipt",
+    }
 
 
 @server.route("/api/screener/picks")
@@ -10518,10 +10525,19 @@ def api_screener_logs():
         source = "postgres" if db_rows else "none"
         source_detail = db_source_detail if db_rows else f"{file_source_detail};{db_source_detail}"
 
+    for item in staged_rows:
+        item.setdefault("source", source_detail)
+    stage_receipt = _screener_stage_receipt_log(stage)
+    if stage_receipt is not None:
+        source_detail = (
+            f"primary_receipt;{source_detail}" if staged_rows else "primary_receipt"
+        )
+        source = "mixed" if staged_rows else "primary_receipt"
+        staged_rows = [stage_receipt, *staged_rows]
+
     from dashboards.log_reporting import log_receipt, log_provenance
     source_groups = {}
     for item in staged_rows:
-        item.setdefault("source", source_detail)
         source_groups.setdefault(item["source"], []).append(item)
     source_receipts = [dict(source=key, **log_receipt(items)) for key, items in source_groups.items()]
     receipt = log_receipt(staged_rows)

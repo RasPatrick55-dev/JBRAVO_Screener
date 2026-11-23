@@ -383,11 +383,20 @@ def _aware_timestamp(value):
         return None
 
 
-def _expected_prediction_session(base, now):
-    """Use a validated calendar-bound primary receipt, never weekday guessing."""
+def _prediction_primary_receipt(base, now):
     try:
         from scripts.strategy_dashboard import primary_receipt
         primary, _ = primary_receipt(base, now=now)
+        return primary
+    except Exception:
+        return None
+
+
+def _expected_prediction_session(primary, now):
+    """Use the verified primary receipt's calendar window."""
+    if primary is None:
+        return None
+    try:
         session = primary['session']
         # The receipt's next session bounds how long its signal date is useful.
         available = _aware_timestamp(session['signal_available_at'])
@@ -647,7 +656,17 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
     historical_stale = _coerce_bool(freshness_data.get("stale"))
     if historical_stale is None:
         historical_stale = _coerce_bool(status_ml_health.get("predictions_stale"))
-    expected_session = _expected_prediction_session(base, now)
+    primary = _prediction_primary_receipt(base, now)
+    expected_session = _expected_prediction_session(primary, now)
+    stages_from_primary = (primary or {}).get("stages") or {}
+    primary_prediction_preparation = None
+    if expected_session and stages_from_primary.get("labels") == stages_from_primary.get("ranker_eval") == "NOT_USED_BY_STRATEGY":
+        primary_prediction_preparation = {
+            "status": "NOT_USED_BY_STRATEGY",
+            "source": "primary_receipt",
+            "finished_at": primary["finished_at"],
+            "signal_session": expected_session,
+        }
     # A latest-token lookup is not a binding to this prediction artifact. Keep
     # old producer checks diagnostic instead of overriding newer DB metadata.
     prediction_freshness = artifact_freshness(predictions_record, now=now,
@@ -920,6 +939,7 @@ def build_ml_overview(base_dir: Path, *, now: datetime | None = None) -> dict[st
         "last_successful_execution": None,
         "execution_evidence_scope": "UNVERIFIED_NO_PROVIDER_RECEIPT",
         "execution_evidence_reason": "provider_bound_execution_receipt_unavailable",
+        "primary_prediction_preparation": primary_prediction_preparation,
         "artifact_presence_count": sum(bool(r.get('present')) for r in records),
         "fresh_success_count": sum(s['fresh_success'] for s in stages),
         "status": {

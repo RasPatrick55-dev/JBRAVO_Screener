@@ -33,6 +33,12 @@ export type MlOverviewResponse = {
   updated_at?: string | null;
   last_successful_execution?: string | null;
   execution_evidence_scope?: string | null;
+  primary_prediction_preparation?: {
+    status?: string;
+    source?: string;
+    finished_at?: string;
+    signal_session?: string;
+  } | null;
   status?: {
     label?: string | null;
     tone?: StatusTone | null;

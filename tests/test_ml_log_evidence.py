@@ -28,6 +28,22 @@ class MlLogEvidenceTests(unittest.TestCase):
         self.ml.safe_tail_lines = lambda *a, **kw: lines
         return self.ml.build_ml_overview(ROOT, now=NOW)
 
+    def test_current_primary_bypass_does_not_refresh_predictions(self):
+        self.ml._artifact_record = lambda *a, **kw: artifact('2026-10-25T04:04:59+00:00')
+        self.ml._prediction_primary_receipt = lambda *a: {
+            'finished_at': '2026-11-08T03:46:02+00:00',
+            'stages': {'labels': 'NOT_USED_BY_STRATEGY', 'ranker_eval': 'NOT_USED_BY_STRATEGY'},
+        }
+
+        result = self.overview([])
+
+        self.assertEqual(result['primary_prediction_preparation'], {
+            'status': 'NOT_USED_BY_STRATEGY', 'source': 'primary_receipt',
+            'finished_at': '2026-11-08T03:46:02+00:00', 'signal_session': '2026-11-06',
+        })
+        self.assertEqual(result['freshness']['status'], 'stale')
+        self.assertIsNone(result['last_successful_execution'])
+
     def test_scalar_preserves_numeric_boolean_and_unknown_types(self):
         for raw, expected, kind in [
             ('0', 0, int), ('1', 1, int), ('-1', -1, int), ('7', 7, int),
