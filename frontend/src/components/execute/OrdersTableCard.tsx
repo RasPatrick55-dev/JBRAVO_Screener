@@ -15,9 +15,10 @@ type Props = {
   rows: ExecuteOrderRow[];
   isLoading: boolean;
   hasError: boolean;
+  historical?: boolean;
 };
 
-export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
+export default function OrdersTableCard({ rows, isLoading, hasError, historical }: Props) {
   const visibleRows = useMemo(() => {
     const toEpochMs = (value: string | null | undefined): number | null => {
       if (!value) {
@@ -48,6 +49,9 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
       <header className="flex items-start justify-between gap-3">
         <h2 className="font-arimo text-[30px] font-semibold leading-none text-primary sm:text-[34px]">Orders</h2>
       </header>
+      {historical && !isLoading ? <p className="mt-2 text-xs text-secondary" role="status">
+        Showing historical order observations. Current broker status is unavailable.
+      </p> : null}
 
       <div className="mt-3 overflow-x-auto">
         <div className="min-w-[980px] max-h-[320px] overflow-auto rounded-xl jbravo-panel-inner jbravo-panel-inner-violet">
@@ -84,7 +88,7 @@ export default function OrdersTableCard({ rows, isLoading, hasError }: Props) {
                   Limit/Stop/Trail
                 </th>
                 <th scope="col" className="px-1.5 py-1 text-left whitespace-nowrap">
-                  Status
+                  {historical ? "Last recorded status" : "Status"}
                 </th>
                 <th scope="col" className="px-1.5 py-1 text-right whitespace-nowrap">
                   Filled Avg

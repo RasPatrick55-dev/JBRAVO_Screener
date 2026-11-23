@@ -21,7 +21,7 @@ def endpoint(db_rows=None, db_error=False, fallback=None, fallback_error=False):
 
 def test_successful_empty_is_not_failure_and_does_not_fall_back():
     result, _, fallback = endpoint(db_rows=[])
-    assert result == {"ok": True, "status": "empty", "rows": [], "source_detail": "postgres:order_events"}
+    assert result == {"ok": True, "status": "empty", "rows": [], "source": "postgres", "source_detail": "postgres:order_events"}
     fallback.assert_not_called()
 
 
@@ -42,6 +42,7 @@ def test_database_failure_and_no_verified_fallback_is_unavailable(file_error):
 def test_database_failure_with_log_rows_is_explicitly_partial():
     result, _, _ = endpoint(db_error=True, fallback=[{"ts": "2030-01-02T10:00:00Z", "message": "BUY_FILL ABC"}])
     assert result["ok"] is True and result["status"] == "partial"
+    assert result["source"] == "log-fallback"
     assert result["source_detail"] == "log-fallback:execute_trades.log"
 
 

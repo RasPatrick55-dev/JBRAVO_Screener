@@ -47,7 +47,8 @@ class Cursor:
             if original in T.plan_table() and marker in original:
                 assert ','+','.join(columns)+marker in sql
                 target=getattr(self.conn,'canonical_version_scope',None)
-                changed=self.conn.source_reads>=2 and (getattr(self.conn,'canonical_version_drift',False) or (target is not None and target in original))
+                rechecked=self.conn.source_reads>=2 or getattr(self.conn,'replaying_combined',False)
+                changed=rechecked and (getattr(self.conn,'canonical_version_drift',False) or (target is not None and target in original))
                 version='301' if changed else '300'
                 native=[tuple(row)+(version,)*len(columns) for row in native]
         bodies=[json.dumps(list(row),ensure_ascii=False,separators=(',',':')) for row in native]

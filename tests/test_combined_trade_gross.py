@@ -311,7 +311,11 @@ class CombinedCursor(ReplayBindings, Cursor):
             super().execute(timeout)
             sql = statement
         if sql.startswith("/* combined-canonical-replay */"):
-            self.rows = replay_wire(sql, self.replay_bindings, super().execute, super().fetchmany)
+            self.conn.replaying_combined = True
+            try:
+                self.rows = replay_wire(sql, self.replay_bindings, super().execute, super().fetchmany)
+            finally:
+                self.conn.replaying_combined = False
             return
         return super().execute(sql, params)
 
@@ -461,6 +465,7 @@ def test_combined_report_survives_round_trip_latency_with_the_same_deadline(monk
 
     # Compare the previous transport under exactly the same query plan and latency.
     clock.seconds = 0
+    monkeypatch.setattr(C, "COHORT_DEADLINE_SECONDS", 8)
     monkeypatch.setattr(C, "TimedStatementTransport", lambda raw: raw)
     monkeypatch.setattr(C.CohortCursor, "recheck_canonical", C.T.Cursor.recheck_canonical)
     old = connection()
@@ -599,7 +604,7 @@ def test_only_fixed_admission_failure_codes_are_public(code):
         code if code.startswith("source_") else "combined_gross_unavailable"
     )
     assert result["failure_stage"] == "database_cohort_read" and result["rows"] == []
-    assert "private" not in json.dumps(result) and calls == [2, 10]
+    assert "private" not in json.dumps(result) and calls == [2, C.COHORT_WORKER_SECONDS]
 
 
 def test_strategy_wire_fractional_request_numbers_are_not_canonicalized_to_strings(monkeypatch):

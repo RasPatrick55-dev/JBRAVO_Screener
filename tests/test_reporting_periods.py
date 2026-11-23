@@ -115,7 +115,7 @@ def test_calendar_failure_is_bounded_and_does_not_reopen_database(monkeypatch):
         calls.append(seconds)
         return fn()
     result=C.snapshot(lambda:conn,client,F.IDENTITY,now=F.NOW,read=read)
-    assert calls == [2,10,2] and result["status"] == "partial"
+    assert calls == [2,C.COHORT_WORKER_SECONDS,2] and result["status"] == "partial"
     assert result["stats"][-1]["tradesCount"] == 2 and result["rankings"]["w"] is None
     assert "private" not in str(result)
     conn.close.assert_called_once()

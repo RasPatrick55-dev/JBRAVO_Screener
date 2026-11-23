@@ -122,10 +122,12 @@ def test_current_main_strategy_enabled_route_is_preserved(name,monkeypatch):
     monkeypatch.setitem(sys.modules,'scripts.strategy_dashboard',SimpleNamespace(snapshot=read_snapshot,
         api_payload=read_api_payload))
     path=Path(__file__).parents[1]/'dashboards/dashboard_app.py'
-    node=next(item for item in ast.parse(path.read_bytes()).body if isinstance(item,ast.FunctionDef) and item.name==name)
-    node.decorator_list=[] # Exercise the handler body without starting Flask or importing app configuration.
-    namespace=dict(Any=Any,BASE_DIR='fictional-dashboard-root',_json_no_store=lambda value:value,request=SimpleNamespace(args={}))
-    exec(compile(ast.Module(body=[node],type_ignores=[]),'reviewed-strategy-route','exec'),namespace)
+    from collections.abc import Mapping
+    names={name,'_strategy_screener_report'}
+    nodes=[item for item in ast.parse(path.read_bytes()).body if isinstance(item,ast.FunctionDef) and item.name in names]
+    for node in nodes:node.decorator_list=[] # Exercise the handler without starting Flask or importing app configuration.
+    namespace=dict(Any=Any,Mapping=Mapping,BASE_DIR='fictional-dashboard-root',_json_no_store=lambda value:value,request=SimpleNamespace(args={}))
+    exec(compile(ast.Module(body=nodes,type_ignores=[]),'reviewed-strategy-route','exec'),namespace)
     result=namespace[name]()
     if name.startswith('api_screener_'):assert result==dict(ok=True,kind=name.removeprefix('api_screener_')) and len(called)==1
     elif name=='_execute_latest_candidates_count':assert result==2

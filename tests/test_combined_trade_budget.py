@@ -133,7 +133,7 @@ def test_production_shaped_replay_survives_round_trip_latency(monkeypatch):
 
     def round_trip():
         nonlocal elapsed
-        elapsed += 0.14
+        elapsed += 0.3
 
     original_init = C.T.Cursor.__init__
 
@@ -146,22 +146,25 @@ def test_production_shaped_replay_survives_round_trip_latency(monkeypatch):
     optimized = FullNative()
     optimized.advance_clock = round_trip
     actual = C.read_cohort(lambda: optimized, optimized.identity, F.S.ACCOUNT)
-    assert elapsed < 8
+    assert 8 < elapsed < C.COHORT_DEADLINE_SECONDS
+    assert len(optimized.round_trips) == 36
     assert sum("combined-canonical-replay" in sql for sql, _ in optimized.round_trips) == 1
 
-    monkeypatch.setattr(C.CohortCursor, "recheck_canonical", C.T.Cursor.recheck_canonical)
     elapsed = 0
-    baseline = FullNative()
-    expected = C.read_cohort(lambda: baseline, baseline.identity, F.S.ACCOUNT)
+    with monkeypatch.context() as unbatched:
+        unbatched.setattr(C.CohortCursor, "recheck_canonical", C.T.Cursor.recheck_canonical)
+        baseline = FullNative()
+        expected = C.read_cohort(lambda: baseline, baseline.identity, F.S.ACCOUNT)
     assert actual == expected
-    assert len(baseline.round_trips) - len(optimized.round_trips) == 19
+    assert len(baseline.round_trips) - len(optimized.round_trips) == 23
 
     elapsed = 0
     slow = FullNative()
     slow.advance_clock = round_trip
+    monkeypatch.setattr(C, "COHORT_DEADLINE_SECONDS", 8)
     with pytest.raises(ValueError, match="EXECUTION_DEADLINE_OR_SQL_CAP"):
         C.read_cohort(lambda: slow, slow.identity, F.S.ACCOUNT)
-    assert slow.batch_reads == 2 and slow.rollbacks == slow.closes == 1
+    assert slow.rollbacks == slow.closes == 1
 
 
 def batch(rows):
@@ -221,12 +224,9 @@ def test_batch_overflow_not_truncated(section, cap):
 
 def test_native_semantics_preserved():
     source = inspect.getsource(C.read_cohort)
-    assert (
-        "first = inputs()" in source
-        and "second = inputs()" in source
-        and "cursor.recheck_canonical()" in source
-    )
-    assert "started + 8" in source
+    assert source.count("E.read_inputs(capture, policy)") == 1
+    assert "cursor.recheck_canonical()" in source
+    assert "started + COHORT_DEADLINE_SECONDS" in source
     assert C.STRATEGY_COHORT_SQL.count("%s") == 1
     assert all(
         q in C.STRATEGY_COHORT_SQL

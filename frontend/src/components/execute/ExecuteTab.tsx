@@ -58,7 +58,8 @@ export default function ExecuteTab({ onSyncStateChange }: ExecuteTabProps) {
         lastScheduledAttempt={(executionTask.payload as ProcessReceipt | null)?.last_scheduled_attempt}
         lastExecutionReceipt={(executionTask.payload as ProcessReceipt | null)?.last_execution_receipt}
         taskSource={executionTask} />
-      <OrdersTableCard rows={ordersRows} isLoading={isLoading} hasError={hasError || (!isLoading && payload?.orders?.ok !== true)} />
+      <OrdersTableCard rows={ordersRows} isLoading={isLoading} hasError={hasError || (!isLoading && payload?.orders?.ok !== true)}
+        historical={payload?.orders?.source === "postgres-fallback"} />
       <TrailingStopsCard rows={trailingRows} isLoading={isLoading} hasError={hasError || (!isLoading && payload?.trailing_stops?.ok !== true)} />
       <ExecutionLogsCard logs={logsByStage} isLoading={isLoading} hasError={hasError} />
     </div>
