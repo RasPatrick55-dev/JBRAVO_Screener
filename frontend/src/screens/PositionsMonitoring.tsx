@@ -43,6 +43,13 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: { active
   const summary = { totalShares: finiteNumber(rawSummary?.totalShares), totalOpenPL: finiteNumber(rawSummary?.totalOpenPL),
     avgDaysHeld: finiteNumber(rawSummary?.avgDaysHeld), totalCapturedPL: finiteNumber(rawSummary?.totalCapturedPL) };
   const logRows = canDisplay(logs.kind) && Array.isArray(logs.payload?.logs) ? logs.payload.logs as Record<string, unknown>[] : [];
+  const monitor = logs.payload?.monitor_receipt as Record<string, unknown> | null | undefined;
+  const monitorObserved = typeof monitor?.observed_at === "string" ? monitor.observed_at : null;
+  const monitorAge = monitorObserved ? Date.now() - Date.parse(monitorObserved) : Number.NaN;
+  const monitorCompleted = monitor?.status === "completed" && monitorAge >= 0 && Number.isFinite(monitorAge);
+  const monitorStatus = monitorCompleted
+    ? monitor?.stale === true || monitorAge > 300_000 ? "STALE" : "COMPLETED"
+    : logs.kind === "loading" ? "LOADING" : "UNVERIFIED";
   const currentTab = activeTab ?? "Positions";
   const navTabs = ["Dashboard", "Account", "Trades", "Positions", "Execute", "Screener", "ML Pipeline"].map(label => ({ label, isActive: label === currentTab }));
   const badges = buildNavbarBadges(live, positions.kind === "loading" ? "loading" : available && positions.kind !== "stale" ? "ready" : "error");
@@ -53,6 +60,10 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: { active
     <main className="mx-auto max-w-7xl space-y-4 px-4 pb-12 pt-[calc(var(--app-nav-height,208px)+16px)]">
       <SourceNotice label="Broker positions" {...positions} />
       <p className="text-sm text-secondary">Alpaca broker marks only. PostgreSQL OPEN trades are not substituted. Optional trailing-stop, days-held and captured-P/L enrichment is deferred and remains unknown.</p>
+      <div role="status" className="rounded-lg border border-slate-500/40 p-3 text-sm text-secondary">
+        <strong>Monitor receipt: {monitorStatus}</strong>
+        {monitorObserved ? <div>Observed (UTC): {monitorObserved} · Events: {finiteNumber(monitor?.event_count) ?? "unknown"}</div> : null}
+      </div>
       <SourceNotice label="Operational monitoring logs" {...logs} />
       <PositionsTab positions={rows} summary={summary} logs={monitoringLogs} isLoading={positions.kind === "loading"}
         hasError={!available && positions.kind !== "loading"} available={available} logsAvailable={canDisplay(logs.kind)} />

@@ -223,7 +223,7 @@ def _usage_first(mapping: Mapping[str, Any], *keys: str) -> Any:
     return next((mapping[key] for key in keys if mapping.get(key) not in (None, "")), None)
 
 
-def _pythonanywhere_cpu_usage() -> Optional[dict[str, Any]]:
+def _pythonanywhere_cpu_usage(*, snapshot_reader=None) -> Optional[dict[str, Any]]:
     payload = _pythonanywhere_api_get_json("cpu/")
     cpu_seconds = None
     cpu_limit = None
@@ -251,7 +251,7 @@ def _pythonanywhere_cpu_usage() -> Optional[dict[str, Any]]:
             "next_reset_time": next_reset,
         }
 
-    snapshot = _pythonanywhere_usage_snapshot()
+    snapshot = (snapshot_reader or _pythonanywhere_usage_snapshot)()
     if snapshot:
         cpu = snapshot.get("cpu") or snapshot.get("cpu_usage")
         if isinstance(cpu, dict):
@@ -272,8 +272,8 @@ def _pythonanywhere_cpu_usage() -> Optional[dict[str, Any]]:
     return _usage_metric("CPU Usage", unit="sec")
 
 
-def _pythonanywhere_file_storage_usage() -> Optional[dict[str, Any]]:
-    snapshot = _pythonanywhere_usage_snapshot()
+def _pythonanywhere_file_storage_usage(*, snapshot_reader=None) -> Optional[dict[str, Any]]:
+    snapshot = (snapshot_reader or _pythonanywhere_usage_snapshot)()
     if snapshot:
         storage = snapshot.get("file_storage") or snapshot.get("storage")
         if isinstance(storage, dict):
@@ -293,8 +293,8 @@ def _pythonanywhere_file_storage_usage() -> Optional[dict[str, Any]]:
     return _usage_metric("File Storage")
 
 
-def _pythonanywhere_postgres_usage() -> Optional[dict[str, Any]]:
-    snapshot = _pythonanywhere_usage_snapshot()
+def _pythonanywhere_postgres_usage(*, snapshot_reader=None) -> Optional[dict[str, Any]]:
+    snapshot = (snapshot_reader or _pythonanywhere_usage_snapshot)()
     if snapshot:
         storage = snapshot.get("postgres_storage") or snapshot.get("postgres")
         if isinstance(storage, dict):
@@ -380,6 +380,7 @@ def _task_name_from_command(command: str) -> Optional[str]:
                 if args[0] == "--":
                     args = args[1:]
                 target = Path(args[0]).name if args else ""
+            target = re.sub(r"^(executor_boot|strategy_monitor_boot)_[0-9]{8}\.py$", r"\1.py", target)
             if target in labels:
                 names.add(labels[target])
         return next(iter(names)) if len(names) == 1 else None
@@ -1069,23 +1070,31 @@ def _fetch_pythonanywhere_monitor_log_source() -> Optional[tuple[str, str]]:
     return _fetch_pythonanywhere_file(remote_url, remote_path)
 
 
-def _strategy_monitor_log_entries(limit: int = 80) -> list[dict[str, Any]]:
-    """Read the dedicated lifecycle monitor receipt, never a pipeline simulation."""
+def _read_strategy_monitor_receipt() -> dict[str, Any] | None:
+    """Read the dedicated lifecycle monitor receipt, including zero-event cycles."""
     path = Path(BASE_DIR) / "reports" / "strategy_execution" / "monitor" / "latest.json"
     try:
-        if path.stat().st_size > 1024 * 1024:
-            return []
-        receipt = json.loads(path.read_text(encoding="utf-8"))
+        with path.open("rb") as stream:
+            raw = stream.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            return None
+        receipt = json.loads(raw)
     except (OSError, ValueError):
-        return []
-    if not isinstance(receipt, Mapping) or receipt.get("paper_only") is not True:
-        return []
+        return None
+    if not isinstance(receipt, dict) or receipt.get("paper_only") is not True:
+        return None
     finished = _coerce_datetime_utc(receipt.get("finished_at"))
-    events = receipt.get("events")
-    if finished is None or not isinstance(events, list):
+    if finished is None or finished > datetime.now(timezone.utc) or not isinstance(receipt.get("events"), list):
+        return None
+    return receipt
+
+
+def _strategy_monitor_log_entries(receipt: Mapping[str, Any] | None, limit: int = 80) -> list[dict[str, Any]]:
+    if receipt is None:
         return []
+    finished = _coerce_datetime_utc(receipt["finished_at"])
     output: list[dict[str, Any]] = []
-    for event in events:
+    for event in receipt["events"]:
         if not isinstance(event, Mapping):
             continue
         code = str(event.get("code") or "").strip()
@@ -1250,8 +1259,10 @@ def _alpaca_trailing_logs(limit: int = 80, lookback_hours: int = 96) -> list[dic
     return entries[: max(1, int(limit))]
 
 
-def _positions_logs_live(limit: int = 80) -> tuple[list[dict[str, Any]], str]:
-    receipt_logs = _strategy_monitor_log_entries(limit=limit)
+def _positions_logs_live(
+    limit: int = 80, *, receipt: Mapping[str, Any] | None = None
+) -> tuple[list[dict[str, Any]], str]:
+    receipt_logs = _strategy_monitor_log_entries(receipt=receipt, limit=limit)
     remote = _fetch_pythonanywhere_monitor_log_source()
     logs = (
         _monitor_log_entries_from_text(remote[0], limit=limit, source=remote[1]) if remote else []
@@ -5786,7 +5797,13 @@ def health_overview():
         summary["trades_log_present"] = True
         summary["trades_log_rows"] = int(trades_row["count"])
 
-    return jsonify({"ok": bool(metrics or trades_row), **summary})
+    return _json_no_store({
+        "ok": bool(metrics or trades_row),
+        "source": "postgres",
+        "performance_status": metrics.get("validation_status", "HELD_UNVALIDATED_PERFORMANCE"),
+        "policy_validation_status": metrics.get("policy_validation_status", "UNAVAILABLE"),
+        **summary,
+    })
 
 
 @server.route("/api/time")
@@ -5808,16 +5825,23 @@ def _json_no_store(payload: Mapping[str, Any] | list[Any]) -> Response:
 @server.route("/api/pythonanywhere/resources")
 def api_pythonanywhere_resources():
     resources: list[dict[str, Any]] = []
-    cpu = _pythonanywhere_cpu_usage()
+    snapshot = _pythonanywhere_usage_snapshot()
+
+    def snapshot_reader():
+        return snapshot
+
+    cpu = _pythonanywhere_cpu_usage(snapshot_reader=snapshot_reader)
     if cpu:
         resources.append(cpu)
-    file_usage = _pythonanywhere_file_storage_usage()
+    file_usage = _pythonanywhere_file_storage_usage(snapshot_reader=snapshot_reader)
     if file_usage:
         resources.append(file_usage)
-    postgres_usage = _pythonanywhere_postgres_usage()
+    postgres_usage = _pythonanywhere_postgres_usage(snapshot_reader=snapshot_reader)
     if postgres_usage:
         resources.append(postgres_usage)
-    return _json_no_store({"ok": any(row.get("value") is not None for row in resources), "resources": resources})
+    present = [row for row in resources if row.get("value") is not None]
+    status = ("ready" if all(row.get("status") == "fresh" for row in resources) else "partial") if present else "unavailable"
+    return _json_no_store({"ok": bool(present), "status": status, "resources": resources})
 
 
 @server.route("/api/pythonanywhere/tasks")
@@ -5856,8 +5880,32 @@ def api_positions_logs():
         limit = 80
     limit = max(1, min(limit, 200))
 
-    logs, source = _positions_logs_live(limit=limit)
-    return jsonify({"ok": bool(logs), "logs": logs, "source": source})
+    receipt = _read_strategy_monitor_receipt()
+    logs, source = _positions_logs_live(limit=limit, receipt=receipt)
+    monitor = None
+    if receipt is not None:
+        finished = _coerce_datetime_utc(receipt["finished_at"])
+        monitor = {
+            "source": "reports/strategy_execution/monitor/latest.json",
+            "observed_at": finished.isoformat(),
+            "status": "completed" if receipt.get("status") == "ok" else "unverified",
+            "event_count": len(receipt["events"]),
+            **_monitor_observation_metadata(
+                finished, timestamp_kind="monitor_report_observation", max_age_seconds=300
+            ),
+        }
+    fresh = [row for row in logs if row.get("freshness") == "fresh"]
+    dated = [row["ts_utc"] for row in logs if row.get("ts_utc") and row.get("freshness") != "unknown"]
+    status = "ready" if fresh else "stale" if dated else "partial" if logs else "unavailable"
+    return _json_no_store({
+        "ok": bool(logs),
+        "status": status,
+        "logs": logs,
+        "source": source,
+        "source_as_of": max(dated, default=None),
+        "freshness": "fresh" if fresh else "stale" if dated else "unknown",
+        "monitor_receipt": monitor,
+    })
 
 
 @server.route("/api/logos/<symbol>")
@@ -6092,7 +6140,6 @@ def api_account_order_logs():
 @server.route("/api/trades/overview")
 def api_trades_overview():
     history = source_contracts.physical_history(db.get_db_conn, limit=100)
-    client = trading_client if _account_api_is_paper_mode() else None
     broker = _dashboard_broker_positions()
     metrics = _metrics_summary_db()
     return _json_no_store({**history, "trade_view": "PHYSICAL_HISTORY_UNFILTERED", "trades": history["rows"], "metrics": metrics,
@@ -6136,7 +6183,7 @@ def api_trades_combined_gross():
         identity = _dashboard_read_policy_identity()
     except Exception:
         return _json_no_store(combined_trade_gross.context_unavailable())
-    return _json_no_store(combined_trade_gross.snapshot(
+    return _json_no_store(combined_trade_gross.current_snapshot(
         _execution_gross_db_conn, client, identity))
 
 

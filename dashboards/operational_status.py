@@ -49,7 +49,8 @@ def pipeline_task(base_dir=ROOT, *, now=None):
         times = _times(primary, now)
         return dict(result, ok=True, status='COMPLETED' if times['age_seconds'] <= 86400 else 'STALE',
             run_id=primary['run_id'], rc=primary['pipeline_rc'], **times,
-            stage_rcs=dict(screener=0, backtest=0, metrics=0))
+            stage_rcs=dict(screener=0, backtest=0, metrics=0),
+            stage_statuses={key: primary["stages"][key] for key in ("screener", "backtest", "metrics")})
     except Exception as error:
         return dict(result, failure_code=failure_code(error))
 
@@ -79,7 +80,10 @@ def _execution_receipt(base_dir=ROOT, *, now=None):
         if times['age_seconds'] > 86400:
             state = 'STALE'
         return dict(result, ok=True, status=state, run_id=record['run_id'],
-            rc=record['process_rc'], process_health=outcome, **times)
+            rc=record['process_rc'], process_health=outcome,
+            exit_reason=('NO_STRATEGY_BUY_SIGNALS'
+                         if record['metrics'].get('exit_reason') == 'NO_STRATEGY_BUY_SIGNALS' else None),
+            **times)
     except Exception:
         return dict(result, failure_code='executor_receipt_missing_or_invalid')
 
@@ -234,7 +238,7 @@ def _scheduled_launcher(task):
         if len(tail) != 5 or tail[1:3] != ['-I', '-B'] or tail[-1] != '--scheduled':
             return None
         launcher = tail[3]
-        if not re.fullmatch(r'/home/[A-Za-z0-9_-]+/jbravo-research-tools/[A-Za-z0-9_-]+/executor_boot\.py', launcher):
+        if not re.fullmatch(r'/home/[A-Za-z0-9_-]+/jbravo-research-tools/[A-Za-z0-9_-]+/executor_boot(?:_[0-9]{8})?\.py', launcher):
             return None
         if not re.fullmatch(r'/home/[A-Za-z0-9_-]+/\.virtualenvs/[A-Za-z0-9_-]+/bin/python(?:3(?:\.[0-9]+)?)?', tail[0]):
             return None
@@ -244,6 +248,62 @@ def _scheduled_launcher(task):
         return launcher, pin[1], hashlib.sha256(command.encode()).hexdigest()
     except (ValueError, IndexError):
         return None
+
+
+def _ownership_call(node):
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == 'ownership_support' and not node.args and not node.keywords)
+
+
+def _entry_install_function(tree):
+    functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    main = functions['main']
+    for statement in main.body:
+        if not isinstance(statement, ast.Return) or not isinstance(statement.value, ast.Call):
+            continue
+        call = statement.value
+        if (not isinstance(call.func, ast.Attribute) or call.func.attr != 'run_guarded'
+                or not isinstance(call.func.value, ast.Name) or call.func.value.id != 'generation_fence'
+                or len(call.args) != 2 or call.keywords or not isinstance(call.args[1], ast.Lambda)):
+            continue
+        delegated = call.args[1].body
+        if (isinstance(delegated, ast.Call) and isinstance(delegated.func, ast.Name)
+                and delegated.func.id == 'verified_main' and len(delegated.args) == 1
+                and isinstance(delegated.args[0], ast.Name) and delegated.args[0].id == 'mode'
+                and not delegated.keywords):
+            return functions['verified_main']
+    return main
+
+
+def _verify_entry_install(main):
+    calls = [node for node in ast.walk(main) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and node.func.attr == 'install_entry']
+    if len(calls) != 1:
+        raise ValueError('active_entry_wiring_unverified')
+    owner = calls[0].func.value
+    if _ownership_call(owner):
+        return
+    if isinstance(owner, ast.Name):
+        bindings = [node for node in ast.walk(main) if isinstance(node, ast.Name)
+                    and isinstance(node.ctx, ast.Store) and node.id == owner.id]
+        for statement in main.body:
+            if (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                    and bindings == statement.targets and _ownership_call(statement.value)
+                    and statement.lineno < calls[0].lineno):
+                return
+    raise ValueError('active_entry_wiring_unverified')
+
+
+def _bound_support_name(support, launcher):
+    names = [node.args[0].value for node in ast.walk(support)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+             and node.func.attr == 'with_name' and len(node.args) == 1
+             and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)]
+    if len(names) == 1 and re.fullmatch(r'ownership_boot_support(?:_[0-9]{8})?\.py', names[0]):
+        return names[0]
+    if not names and launcher.endswith('/executor_boot.py'):
+        return 'ownership_boot_support.py'
+    raise ValueError('support_path_unavailable')
 
 
 def execution_schedule(base_dir=ROOT, *, scheduled_tasks=None, now=None, source_reader=None):
@@ -276,13 +336,7 @@ def execution_schedule(base_dir=ROOT, *, scheduled_tasks=None, now=None, source_
             raise ValueError('launcher_changed')
         tree = ast.parse(raw)
         argv = _literal(tree, 'ARGV')
-        main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'main')
-        installed = any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-            and n.func.attr == 'install_entry' and isinstance(n.func.value, ast.Call)
-            and isinstance(n.func.value.func, ast.Name) and n.func.value.func.id == 'ownership_support'
-            for n in ast.walk(main))
-        if not installed:
-            raise ValueError('active_entry_wiring_unverified')
+        _verify_entry_install(_entry_install_function(tree))
         support = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'ownership_support')
         pins = []
         for node in ast.walk(support):
@@ -296,7 +350,8 @@ def execution_schedule(base_dir=ROOT, *, scheduled_tasks=None, now=None, source_
         if len(pins) != 1:
             raise ValueError('support_pin_unavailable')
         directory = launcher.rsplit('/', 1)[0]
-        support_raw = reader(directory + '/ownership_boot_support.py')
+        support_name = _bound_support_name(support, launcher)
+        support_raw = reader(directory + '/' + support_name)
         if dict(bytes=len(support_raw), sha256=hashlib.sha256(support_raw).hexdigest()) != pins[0]:
             raise ValueError('support_changed')
         support_tree = ast.parse(support_raw)
@@ -304,15 +359,18 @@ def execution_schedule(base_dir=ROOT, *, scheduled_tasks=None, now=None, source_
         install = next(n for n in support_tree.body if isinstance(n, ast.FunctionDef) and n.name == 'install_entry')
         loaded = {ast.literal_eval(n.args[0]) for n in ast.walk(install) if isinstance(n, ast.Call)
                   and isinstance(n.func, ast.Name) and n.func.id == 'load' and len(n.args) == 1}
-        if not {'strategy_entry_only.py', 'strategy_order_lifecycle.py', 'strategy_order_ownership_install.py'} <= loaded:
+        entry_names = {name for name in loaded if isinstance(name, str) and
+                       re.fullmatch(r'strategy_entry_only(?:_[0-9]{8})?\.py', name)}
+        if len(entry_names) != 1 or not {'strategy_order_lifecycle.py', 'strategy_order_ownership_install.py'} <= loaded:
             raise ValueError('ownership_wiring_unverified')
+        entry_name = entry_names.pop()
         parsed = {}
-        for name in ('strategy_entry_only.py', 'strategy_order_lifecycle.py', 'strategy_order_ownership_install.py'):
+        for name in (entry_name, 'strategy_order_lifecycle.py', 'strategy_order_ownership_install.py'):
             value = reader(directory + '/' + name)
             if dict(bytes=len(value), sha256=hashlib.sha256(value).hexdigest()) != bindings[name]:
                 raise ValueError('entry_source_changed')
             parsed[name] = ast.parse(value)
-        entry = parsed['strategy_entry_only.py']
+        entry = parsed[entry_name]
         windows = set()
         attributes = {}
         for node in ast.walk(entry):
@@ -338,7 +396,7 @@ def execution_schedule(base_dir=ROOT, *, scheduled_tasks=None, now=None, source_
         seconds = next(iter(windows))
         end = (datetime.combine(date(2000, 1, 1), start) + timedelta(seconds=seconds)).time()
         result.update(status='verified', reason=None, launcher_sha256=pin,
-            entry_source_sha256=bindings['strategy_entry_only.py']['sha256'],
+            entry_source_sha256=bindings[entry_name]['sha256'],
             lifecycle_source_sha256=bindings['strategy_order_lifecycle.py']['sha256'],
             timezone=zones[0], entry_start_local=start.strftime('%H:%M'), entry_end_local=end.isoformat(timespec='seconds' if end.second else 'minutes'),
             submission_window_seconds=seconds, lifecycle_owner=owner,

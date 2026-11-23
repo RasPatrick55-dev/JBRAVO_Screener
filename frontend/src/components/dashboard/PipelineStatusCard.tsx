@@ -5,9 +5,9 @@ import { processTone, taskEvidenceFreshness, type TaskEvidenceSource, type Proce
 export interface PipelineStatusCardProps {
   lastRun: { date: string; start: string; end: string; duration: string };
   subprocess: {
-    screener: "OK" | "FAIL" | "UNKNOWN";
-    backTester: "OK" | "FAIL" | "UNKNOWN";
-    metrics: "OK" | "FAIL" | "UNKNOWN";
+    screener: "OK" | "FAIL" | "SKIPPED" | "UNKNOWN";
+    backTester: "OK" | "FAIL" | "SKIPPED" | "UNKNOWN";
+    metrics: "OK" | "FAIL" | "SKIPPED" | "UNKNOWN";
   };
   isLive: boolean;
   status?: ProcessStatus;
@@ -18,6 +18,7 @@ const statusToneMap: Record<PipelineStatusCardProps["subprocess"]["screener"], S
   OK: "success",
   FAIL: "error",
   UNKNOWN: "neutral",
+  SKIPPED: "neutral",
 };
 
 const formatValue = (value: string | null | undefined) => {
@@ -111,7 +112,7 @@ export default function PipelineStatusCard({ lastRun, subprocess, isLive, status
     if (status === "FAIL") {
       return { label: "FAILED", tone: statusToneMap[status], icon: statusIcons.fail };
     }
-    return { label: "UNKNOWN", tone: statusToneMap[status], icon: statusIcons.pending };
+    return { label: status, tone: statusToneMap[status], icon: statusIcons.pending };
   };
 
   const valueStyles =

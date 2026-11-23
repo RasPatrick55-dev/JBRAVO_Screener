@@ -45,6 +45,9 @@ export default function ExecutionSummaryCard({ summary, isLoading, hasError, las
     ? `${schedule.entry_start_local}-${schedule.entry_end_local} ${schedule.timezone}` : "Entry window unknown";
   const taskFreshness = taskEvidenceFreshness(taskSource);
   const runLabel = lastExecutionReceipt ? taskFreshness === "current" ? "Last execution receipt" : taskFreshness === "stale" ? "Cached execution receipt" : "Unverified execution receipt" : "Last reported run";
+  const receiptOutcome = lastExecutionReceipt?.process_health === "skipped"
+    ? lastExecutionReceipt.exit_reason === "NO_STRATEGY_BUY_SIGNALS" ? "SKIPPED — no buy signals" : "SKIPPED"
+    : lastExecutionReceipt?.status ?? "unknown";
   const runTime = lastExecutionReceipt ? lastExecutionReceipt.ok === true ? lastExecutionReceipt.finished_utc : null : summary?.last_run_utc;
 
   const resultValue = ready && !hasError ? validatedExecutionPL(summary) : null;
@@ -178,7 +181,7 @@ export default function ExecutionSummaryCard({ summary, isLoading, hasError, las
       </div>
 
       {ready ? <div className="mt-3 space-y-1 text-[11px] text-secondary">
-        <p>Run metrics source: {summary?.source || "unknown"}.{lastExecutionReceipt ? ` ${taskFreshness === "current" ? "Actual" : "Last known"} receipt status: ${lastExecutionReceipt.status || "unknown"}.` : ""}</p>
+        <p>Run metrics source: {summary?.source || "unknown"}.{lastExecutionReceipt ? ` ${taskFreshness === "current" ? "Actual" : "Last known"} receipt status: ${receiptOutcome}.` : ""}</p>
         <p>Lifecycle owner: {scheduleVerified ? schedule.lifecycle_owner || "unknown" : "unknown"}.</p>
         <p>Cancellation policy: {scheduleVerified ? schedule.cancellation_policy?.replace(/_/g, " ") || "unknown" : "unknown"}. Deadline: {scheduleVerified && schedule.cancellation_deadline_status === "verified" ? schedule.cancellation_deadline || "unknown" : "unknown"}.</p>
         {scheduleVerified && schedule.legacy_cancel_after_min_is_deadline === false ? <p>Legacy cancel-after-min {schedule.legacy_cancel_after_min ?? "unknown"} is a compatibility flag, not the cancellation deadline.</p> : null}

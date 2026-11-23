@@ -66,30 +66,9 @@ type TradesMetrics = {
   last_run_utc?: string | null;
 };
 
-type TradeRecord = {
-  trade_id?: string | number;
-  symbol?: string;
-  qty?: number | null;
-  status?: string;
-  entry_time?: string | null;
-  entry_price?: number | null;
-  exit_time?: string | null;
-  exit_price?: number | null;
-  realized_pnl?: number | null;
-  updated_at?: string | null;
-  created_at?: string | null;
-};
-
-type TradesOverviewResponse = {
-  ok?: boolean;
-  metrics?: TradesMetrics;
+type TradesHealthResponse = {
+  kpis?: TradesMetrics;
   performance_status?: string;
-  trades?: TradeRecord[];
-  open_positions?: {
-    count?: number | null;
-    unrealized_pnl?: number | null;
-    status?: string;
-  };
 };
 
 type ExecutionSnapshot = {
@@ -448,7 +427,8 @@ export const normalizeWinRate = (value: number | null) => {
   return Number.isFinite(value) ? value : null; // scripts.metrics and API contract both use percentage points.
 };
 
-const statusFromPipelineRc = (value: number | null | undefined) => {
+const statusFromPipelineRc = (value: number | null | undefined, outcome?: string) => {
+  if (value === 0 && outcome === "SKIPPED_NO_CANDIDATES") return "SKIPPED" as const;
   if (value === 0) {
     return "OK" as const;
   }
@@ -594,8 +574,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
   const healthSnapshot = healthSource.freshness === "current" ? healthSource.payload as ApiHealthResponse | null : null;
   const accountPayloadSource = useSource("/api/account/overview");
   const accountSnapshot = canDisplay(accountPayloadSource.kind) ? (accountPayloadSource.payload as AccountOverviewResponse | null)?.snapshot ?? null : null;
-  const tradesPayloadSource = useSource("/api/trades/overview");
-  const tradesOverview = canDisplay(tradesPayloadSource.kind) ? tradesPayloadSource.payload as TradesOverviewResponse | null : null;
+  const tradesPayloadSource = useSource("/api/health/overview");
+  const tradesHealth = canDisplay(tradesPayloadSource.kind) ? tradesPayloadSource.payload as TradesHealthResponse | null : null;
   const executePayloadSource = useSource("/api/execute/overview");
   const executeSnapshot = canDisplay(executePayloadSource.kind) ? executePayloadSource.payload as ExecutionSnapshot | null : null;
   const monitoringSource = useSource("/api/positions/monitoring");
@@ -676,9 +656,9 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
     pnlPct: null, filledCount: null, totalCount: null,
   }), [hasMonitoringApi, monitoringPositionsFromApi.length, monitoringSnapshot?.summary?.totalOpenPL]);
   const tradesMetrics = useMemo(() => {
-    const kpis = tradesOverview?.performance_status === "VALIDATED_PERFORMANCE" ? tradesOverview.metrics : null;
+    const kpis = tradesHealth?.performance_status === "VALIDATED_PERFORMANCE" ? tradesHealth.kpis : null;
     return {totalTrades: parseNumber(kpis?.total_trades), winRate: normalizeWinRate(parseNumber(kpis?.win_rate)), netPnl: parseNumber(kpis?.net_pnl)};
-  }, [tradesOverview]);
+  }, [tradesHealth]);
 
   const buyingPowerValue = parseNumber(
     accountSnapshot?.buying_power ?? null
@@ -732,7 +712,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         ? (ordersFilled / ordersSubmitted) * 100
         : Number.NaN;
 
-    const executeMarketNote = null; // A historical log cannot describe the current market window.
+    const executeMarketNote = executorState === "SKIPPED" && executeTaskRun?.exit_reason === "NO_STRATEGY_BUY_SIGNALS"
+      ? "No buy signals in the last execution receipt" : null;
 
     return {
       pipeline: {
@@ -744,8 +725,8 @@ export default function DashboardHealth({ activeTab, onTabSelect }: DashboardHea
         },
         subprocess: {
           screener: statusFromPipelineRc(currentPipeline && pipelineTaskRun?.ok === true ? pipelineTaskRun.stage_rcs?.screener ?? null : null),
-          backTester: statusFromPipelineRc(currentPipeline && pipelineTaskRun?.ok === true ? pipelineTaskRun.stage_rcs?.backtest ?? null : null),
-          metrics: statusFromPipelineRc(currentPipeline && pipelineTaskRun?.ok === true ? pipelineTaskRun.stage_rcs?.metrics ?? null : null),
+          backTester: statusFromPipelineRc(currentPipeline && pipelineTaskRun?.ok === true ? pipelineTaskRun.stage_rcs?.backtest ?? null : null, pipelineTaskRun?.stage_statuses?.backtest),
+          metrics: statusFromPipelineRc(currentPipeline && pipelineTaskRun?.ok === true ? pipelineTaskRun.stage_rcs?.metrics ?? null : null, pipelineTaskRun?.stage_statuses?.metrics),
         },
         isLive: pipelineLive,
         status: pipelineState,

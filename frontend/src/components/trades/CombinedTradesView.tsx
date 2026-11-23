@@ -28,6 +28,7 @@ export default function CombinedTradesView({result,onSyncStateChange}:{result:So
     cohort_changed: "Source records changed during the read. A coherent combined observation is unavailable.",
     source_busy: "The stored source is busy; no current combined observation was established.",
     source_timeout: "The stored source read timed out; no current combined observation was established.",
+    read_budget_exceeded: "The stored read exceeded its time or query limit. Totals and rankings are unavailable.",
   } as Record<string,string>)[String(result.payload?.reason)] ?? "The combined source contract could not be verified. This is not an empty trading history." : null;
   const state=loading ? "Loading" : !available ? "Unavailable" : stale ? "Stale read" : partial ? "Partial evidence" : "Stored gross observation";
   const sourceCounts=view?.coverage.bySource as Record<string,{included:number;excluded:number;unknown:number}> | undefined;
@@ -51,7 +52,7 @@ export default function CombinedTradesView({result,onSyncStateChange}:{result:So
           <p>One bounded complete source population supplies all realized candidates, the five summaries and every symbol ranking. Unknown or excluded candidates are disclosed, not assumed to be zero. If population bounds or source validation fail, the combined result is unavailable.</p>
           <p>Weekly covers open US equity trading dates in the current Monday-Friday week; monthly covers the first through last open trading date of the current calendar month, in America/New_York. Both include only exits through this observation (period-to-date), including pre/postmarket on open dates. Daily and yearly remain rolling UTC 1 and 365 days; ALL has no date cutoff. The list retains all realized candidates. Leaderboard controls select those precomputed windows without another data read. Rankings aggregate all eligible symbol contributions before the top 12 limit.</p>
           <p>Legacy gross uses matched execution evidence; strategy gross uses validated stored cumulative order averages. Original recorded ledger P/L is separately labeled in row details. Gross win rate is a closed-contribution statistic, not a portfolio return or qualified strategy performance.</p>
-          <p>Open and unfilled strategy signals remain lifecycle observations. Historical ownership labels do not establish current management authority. Account equity charts and trading permissions are unchanged.</p>
+          <p>Open and unfilled strategy signals describe the stored ledger. Check <a className="underline" href="#positions">Positions</a> for current broker exposure.</p>
           {view ? <p className="break-all">Cohort: {view.cohortId}</p> : null}
         </div>
       </details>

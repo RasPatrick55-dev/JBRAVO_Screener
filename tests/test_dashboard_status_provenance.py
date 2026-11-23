@@ -263,6 +263,33 @@ def run_entry_only(config):
         result = self.ops.execution_schedule(ROOT, scheduled_tasks=[task], now=NOW, source_reader=sources.__getitem__)
         self.assertEqual(result['submission_window_seconds'], 90)
 
+    def test_schedule_reads_versioned_support_with_verified_local_binding(self):
+        task, sources = self.release()
+        base = '/home/test/jbravo-research-tools/TEST_RELEASE/'
+        old_launcher = sources.pop(base + 'executor_boot.py')
+        old_support = sources.pop(base + 'ownership_boot_support.py')
+        sources[base + 'strategy_entry_only_20261121.py'] = sources.pop(base + 'strategy_entry_only.py')
+        support = old_support.replace(b'strategy_entry_only.py', b'strategy_entry_only_20261121.py')
+        sources[base + 'ownership_boot_support_20261121.py'] = support
+        old_pin = dict(bytes=len(old_support), sha256=hashlib.sha256(old_support).hexdigest())
+        pin = dict(bytes=len(support), sha256=hashlib.sha256(support).hexdigest())
+        launcher = old_launcher.replace(repr(old_pin).encode(), repr(pin).encode()).replace(
+            b'def ownership_support():\n', b"def ownership_support():\n"
+            b"    path = Path(__file__).resolve().with_name('ownership_boot_support_20261121.py')\n"
+        ).replace(b'def main():\n    ownership_support().install_entry(runtime)',
+                  b'def main():\n    return generation_fence.run_guarded(directory, lambda: verified_main(mode))\n'
+                  b'def verified_main(mode):\n    support = ownership_support()\n    support.install_entry(runtime)')
+        path = base + 'executor_boot_20261121.py'
+        sources[path] = launcher
+        task['command'] = task['command'].replace(base + 'executor_boot.py', path).replace(
+            hashlib.sha256(old_launcher).hexdigest(), hashlib.sha256(launcher).hexdigest())
+        result = self.ops.execution_schedule(ROOT, scheduled_tasks=[task], now=NOW, source_reader=sources.__getitem__)
+        self.assertEqual(result['status'], 'verified')
+        self.assertEqual((result['entry_start_local'], result['entry_end_local']), ('04:00', '04:01'))
+        sources[base + 'ownership_boot_support_20261121.py'] += b'\n# changed'
+        result = self.ops.execution_schedule(ROOT, scheduled_tasks=[task], now=NOW, source_reader=sources.__getitem__)
+        self.assertEqual(result['status'], 'unknown')
+
     def test_schedule_current_session_and_dst_are_bound_not_guessed(self):
         task, sources = self.release()
         module = types.ModuleType('scripts.strategy_dashboard')

@@ -5,7 +5,7 @@ export interface MarketClockGroupProps {
   market?: MarketClockRecord | null;
 }
 
-export type MarketClockRecord = { status?: string; is_open?: boolean | null; observed_at?: string | null; source?: string };
+export type MarketClockRecord = { status?: string; is_open?: boolean | null; observed_at?: string | null; source?: string; broker_context?: string };
 type MarketPhase = "Market Open" | "Closed" | "Unknown" | "Stale";
 export function marketPhase(market: MarketClockRecord | null | undefined, now = Date.now()): MarketPhase {
   if (!market || market.status === "unavailable") return "Unknown";
@@ -13,6 +13,12 @@ export function marketPhase(market: MarketClockRecord | null | undefined, now = 
   if (market.status === "stale" || (Number.isFinite(observed) && now - observed > 60000)) return "Stale";
   if (market.status !== "ready" || !Number.isFinite(observed) || observed - now > 5000 || typeof market.is_open !== "boolean") return "Unknown";
   return market.is_open ? "Market Open" : "Closed";
+}
+
+export function paperClockReachable(market: MarketClockRecord | null, now: number): boolean {
+  if (market?.source !== "alpaca_exchange_clock" || market.broker_context !== "configured_paper_broker") return false;
+  const phase = marketPhase(market, now);
+  return phase === "Market Open" || phase === "Closed";
 }
 
 const PLACEHOLDER_TIME = "--:--:--";

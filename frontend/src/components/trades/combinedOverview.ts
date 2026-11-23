@@ -202,7 +202,7 @@ export const combinedGrossReadPolicy:SourceReadPolicy = {
   // Identity/policy/overflow/changed-cohort/malformed envelopes always hide it.
   retainUnavailable: p => !!p && Object.keys(p).length === unavailableKeys.size && Object.keys(p).every(key=>unavailableKeys.has(key)) &&
     p.schema_version === COMBINED_SCHEMA && p.ok === false && p.status === "unavailable" &&
-    ["source_busy","source_timeout"].includes(String(p.reason)) && ["broker_account_read","database_cohort_read"].includes(String(p.failure_stage)) &&
+    ["source_busy","source_timeout"].includes(String(p.reason)) && ["broker_account_read","database_cohort_read","shared_observation"].includes(String(p.failure_stage)) &&
     p.source === "postgres" && p.view_scope === "COMBINED_STORED_EXECUTION_GROSS" && p.performance_status === "COMBINED_GROSS_ONLY" &&
     p.strategy_account_binding === "unavailable" && p.legacy_account_binding === "unverified" && p.policy_validation_status === "UNAVAILABLE" &&
     p.population_complete === false && combinedTimestamp(p.observed_at) && p.source_as_of === null &&

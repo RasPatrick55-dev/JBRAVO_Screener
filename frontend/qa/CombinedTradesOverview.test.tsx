@@ -108,7 +108,9 @@ describe("actual combined Trades contract and presentation",()=>{
   });
   it("leaves qualified overview and account equity consumers on their own contracts",()=>{
     const dashboard=readFileSync("src/screens/DashboardHealth.tsx","utf8"),account=readFileSync("src/components/account/AccountTab.tsx","utf8");
-    expect(dashboard).toContain('useSource("/api/trades/overview")');expect(dashboard).toContain('performance_status === "VALIDATED_PERFORMANCE"');
+    expect(dashboard).toContain('useSource("/api/health/overview")');
+    expect(dashboard).not.toContain('useSource("/api/trades/overview")');
+    expect(dashboard).toContain('performance_status === "VALIDATED_PERFORMANCE"');
     expect(dashboard).not.toContain(COMBINED_GROSS_PATH);expect(account).not.toContain(COMBINED_GROSS_PATH);
     const tab=readFileSync("src/components/trades/TradesTab.tsx","utf8");
     expect(tab.match(/useSource\(/g)).toHaveLength(1);expect(tab).not.toContain('"/api/trades/stats');expect(tab).not.toContain('"/api/trades/history');

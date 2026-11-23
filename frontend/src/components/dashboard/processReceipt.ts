@@ -1,6 +1,6 @@
 import type { SourceResult } from "../ui/sourceState";
 
-export type ProcessStatus = "COMPLETED" | "FAILED" | "STALE" | "UNAVAILABLE" | "PENDING";
+export type ProcessStatus = "COMPLETED" | "SKIPPED" | "FAILED" | "STALE" | "UNAVAILABLE" | "PENDING";
 
 export type TaskEvidenceSource = Pick<SourceResult, "kind" | "freshness" | "receivedAt">;
 
@@ -35,6 +35,9 @@ export type ProcessReceipt = {
   duration_seconds?: number | null;
   rc?: number | null;
   stage_rcs?: Record<string, number | null>;
+  stage_statuses?: Record<string, string>;
+  process_health?: string | null;
+  exit_reason?: string | null;
 };
 
 export function isCurrentReceipt(receipt: ProcessReceipt | null | undefined): boolean {
@@ -50,7 +53,8 @@ export function receiptStatus(receipt: ProcessReceipt | null | undefined, now = 
   if (now - end > 86400000) return "STALE";
   if (receipt.status === "FAILED" || (receipt.rc !== null && receipt.rc !== undefined && receipt.rc !== 0)) return "FAILED";
   if (receipt.status === "PENDING") return "PENDING";
-  return receipt.status === "COMPLETED" && receipt.rc === 0 ? "COMPLETED" : "UNAVAILABLE";
+  if (receipt.status !== "COMPLETED" || receipt.rc !== 0) return "UNAVAILABLE";
+  return receipt.source === "executor_receipt" && receipt.process_health === "skipped" ? "SKIPPED" : "COMPLETED";
 }
 
 export function processTone(status: ProcessStatus) {
