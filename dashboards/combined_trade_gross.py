@@ -277,11 +277,72 @@ class TimedStatementTransport:
             self.timeout = sql
             return
         timeout, self.timeout = self.timeout, None
-        return self.cursor.execute(timeout + "; " + sql, params)
+        prefix = timeout + "; "
+        if isinstance(sql, bytes):
+            prefix = prefix.encode("ascii")
+        return self.cursor.execute(prefix + sql, params)
+
+    def mogrify(self, sql, params):
+        return self.cursor.mogrify(sql, params)
 
     def fetchmany(self, size):
         H.need(self.timeout is None, "projection_timeout_sequence_changed")
         return self.cursor.fetchmany(size)
+
+
+class CohortCursor(T.Cursor):
+    def recheck_canonical(self):
+        """Replay the recorded read plans in one statement and compare exact wire rows."""
+        self.check()
+        if not self.canonical_reads:
+            return
+
+        statements = 2 * len(self.canonical_reads)
+        T.need(self.statements + statements <= T.MAX_SQL, "EXECUTION_DEADLINE_OR_SQL_CAP")
+        queries, rows, size = [], 0, 0
+        for index, (sql, params, expected) in enumerate(self.canonical_reads):
+            expected_size = sum(len(body.encode("utf-8")) + T.ENVELOPE_BYTES for body in expected)
+            rows += len(expected)
+            size += expected_size
+            T.need(self.rows + rows <= T.MAX_ROWS and self.bytes + size <= T.MAX_BYTES,
+                   "EXECUTION_SHARED_BUDGET")
+            # The original envelope sorts its rows and emits a NULL body for
+            # overflow. The ARRAY subquery has no join or additional sort.
+            # Capping each result at its recorded size also bounds the whole
+            # batch before it crosses the wire, even if the data has grown.
+            wire = T.envelope(sql, self.plans[sql], len(expected), expected_size)
+            # Keep each encoded row separate on the wire. WITH ORDINALITY
+            # carries the envelope's order through the UNION ALL.
+            branch = (
+                f"SELECT {index}, replay.ordinal, replay.body FROM "
+                f"pg_catalog.unnest(ARRAY(SELECT body FROM ({wire}) AS wire)) "
+                "WITH ORDINALITY AS replay(body, ordinal)"
+            )
+            # Each original plan keeps its own positional or named parameters.
+            queries.append(self.raw.mogrify(branch, params))
+
+        query = b"/* combined-canonical-replay */ " + b" UNION ALL ".join(queries) + b" ORDER BY 1,2"
+        remaining = self.deadline - self.clock()
+        T.need(remaining > 0, "EXECUTION_DEADLINE_OR_SQL_CAP")
+        millis = max(1, min(3000, int(remaining * 1000)))
+        self.raw.execute(f"SET LOCAL statement_timeout = '{millis}ms'")
+        self.raw.execute(query)
+        self.statements += statements
+        expected_rows = (
+            (index, ordinal, body)
+            for index, (_, _, expected) in enumerate(self.canonical_reads)
+            for ordinal, body in enumerate(expected, 1)
+        )
+        for offset in range(0, rows, 16):
+            self.check()
+            count = min(16, rows - offset)
+            found = self.raw.fetchmany(count)
+            expected = [next(expected_rows) for _ in range(count)]
+            T.need(found == expected, "EXECUTION_CANONICAL_INPUT_DRIFT")
+        T.need(not self.raw.fetchmany(1), "EXECUTION_CANONICAL_INPUT_DRIFT")
+        self.rows += rows
+        self.bytes += size
+        self.check()
 
 
 def read_cohort(connection_factory, identity, account):
@@ -302,8 +363,8 @@ def read_cohort(connection_factory, identity, account):
         )
         with connection.cursor() as raw:
             raw.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED READ ONLY")
-            cursor = T.Cursor(TimedStatementTransport(raw), started + 8,
-                              extra_plans={**E.READ_PLANS, **PLANS})
+            cursor = CohortCursor(TimedStatementTransport(raw), started + 8,
+                                  extra_plans={**E.READ_PLANS, **PLANS})
             # Exact native optional optimization, never a policy/row shortcut.
             reuse = getattr(cursor, "enable_readonly_guard_reuse", None)
             if callable(reuse):

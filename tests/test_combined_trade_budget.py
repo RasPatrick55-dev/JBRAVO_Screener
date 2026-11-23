@@ -14,13 +14,15 @@ from test_owned_exit_full_consumer import Native
 pytestmark = pytest.mark.alpaca_optional
 
 
-class FullNative(Native):
+class FullNative(F.ReplayBindings, Native):
     def __init__(self):
         super().__init__()
         self.active = False
         self.autocommit = False
         self.connection = self
         self.rollbacks = self.closes = self.batch_reads = 0
+        self.round_trips = []
+        self.advance_clock = lambda: None
         self.signals, self.strategy_orders = F.strategy()
 
     def cursor(self):
@@ -43,6 +45,17 @@ class FullNative(Native):
         self.closes += 1
 
     def execute(self, sql, params=None):
+        if isinstance(sql, bytes):
+            sql = sql.decode("utf-8")
+        self.round_trips.append((sql, params))
+        self.advance_clock()
+        timeout, separator, statement = sql.partition("; ")
+        if separator and timeout.startswith("SET LOCAL statement_timeout = "):
+            super().execute(timeout)
+            sql = statement
+        if sql.startswith("/* combined-canonical-replay */"):
+            self.pending = F.replay_wire(sql, self.replay_bindings, super().execute, super().fetchmany)
+            return
         if sql.startswith("SET TRANSACTION"):
             self.active = True
         return super().execute(sql, params)
@@ -112,6 +125,45 @@ def test_real_policy_two_owned_exit_groups_and_legacy_allocation_fit_budget():
     assert (C.T.MAX_SQL, C.T.MAX_ROWS, C.T.MAX_BYTES) == (128, 4096, 16 * 1024 * 1024)
 
 
+def test_production_shaped_replay_survives_round_trip_latency(monkeypatch):
+    elapsed = 0
+
+    def clock():
+        return elapsed
+
+    def round_trip():
+        nonlocal elapsed
+        elapsed += 0.14
+
+    original_init = C.T.Cursor.__init__
+
+    def init(cursor, *args, **kwargs):
+        original_init(cursor, *args, clock=clock, **kwargs)
+
+    monkeypatch.setattr(C, "time", SimpleNamespace(monotonic=clock))
+    monkeypatch.setattr(C.T.Cursor, "__init__", init)
+    monkeypatch.setattr(C.E, "READ_PLANS", {**C.E.READ_PLANS, **C.PLANS})
+    optimized = FullNative()
+    optimized.advance_clock = round_trip
+    actual = C.read_cohort(lambda: optimized, optimized.identity, F.S.ACCOUNT)
+    assert elapsed < 8
+    assert sum("combined-canonical-replay" in sql for sql, _ in optimized.round_trips) == 1
+
+    monkeypatch.setattr(C.CohortCursor, "recheck_canonical", C.T.Cursor.recheck_canonical)
+    elapsed = 0
+    baseline = FullNative()
+    expected = C.read_cohort(lambda: baseline, baseline.identity, F.S.ACCOUNT)
+    assert actual == expected
+    assert len(baseline.round_trips) - len(optimized.round_trips) == 19
+
+    elapsed = 0
+    slow = FullNative()
+    slow.advance_clock = round_trip
+    with pytest.raises(ValueError, match="EXECUTION_DEADLINE_OR_SQL_CAP"):
+        C.read_cohort(lambda: slow, slow.identity, F.S.ACCOUNT)
+    assert slow.batch_reads == 2 and slow.rollbacks == slow.closes == 1
+
+
 def batch(rows):
     return C.strategy_cohort(
         SimpleNamespace(execute=lambda *args: None, fetchall=lambda: rows), F.S.ACCOUNT
@@ -174,7 +226,7 @@ def test_native_semantics_preserved():
         and "second = inputs()" in source
         and "cursor.recheck_canonical()" in source
     )
-    assert "T.Cursor(raw, started + 8" in source
+    assert "started + 8" in source
     assert C.STRATEGY_COHORT_SQL.count("%s") == 1
     assert all(
         q in C.STRATEGY_COHORT_SQL
