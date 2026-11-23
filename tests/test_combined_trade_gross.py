@@ -266,6 +266,15 @@ def test_strategy_decimal_gross_is_not_roundtripped_through_public_float():
 
 
 class CombinedCursor(Cursor):
+    def execute(self, sql, params=None):
+        self.conn.round_trips.append((sql, params))
+        self.conn.advance_clock()
+        timeout, separator, statement = sql.partition("; ")
+        if separator and timeout.startswith("SET LOCAL statement_timeout = "):
+            super().execute(timeout)
+            return super().execute(statement, params)
+        return super().execute(sql, params)
+
     def native(self, sql, params):
         if sql in (C.GUARD_PAIR_SQL, C.EXECUTION_PAIR_SQL):
             specs = (
@@ -331,6 +340,8 @@ def connection():
     signal, orders = strategy()
     conn.signals, conn.strategy_orders, conn.claims = [signal], orders, deepcopy(conn.owners)
     conn.cursor = lambda: CombinedCursor(conn)
+    conn.round_trips = []
+    conn.advance_clock = lambda: None
     conn.commit = Mock()
     return conn
 
@@ -355,6 +366,57 @@ def test_real_wire_reader_through_complete_projection_and_cleanup(monkeypatch):
         not any(word in sql.upper() for word in ["INSERT ", "UPDATE ", "DELETE ", "CREATE "])
         for sql, _ in conn.calls
     )
+
+
+def test_timeout_and_guarded_query_share_one_driver_call_without_changing_limits(monkeypatch):
+    conn = connection()
+    monkeypatch.setattr(C.E, "READ_PLANS", {**C.E.READ_PLANS, **C.PLANS})
+    C.read_cohort(lambda: conn, IDENTITY, S.ACCOUNT)
+
+    assert conn.round_trips[0] == ("SET TRANSACTION ISOLATION LEVEL READ COMMITTED READ ONLY", None)
+    pairs = conn.round_trips[1:]
+    assert len(pairs) > 10
+    assert len(conn.calls) == 1 + 2 * len(pairs)
+    assert len(conn.calls) <= C.T.MAX_SQL
+    assert all(sql.startswith("SET LOCAL statement_timeout = '") and "; " in sql
+               for sql, _ in pairs)
+    assert conn.source_reads == 2 and conn.policy_reads == 4
+
+
+def test_combined_report_survives_round_trip_latency_with_the_same_deadline(monkeypatch):
+    class Clock:
+        seconds = 0.0
+
+        def monotonic(self):
+            return self.seconds
+
+        def advance(self):
+            self.seconds += 0.140
+
+    clock = Clock()
+    monkeypatch.setattr(C, "time", SimpleNamespace(monotonic=clock.monotonic))
+    monkeypatch.setattr(C.E, "READ_PLANS", {**C.E.READ_PLANS, **C.PLANS})
+    original_init = C.T.Cursor.__init__
+
+    def init(cursor, *args, **kwargs):
+        return original_init(cursor, *args, clock=clock.monotonic, **kwargs)
+
+    monkeypatch.setattr(C.T.Cursor, "__init__", init)
+    conn = connection()
+    conn.advance_clock = clock.advance
+    C.read_cohort(lambda: conn, IDENTITY, S.ACCOUNT)
+    assert clock.seconds < 8
+    assert conn.source_reads == 2 and conn.policy_reads == 4
+
+    # Compare the previous transport under exactly the same query plan and latency.
+    clock.seconds = 0
+    monkeypatch.setattr(C, "TimedStatementTransport", lambda raw: raw)
+    old = connection()
+    old.advance_clock = clock.advance
+    with pytest.raises(ValueError, match="EXECUTION_DEADLINE_OR_SQL_CAP"):
+        C.read_cohort(lambda: old, IDENTITY, S.ACCOUNT)
+    old.rollback.assert_called_once()
+    old.close.assert_called_once()
 
 
 def test_read_cohort_change_is_unavailable_and_not_retainable(monkeypatch):

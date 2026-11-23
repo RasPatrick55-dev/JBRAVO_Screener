@@ -253,6 +253,37 @@ class LegacyInputCapture:
         return getattr(self.cursor, name)
 
 
+class TimedStatementTransport:
+    """Send the guarded timeout and its query in one psycopg2 round trip.
+
+    The shared cursor still computes each timeout and charges both SQL
+    statements. PostgreSQL executes them in order and psycopg2 exposes the
+    last statement's result. No evidence or database state is cached here.
+    """
+
+    def __init__(self, cursor):
+        self.cursor = cursor
+        self.timeout = None
+
+    @property
+    def connection(self):
+        return self.cursor.connection
+
+    def execute(self, sql, params=None):
+        if self.timeout is None:
+            timeout = re.fullmatch(r"SET LOCAL statement_timeout = '([1-9][0-9]{0,3})ms'", sql)
+            H.need(params is None and timeout is not None and int(timeout[1]) <= 3000,
+                   "projection_timeout_sequence_changed")
+            self.timeout = sql
+            return
+        timeout, self.timeout = self.timeout, None
+        return self.cursor.execute(timeout + "; " + sql, params)
+
+    def fetchmany(self, size):
+        H.need(self.timeout is None, "projection_timeout_sequence_changed")
+        return self.cursor.fetchmany(size)
+
+
 def read_cohort(connection_factory, identity, account):
     """Same transaction and finite transport budget as native execution gross.
 
@@ -271,7 +302,8 @@ def read_cohort(connection_factory, identity, account):
         )
         with connection.cursor() as raw:
             raw.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED READ ONLY")
-            cursor = T.Cursor(raw, started + 8, extra_plans={**E.READ_PLANS, **PLANS})
+            cursor = T.Cursor(TimedStatementTransport(raw), started + 8,
+                              extra_plans={**E.READ_PLANS, **PLANS})
             # Exact native optional optimization, never a policy/row shortcut.
             reuse = getattr(cursor, "enable_readonly_guard_reuse", None)
             if callable(reuse):
