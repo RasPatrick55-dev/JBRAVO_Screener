@@ -6,6 +6,7 @@ from datetime import timedelta
 from decimal import Decimal
 import json
 from pathlib import Path
+import re
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -265,14 +266,53 @@ def test_strategy_decimal_gross_is_not_roundtripped_through_public_float():
     assert Decimal(result["stats"][-1]["totalPL"]) == expected + 4
 
 
-class CombinedCursor(Cursor):
+def replay_wire(sql, bindings, execute, fetchmany):
+    """Model replay using the same independent envelope fixture as a single read."""
+    fragments = re.split(
+        r"(?:/\* combined-canonical-replay \*/ | UNION ALL )"
+        r"SELECT (\d+), replay\.ordinal, replay\.body FROM "
+        r"pg_catalog\.unnest\(ARRAY\(SELECT body FROM \(",
+        sql,
+    )
+    assert fragments[0] == "" and len(fragments) > 1
+    rows = []
+    for ordinal, segment in zip(fragments[1::2], fragments[2::2]):
+        wrapped, closing, _ = segment.partition(") AS wire)) WITH ORDINALITY")
+        assert closing
+        execute(wrapped, bindings.pop(int(ordinal)))
+        position = 0
+        while batch := fetchmany(16):
+            for _, body, _, _ in batch:
+                position += 1
+                rows.append((int(ordinal), position, body))
+    assert not bindings
+    return rows
+
+
+class ReplayBindings:
+    """Keep the fake cursor's bindings intact through byte SQL composition."""
+
+    def mogrify(self, sql, params):
+        if not hasattr(self, "replay_bindings"):
+            self.replay_bindings = {}
+        _, ordinal, _ = sql.split(" ", 2)
+        self.replay_bindings[int(ordinal.rstrip(","))] = params
+        return sql.encode("utf-8")
+
+
+class CombinedCursor(ReplayBindings, Cursor):
     def execute(self, sql, params=None):
+        if isinstance(sql, bytes):
+            sql = sql.decode("utf-8")
         self.conn.round_trips.append((sql, params))
         self.conn.advance_clock()
         timeout, separator, statement = sql.partition("; ")
         if separator and timeout.startswith("SET LOCAL statement_timeout = "):
             super().execute(timeout)
-            return super().execute(statement, params)
+            sql = statement
+        if sql.startswith("/* combined-canonical-replay */"):
+            self.rows = replay_wire(sql, self.replay_bindings, super().execute, super().fetchmany)
+            return
         return super().execute(sql, params)
 
     def native(self, sql, params):
@@ -376,11 +416,22 @@ def test_timeout_and_guarded_query_share_one_driver_call_without_changing_limits
     assert conn.round_trips[0] == ("SET TRANSACTION ISOLATION LEVEL READ COMMITTED READ ONLY", None)
     pairs = conn.round_trips[1:]
     assert len(pairs) > 10
-    assert len(conn.calls) == 1 + 2 * len(pairs)
+    assert len(conn.calls) >= 1 + 2 * len(pairs)
     assert len(conn.calls) <= C.T.MAX_SQL
     assert all(sql.startswith("SET LOCAL statement_timeout = '") and "; " in sql
                for sql, _ in pairs)
     assert conn.source_reads == 2 and conn.policy_reads == 4
+
+
+def test_batched_replay_rejects_changed_row_version_after_both_cohort_reads(monkeypatch):
+    conn = connection()
+    conn.canonical_version_drift = True
+    monkeypatch.setattr(C.E, "READ_PLANS", {**C.E.READ_PLANS, **C.PLANS})
+    with pytest.raises(ValueError, match="EXECUTION_CANONICAL_INPUT_DRIFT"):
+        C.read_cohort(lambda: conn, IDENTITY, S.ACCOUNT)
+    assert conn.source_reads == 2 and conn.policy_reads == 4
+    conn.rollback.assert_called_once()
+    conn.close.assert_called_once()
 
 
 def test_combined_report_survives_round_trip_latency_with_the_same_deadline(monkeypatch):
@@ -411,6 +462,7 @@ def test_combined_report_survives_round_trip_latency_with_the_same_deadline(monk
     # Compare the previous transport under exactly the same query plan and latency.
     clock.seconds = 0
     monkeypatch.setattr(C, "TimedStatementTransport", lambda raw: raw)
+    monkeypatch.setattr(C.CohortCursor, "recheck_canonical", C.T.Cursor.recheck_canonical)
     old = connection()
     old.advance_clock = clock.advance
     with pytest.raises(ValueError, match="EXECUTION_DEADLINE_OR_SQL_CAP"):
