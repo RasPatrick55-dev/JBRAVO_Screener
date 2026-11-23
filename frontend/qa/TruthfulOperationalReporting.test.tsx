@@ -124,12 +124,13 @@ describe("resource snapshot provenance", () => {
     expect(html).toContain("Unknown"); expect(html).not.toMatch(/(?:10|35)%/);
     expect(html).toContain("Captured: unknown");
   });
-  it("retains over-quota text while capping only the bar and labels a stale snapshot", () => {
+  it("labels historical usage without asserting a current quota breach", () => {
     const html = renderToStaticMarkup(<PythonAnywhereResources resources={resourceRows([
       { label: "File Storage", value: 143.2, used: 1432, quota: 1000, unit: "bytes", source: "saved_snapshot", captured_at: "2026-02-01T00:00:00Z", status: "stale", stale: true },
     ])} />);
     expect(html).toContain("143.2%"); expect(html).toContain("width:100%");
-    expect(html).toContain("STALE"); expect(html).toContain("Over quota in this snapshot");
+    expect(html).toContain("STALE · Current usage and quota unverified");
+    expect(html).not.toContain("Over quota");
     expect(html).toContain("1,432 / 1,000 bytes"); expect(html).toContain("2026-02-01T00:00:00Z");
   });
   it("does not call a timestamp-less historic value fresh", () => {

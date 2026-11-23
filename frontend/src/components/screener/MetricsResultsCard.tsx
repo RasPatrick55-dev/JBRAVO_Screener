@@ -13,7 +13,11 @@ const filterOptions: Array<{ key: MetricsFilter; label: string }> = [
 const parseMetrics = (value: unknown) => {
   const payload = parseScreenerPayload<MetricsResponse>(value, true);
   const rows = metricRows(payload);
-  return { rows, strategy: strategyLabel(payload.strategy_id!, payload.strategy_version!) };
+  return {
+    rows,
+    strategy: strategyLabel(payload.strategy_id!, payload.strategy_version!),
+    skipped: payload.stage_status === "SKIPPED_NO_CANDIDATES",
+  };
 };
 
 type MetricsResultsCardProps = {
@@ -63,6 +67,7 @@ export default function MetricsResultsCard({ onSyncStateChange }: MetricsResults
 
       <p className="mt-2 text-xs text-secondary">{strategy} · Completed signals · USD</p>
       <p className="mt-1 text-xs text-secondary">Costs included. Drawdown is in dollars. Current signals have no future result yet.</p>
+      {source.data?.skipped ? <p className="mt-1 text-xs text-secondary">Metrics skipped because the Screener produced no candidates.</p> : null}
       {errorMessage ? (
         <div
           role="alert"

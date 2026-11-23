@@ -16,6 +16,7 @@ import math
 from pathlib import Path
 import re
 import shlex
+import sys
 from types import SimpleNamespace
 from typing import Any, Mapping, Optional
 from unittest.mock import Mock
@@ -225,6 +226,89 @@ def test_db_enrichment_cannot_overwrite_broker_status_or_chain():
     row = ns["_execute_enrich_alpaca_orders_with_db"]([broker], [stale_db])[0]
     for key in ("status", "raw_status", "replaces", "replaced_by"):
         assert row[key] == broker[key]
+
+
+def test_execute_broker_empty_open_does_not_reintroduce_a_closed_order():
+    order = {"order_id": "fictional-order", "status": "FILLED", "raw_status": "filled", "_ts": NOW}
+    fetch_broker = Mock(side_effect=lambda *, status_scope, **_: (
+        [] if status_scope == "open" else [order], "alpaca:/v2/orders"
+    ))
+    fetch_history = Mock(return_value=([dict(order, status="PENDING", raw_status="new")], "postgres:order_events"))
+    ns = helpers(
+        *STATUS_HELPERS, "_execute_orders_payload", "_execute_filter_order_rows",
+        "_execute_query_matches", "_execute_lsx_matches", "_execute_enrich_alpaca_orders_with_db",
+        _execute_orders_from_alpaca=fetch_broker, _execute_orders_from_db=fetch_history,
+    )
+    report = ns["_execute_orders_payload"]
+    assertions = {"limit": 200, "query": "", "lsx": "all"}
+    opened = report(status_scope="open", **assertions)
+    assert opened["ok"] and opened["status"] == "empty" and opened["rows"] == []
+    assert opened["source"] == "alpaca"
+    fetch_history.assert_not_called()
+    closed = report(status_scope="closed", **assertions)
+    assert closed["status"] == "ready"
+    assert [(row["order_id"], row["status"]) for row in closed["rows"]] == [("fictional-order", "FILLED")]
+
+
+@pytest.mark.parametrize("scope,state", [("open", "unavailable"), ("closed", "unavailable"), ("all", "partial")])
+def test_execute_keeps_local_history_separate_from_current_broker_status(scope, state):
+    history = [{"order_id": "fictional-history", "status": "PENDING"}]
+    fetch_history = Mock(return_value=(history, "postgres:order_events"))
+    ns = helpers(
+        "_execute_orders_payload",
+        _execute_orders_from_alpaca=Mock(return_value=([], "alpaca:timeout")),
+        _execute_orders_from_db=fetch_history,
+        _execute_filter_order_rows=lambda rows, **_: rows,
+    )
+    result = ns["_execute_orders_payload"](status_scope=scope, limit=50, query="", lsx="all")
+    assert result["status"] == state
+    if scope == "all":
+        assert result["rows"] == history and result["source"] == "postgres-fallback"
+    else:
+        assert result["rows"] == [] and result["ok"] is False
+        fetch_history.assert_not_called()
+
+
+@pytest.mark.parametrize("payload", [None, {"orders": None}, [None], [{"status": "new"}]])
+def test_execute_rejects_malformed_broker_results_without_declaring_empty(payload):
+    broker_read = Mock(return_value=(payload, "ok"))
+    ns = helpers("_execute_orders_from_alpaca", "_order_identity", _alpaca_rest_get_json=broker_read)
+    assert ns["_execute_orders_from_alpaca"](fetch_limit=1600, status_scope="open") == ([], "alpaca:invalid_order_response")
+    assert broker_read.call_args.kwargs["params"]["limit"] == 500
+
+
+@pytest.mark.parametrize("broker_verified", [True, False])
+def test_execute_audit_compares_only_one_broker_order_snapshot(broker_verified):
+    orders = [
+        {"order_id": "fictional-closed", "status": "FILLED", "ts_utc": NOW.isoformat()},
+        {"order_id": "fictional-open", "status": "PENDING", "ts_utc": NOW.isoformat()},
+    ]
+    observed = Mock(return_value={"ok": True, "rows": orders,
+                                  "status": "ready" if broker_verified else "partial",
+                                  "source": "alpaca" if broker_verified else "postgres-fallback"})
+    ns = helpers(
+        *STATUS_HELPERS, "_execute_audit_payload", "_execute_audit_timestamp_metrics", "_execute_audit_null_rate",
+        _execute_orders_payload=observed, _execute_summary_payload=lambda: {},
+        _execute_trailing_stops_payload=lambda **_: {}, _execute_logs_payload=lambda **_: {},
+        _execute_iso_utc=lambda dt: dt.isoformat(),
+    )
+    result = ns["_execute_audit_payload"](limit=200)
+    observed.assert_called_once_with(status_scope="all", limit=200, query="", lsx="all")
+    scopes = result["cross_checks"]["orders_subset"]
+    assert result["ok"] is broker_verified
+    assert scopes["open_closed_intersection_count"] == (0 if broker_verified else None)
+    assert scopes["basis"] == ("single_broker_sample" if broker_verified else "unavailable")
+
+
+@pytest.mark.parametrize("selected,expected",
+    [([], "SKIPPED_NO_CANDIDATES"), ([{"rank": 1}], None), (None, None)])
+def test_screener_skips_are_based_on_the_unfiltered_verified_selection(monkeypatch, selected, expected):
+    def api_payload(kind, args, *, base_dir):
+        return {"ok": True, "completion_status": "verified", "rows": [],
+                "setup_selection": {"selected_setups": selected}}
+    monkeypatch.setitem(sys.modules, "scripts.strategy_dashboard", SimpleNamespace(api_payload=api_payload))
+    ns = helpers("_strategy_screener_report", BASE_DIR=Path("fixture"))
+    assert ns["_strategy_screener_report"]("backtest", {"q": "no-match"}).get("stage_status") == expected
 
 
 def test_merge_does_not_reintroduce_stale_replacement_links():

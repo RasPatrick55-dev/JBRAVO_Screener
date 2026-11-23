@@ -88,7 +88,9 @@ export default function PythonAnywhereResources({
             >
               <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-[0.08em] text-sky-100/70">
                 <span>{resource.label}</span>
-                <span className="text-sky-100">{value === null ? "Unknown" : `${formatAmount(value)}%`}</span>
+                <span className="text-sky-100">
+                  {value === null ? "Unknown" : `${status === "STALE" ? "Last observed " : ""}${formatAmount(value)}%`}
+                </span>
               </div>
               <div className="mt-2 h-2 w-full rounded-full bg-progress-rail">
                 <div
@@ -97,8 +99,9 @@ export default function PythonAnywhereResources({
                 />
               </div>
               <div className="mt-2 space-y-1 text-[10px] text-sky-100/80">
-                <p>{status}{value !== null && value > 100 ? " / Over quota in this snapshot" : ""}</p>
-                <p>Used / quota: {formatAmount(resource.used)} / {formatAmount(resource.quota ?? resource.limit)} {resource.unit ?? ""}</p>
+                <p>{status === "STALE" ? "STALE · Current usage and quota unverified" : status}
+                  {status === "FRESH" && value !== null && value > 100 ? " · Over quota" : ""}</p>
+                <p>{status === "STALE" ? "Last observed used / quota" : "Used / quota"}: {formatAmount(resource.used)} / {formatAmount(resource.quota ?? resource.limit)} {resource.unit ?? ""}</p>
                 <p className="break-all">Source: {resource.source || "unknown"}</p>
                 <p>Captured: {resource.captured_at || "unknown"}</p>
               </div>

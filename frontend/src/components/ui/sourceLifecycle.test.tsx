@@ -143,6 +143,15 @@ describe("review financial consumers and async page wiring", () => {
     expect(html).not.toContain("jbravo-status-success");expect(html).not.toMatch(/>COMPLETE</);
     expect(html).toContain(kind==="ready"?"UNVERIFIED":kind.toUpperCase());
   });
+  it("shows a verified Screener skip as skipped on the Backtest card", async () => {
+    const { BacktestCompletionBadge: Badge } = await import("../screener/BacktestResultsCard");
+    const html = renderToStaticMarkup(<Badge kind="empty" payload={{
+      ok: true, status: "EMPTY", completion_status: "verified", computation_complete: true,
+      stage_status: "SKIPPED_NO_CANDIDATES",
+    }}/>);
+    expect(html).toContain("SKIPPED");
+    expect(html).not.toContain("COMPUTE COMPLETE");
+  });
   it("open-order failure and empty last-known transitions cannot assert current zero",async()=>{
     vi.useFakeTimers();const {default:Orders}=await import("../account/OpenOrdersCard");
     const events:SourceResult[]=[];

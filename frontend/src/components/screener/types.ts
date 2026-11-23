@@ -87,6 +87,7 @@ export interface MetricsRow {
 export interface MetricsResponse {
   ok?: boolean;
   status?: string;
+  stage_status?: string;
   run_ts_utc?: string | null;
   source?: string | null;
   strategy_id?: string;

@@ -6132,6 +6132,7 @@ def api_account_order_logs():
             "ok": source_detail != "none",
             "status": ("ready" if rows else "empty") if source_detail == "postgres:order_events" else ("partial" if rows else "unavailable"),
             "rows": rows,
+            "source": source_detail.split(":", 1)[0],
             "source_detail": source_detail,
         }
     )
@@ -7313,7 +7314,7 @@ def _execute_orders_from_alpaca(
         params={
             "status": query_status,
             "direction": "desc",
-            "limit": int(fetch_limit),
+            "limit": min(int(fetch_limit), 500),
             "nested": True,
         },
         timeout=20,
@@ -7326,12 +7327,15 @@ def _execute_orders_from_alpaca(
     elif isinstance(payload, Mapping) and isinstance(payload.get("orders"), list):
         raw_orders = payload.get("orders", [])
     else:
-        raw_orders = []
+        return [], "alpaca:invalid_order_response"
 
     rows: list[dict[str, Any]] = []
     for raw in raw_orders:
         if not isinstance(raw, Mapping):
-            continue
+            return [], "alpaca:invalid_order_response"
+        identity = _order_identity(raw)
+        if not identity["order_id"] or not identity["raw_status"]:
+            return [], "alpaca:invalid_order_response"
         ts_raw = (
             raw.get("updated_at")
             or raw.get("filled_at")
@@ -7360,7 +7364,7 @@ def _execute_orders_from_alpaca(
             "limit_stop_trail": _execute_limit_stop_trail(raw),
             "status": status_bucket,
             "filled_avg": _to_float(raw.get("filled_avg_price")),
-            **_order_identity(raw),
+            **identity,
             "notes": notes,
             "_ts": ts_dt,
             "_event_type": str(raw.get("type") or ""),
@@ -8206,22 +8210,22 @@ def _execute_orders_payload(
 ) -> dict[str, Any]:
     fetch_limit = max(int(limit) * 8, 320)
 
-    db_rows, db_detail = _execute_orders_from_db(fetch_limit)
     alpaca_rows, alpaca_detail = _execute_orders_from_alpaca(
         fetch_limit=fetch_limit, status_scope=status_scope
     )
-
-    if alpaca_rows:
-        merged_rows = _execute_enrich_alpaca_orders_with_db(alpaca_rows, db_rows)
-        source = "alpaca+postgres_enriched"
+    broker_observed = alpaca_detail == "alpaca:/v2/orders"
+    source, source_detail = "alpaca", alpaca_detail
+    merged_rows = alpaca_rows
+    if broker_observed and alpaca_rows:
+        db_rows, db_detail = _execute_orders_from_db(fetch_limit)
+        if db_rows:
+            merged_rows = _execute_enrich_alpaca_orders_with_db(alpaca_rows, db_rows)
+            source = "alpaca+postgres_enriched"
         source_detail = f"{alpaca_detail};{db_detail}"
-    elif db_rows:
-        merged_rows = db_rows
-        source = "postgres-fallback"
-        source_detail = f"{alpaca_detail};{db_detail}"
-    else:
-        merged_rows = []
-        source = "none"
+    elif not broker_observed and status_scope == "all":
+        merged_rows, db_detail = _execute_orders_from_db(fetch_limit)
+        if merged_rows:
+            source = "postgres-fallback"
         source_detail = f"{alpaca_detail};{db_detail}"
 
     rows = _execute_filter_order_rows(
@@ -8232,8 +8236,10 @@ def _execute_orders_payload(
         limit=limit,
     )
 
+    status = ("ready" if rows else "empty") if broker_observed else ("partial" if rows else "unavailable")
     return {
-        "ok": bool(rows),
+        "ok": status != "unavailable",
+        "status": status,
         "rows": rows,
         "source": source,
         "source_detail": source_detail,
@@ -8414,12 +8420,6 @@ def _execute_audit_payload(*, limit: int) -> dict[str, Any]:
     orders_all_payload = _execute_orders_payload(
         status_scope="all", limit=bounded_limit, query="", lsx="all"
     )
-    orders_open_payload = _execute_orders_payload(
-        status_scope="open", limit=bounded_limit, query="", lsx="all"
-    )
-    orders_closed_payload = _execute_orders_payload(
-        status_scope="closed", limit=bounded_limit, query="", lsx="all"
-    )
     trailing_all_payload = _execute_trailing_stops_payload(
         status_scope="all", limit=bounded_limit, query="", lsx="all"
     )
@@ -8455,8 +8455,11 @@ def _execute_audit_payload(*, limit: int) -> dict[str, Any]:
     )
 
     orders_all = list(orders_all_payload.get("rows") or [])
-    orders_open = list(orders_open_payload.get("rows") or [])
-    orders_closed = list(orders_closed_payload.get("rows") or [])
+    # Classify a single broker observation. Independently fetched scopes can
+    # disagree when an order transitions, and stored history has no live scope.
+    scope_verified = orders_all_payload.get("status") in {"ready", "empty"}
+    orders_open = [row for row in orders_all if scope_verified and _execute_status_scope_matches(row.get("status"), "open")]
+    orders_closed = [row for row in orders_all if scope_verified and _execute_status_scope_matches(row.get("status"), "closed")]
     trailing_all = list(trailing_all_payload.get("rows") or [])
     trailing_open = list(trailing_open_payload.get("rows") or [])
     trailing_closed = list(trailing_closed_payload.get("rows") or [])
@@ -8581,14 +8584,8 @@ def _execute_audit_payload(*, limit: int) -> dict[str, Any]:
             "ok": bool(orders_all_payload.get("ok")),
             "source": orders_all_payload.get("source"),
         },
-        "orders_open": {
-            "ok": bool(orders_open_payload.get("ok")),
-            "source": orders_open_payload.get("source"),
-        },
-        "orders_closed": {
-            "ok": bool(orders_closed_payload.get("ok")),
-            "source": orders_closed_payload.get("source"),
-        },
+        "orders_open": {"ok": scope_verified, "source": orders_all_payload.get("source") if scope_verified else None},
+        "orders_closed": {"ok": scope_verified, "source": orders_all_payload.get("source") if scope_verified else None},
         "trailing_all": {
             "ok": bool(trailing_all_payload.get("ok")),
             "source": trailing_all_payload.get("source"),
@@ -8611,7 +8608,7 @@ def _execute_audit_payload(*, limit: int) -> dict[str, Any]:
         "warning": sum(1 for item in findings if str(item.get("severity") or "") == "warning"),
         "info": sum(1 for item in findings if str(item.get("severity") or "") == "info"),
     }
-    overall_ok = severity_counts["high"] == 0
+    overall_ok = scope_verified and severity_counts["high"] == 0
 
     return {
         "ok": bool(overall_ok),
@@ -8656,14 +8653,15 @@ def _execute_audit_payload(*, limit: int) -> dict[str, Any]:
         "quality": quality,
         "cross_checks": {
             "orders_subset": {
+                "basis": "single_broker_sample" if scope_verified else "unavailable",
                 "all_scope_limited": bool(all_scope_limited),
                 "open_subset_of_all": (
-                    None if all_scope_limited else bool(orders_open_ids.issubset(orders_all_ids))
+                    None if not scope_verified else bool(orders_open_ids.issubset(orders_all_ids))
                 ),
                 "closed_subset_of_all": (
-                    None if all_scope_limited else bool(orders_closed_ids.issubset(orders_all_ids))
+                    None if not scope_verified else bool(orders_closed_ids.issubset(orders_all_ids))
                 ),
-                "open_closed_intersection_count": overlap_count,
+                "open_closed_intersection_count": overlap_count if scope_verified else None,
                 "open_not_in_all": open_not_in_all,
                 "closed_not_in_all": closed_not_in_all,
             },
@@ -10331,12 +10329,21 @@ def api_strategy_scorecard():
     return _json_no_store(api_payload(base_dir=BASE_DIR))
 
 
+def _strategy_screener_report(kind, args):
+    from scripts.strategy_dashboard import api_payload
+    payload = api_payload(kind, args, base_dir=BASE_DIR)
+    selection = payload.get("setup_selection")
+    if (payload.get("ok") is True and payload.get("completion_status") == "verified"
+            and isinstance(selection, Mapping) and selection.get("selected_setups") == []):
+        return {**payload, "stage_status": "SKIPPED_NO_CANDIDATES"}
+    return payload
+
+
 @server.route("/api/screener/backtest")
 def api_screener_backtest():
     from scripts.strategy_pipeline import enabled as strategy_enabled
     if strategy_enabled():
-        from scripts.strategy_dashboard import api_payload
-        return _json_no_store(api_payload('backtest', request.args, base_dir=BASE_DIR))
+        return _json_no_store(_strategy_screener_report("backtest", request.args))
     limit = _parse_positive_int(request.args.get("limit"), default=50, minimum=1, maximum=200)
     query = str(request.args.get("q") or "").strip()
     window = str(request.args.get("window") or "6M").strip().upper()
@@ -10382,8 +10389,7 @@ def api_screener_backtest():
 def api_screener_metrics():
     from scripts.strategy_pipeline import enabled as strategy_enabled
     if strategy_enabled():
-        from scripts.strategy_dashboard import api_payload
-        return _json_no_store(api_payload('metrics', request.args, base_dir=BASE_DIR))
+        return _json_no_store(_strategy_screener_report("metrics", request.args))
     limit = _parse_positive_int(request.args.get("limit"), default=50, minimum=1, maximum=200)
     query = str(request.args.get("q") or "").strip()
     filter_key = str(request.args.get("filter") or "all").strip().lower()

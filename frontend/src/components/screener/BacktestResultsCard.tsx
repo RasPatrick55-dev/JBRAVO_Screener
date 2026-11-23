@@ -15,7 +15,8 @@ export function BacktestCompletionBadge({payload, kind}: {payload: SourcePayload
   const status = String(payload?.status ?? "").toUpperCase();
   const complete = computationComplete(payload as ComputationContract | null);
   const label = kind === "loading" ? "LOADING" : kind === "stale" ? "STALE" : kind === "held" ? "HELD"
-    : kind === "unavailable" ? "UNAVAILABLE" : status === "ERROR" ? "ERROR" : complete ? "COMPUTE COMPLETE" : "UNVERIFIED";
+    : kind === "unavailable" ? "UNAVAILABLE" : status === "ERROR" ? "ERROR"
+    : payload?.stage_status === "SKIPPED_NO_CANDIDATES" ? "SKIPPED" : complete ? "COMPUTE COMPLETE" : "UNVERIFIED";
   const tone = label === "COMPUTE COMPLETE" ? "jbravo-status-success" : ["ERROR", "UNAVAILABLE"].includes(label) ? "jbravo-status-error" : "text-secondary";
   return <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase ring-1 ring-inset ${tone}`}>{label}</span>;
 }
@@ -36,6 +37,7 @@ export function BacktestResultsContent({ result, onRetry }: { result: Pick<Sourc
   const { rows, error } = backtestPresentation(result);
   const isLoading = result.kind === "loading";
   const payload = error || isLoading ? null : result.payload;
+  const skipped = payload?.stage_status === "SKIPPED_NO_CANDIDATES";
   const evaluationEnd = evidenceText(payload?.evaluation_end);
   const window = evidenceText(payload?.window);
   return (
@@ -49,7 +51,8 @@ export function BacktestResultsContent({ result, onRetry }: { result: Pick<Sourc
           <BacktestCompletionBadge payload={payload} kind={error && result.kind !== "stale" && result.kind !== "held" ? "unavailable" : result.kind}/>
         </div>
       </header>
-      <ComputationScope payload={payload as ComputationContract | null} />
+      {skipped ? <p className="mt-2 text-xs text-secondary">Backtest skipped because the Screener produced no candidates.</p>
+        : <ComputationScope payload={payload as ComputationContract | null} />}
       <p className="mt-2 text-xs text-secondary">Candidate-symbol history only. Simulated completed signals, not actual paper-account returns. Histories are not pooled.</p>
       <p className="mt-1 text-xs text-secondary">Closed-signal P&amp;L includes modeled costs and excludes cash dividends and open-position marks. Drawdown is USD, not a percentage. Current proposals have no future result yet.</p>
       {!isLoading && !error ? <p className="mt-1 text-[11px] text-secondary">

@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 import json
+import logging
 import re
 from threading import Lock
 import time
@@ -26,6 +27,10 @@ from scripts import gross_paper_accounting as G, trade_disposition as D
 SCHEMA = "jbravo.trades-overview.v1"
 SCOPE = "COMBINED_STORED_EXECUTION_GROSS"
 MAX_SIGNALS, MAX_ORDERS, MAX_CLAIMS = 200, 1000, 1000
+COHORT_DEADLINE_SECONDS = 12
+COHORT_WORKER_SECONDS = 14
+SHARED_OBSERVATION_SECONDS = 20
+logger = logging.getLogger(__name__)
 
 STRATEGY_VISIBILITY_SQL = (
     "SELECT c.relname,c.relkind,c.relrowsecurity,c.relforcerowsecurity,c.relispartition,"
@@ -157,7 +162,7 @@ def strategy_cohort(cursor, account):
 class LegacyInputCapture:
     """One-pass pairing; unchanged native readers consume exact original rows.
 
-    Nothing is reused across cohort passes. Native policy replay is untouched.
+    CohortCursor verifies the wire rows again in the replay snapshot.
     Each batch is fully charged/drained by T before its original rows are exposed.
     """
 
@@ -292,7 +297,7 @@ class TimedStatementTransport:
 
 class CohortCursor(T.Cursor):
     def recheck_canonical(self):
-        """Replay the recorded read plans in one statement and compare exact wire rows."""
+        """Recheck the recorded policy and cohort reads in one statement snapshot."""
         self.check()
         if not self.canonical_reads:
             return
@@ -346,12 +351,10 @@ class CohortCursor(T.Cursor):
 
 
 def read_cohort(connection_factory, identity, account):
-    """Same transaction and finite transport budget as native execution gross.
-
-    Ten fixed cohort SELECTs plus the existing finite canonical policy plan
-    and final replay. Every population/version is compared before returning.
-    """
+    """Return a cohort only after its exact wire rows and policy are rechecked."""
     connection = None
+    cursor = None
+    phase = "connect"
     started = time.monotonic()
     try:
         connection = connection_factory()
@@ -363,7 +366,7 @@ def read_cohort(connection_factory, identity, account):
         )
         with connection.cursor() as raw:
             raw.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED READ ONLY")
-            cursor = CohortCursor(TimedStatementTransport(raw), started + 8,
+            cursor = CohortCursor(TimedStatementTransport(raw), started + COHORT_DEADLINE_SECONDS,
                                   extra_plans={**E.READ_PLANS, **PLANS})
             # Exact native optional optimization, never a policy/row shortcut.
             reuse = getattr(cursor, "enable_readonly_guard_reuse", None)
@@ -371,39 +374,40 @@ def read_cohort(connection_factory, identity, account):
                 reuse()
             cursor.execute("SET LOCAL lock_timeout = '500ms'")
             cursor.execute("SET LOCAL idle_in_transaction_session_timeout = '8000ms'")
+            phase = "policy"
             policy = D.read_policy(cursor, identity, scope="VALIDATED_PERFORMANCE")
 
-            def inputs():
-                capture = LegacyInputCapture(cursor)
-                records, execution = E.read_inputs(capture, policy)
-                H.need(capture.fills is not None, "legacy_fill_capture_unavailable")
-                signals, orders, claims = strategy_cohort(cursor, account)
-                # split_versions also validates the mandatory xmin envelope.
-                signal_rows, _ = E.split_versions(signals, "signal_id")
-                order_rows, _ = E.split_versions(orders, "client_order_id")
-                claim_rows, _ = E.split_versions(claims, "trade_id")
-                binding = (
-                    execution.records_hash,
-                    execution.source_hash,
-                    execution.policy_hash,
-                    fingerprint([signals, orders, claims]),
-                )
-                return (
-                    records,
-                    execution,
-                    signal_rows,
-                    order_rows,
-                    claim_rows,
-                    capture.fills,
-                    binding,
-                )
+            phase = "cohort"
+            # Save the four actual reads for the second pass. Owners and fills
+            # use the first pass's parameters, which only stay valid when the
+            # exact trade and policy rows also match in the replay snapshot.
+            cursor.canonical_sql.update((GUARD_PAIR_SQL, E.TRADES_SQL, EXECUTION_PAIR_SQL, STRATEGY_COHORT_SQL))
+            capture = LegacyInputCapture(cursor)
+            records, execution = E.read_inputs(capture, policy)
+            H.need(capture.fills is not None, "legacy_fill_capture_unavailable")
+            signals, orders, claims = strategy_cohort(cursor, account)
+            signal_rows, _ = E.split_versions(signals, "signal_id")
+            order_rows, _ = E.split_versions(orders, "client_order_id")
+            claim_rows, _ = E.split_versions(claims, "trade_id")
+            binding = (
+                execution.records_hash,
+                execution.source_hash,
+                execution.policy_hash,
+                fingerprint([signals, orders, claims]),
+            )
 
-            first = inputs()
-            second = inputs()
-            H.need(first[-1] == second[-1], "cohort_changed")
+            phase = "verification"
             cursor.recheck_canonical()
             cursor.check()
-            return policy, *first[:-1], fingerprint(first[-1])
+            return policy, records, execution, signal_rows, order_rows, claim_rows, capture.fills, fingerprint(binding)
+    except Exception as error:
+        if str(error) == "EXECUTION_DEADLINE_OR_SQL_CAP" or getattr(error, "pgcode", None) == "57014":
+            logger.warning(
+                "Combined Trades %s stopped after %.3fs (%s logical statements, %s rows)",
+                phase, time.monotonic() - started,
+                cursor.statements if cursor else 0, cursor.rows if cursor else 0,
+            )
+        raise
     finally:
         if connection is not None:
             try:
@@ -1003,7 +1007,7 @@ def current_snapshot(connection_factory, client, identity):
             pending = _inflight[key] = Future()
     if not owns_read:
         try:
-            return pending.result(timeout=15)
+            return pending.result(timeout=SHARED_OBSERVATION_SECONDS)
         except TimeoutError:
             return dict(envelope(datetime.now(timezone.utc)),
                         reason="source_timeout", failure_stage="shared_observation")
@@ -1037,7 +1041,7 @@ def snapshot(connection_factory, client, identity, *, now=None, read=H.bounded_r
         account = str(account)
         H.need(str(UUID(account)) == account, "invalid_account_identity")
         stage = "database_cohort_read"
-        cohort = read(lambda: read_cohort(connection_factory, identity, account), seconds=10)
+        cohort = read(lambda: read_cohort(connection_factory, identity, account), seconds=COHORT_WORKER_SECONDS)
         policy, records, execution, signals, orders, claims, legacy_fills, cohort_id = cohort
         stage = "reporting_calendar_read"
         try:
@@ -1065,6 +1069,8 @@ def snapshot(connection_factory, client, identity, *, now=None, read=H.bounded_r
         code = str(error)
         if code == "EXECUTION_DEADLINE_OR_SQL_CAP":
             code = "read_budget_exceeded"
+        if stage == "database_cohort_read" and getattr(error, "pgcode", None) == "57014":
+            code = "source_timeout"
         if code == "EXECUTION_CANONICAL_INPUT_DRIFT":
             code = "cohort_changed"
         if code in {
