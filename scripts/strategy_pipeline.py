@@ -36,7 +36,10 @@ EXTRA_SOURCES += ('config/strategy_execution.json',)+tuple('scripts/'+name for n
 EXTRA_SOURCES += ('config/strategy_companions.json', 'scripts/bull_flag_strategy.py',
                   'scripts/chart_patterns.py', 'scripts/bull_flag_companion.py',
                   'scripts/pattern_strategy.py','scripts/swing_patterns.py','config/chart_pattern_companions.json',
-                  'scripts/setup_selection.py')
+                  'scripts/setup_selection.py', 'scripts/strategy_webull_market_data.py',
+                  'scripts/strategy_webull_selection.py', 'scripts/strategy_webull_quotes.py',
+                  'scripts/strategy_webull_tasks.py', 'scripts/strategy_entry_only.py', 'scripts/strategy_order_ownership_install.py',
+                  'scripts/strategy_entry_preflight.py', 'scripts/strategy_order_lifecycle.py')
 
 
 def require(condition, reason):
@@ -66,7 +69,7 @@ def enabled(base_dir=ROOT):
     return True
 
 
-def session_context(calendar, now):
+def session_context(calendar, now, *, webull_early_close_cutoffs=None):
     """Use a fresh exchange calendar, including intervening holidays and DST."""
     from scripts.daily_strategy_scan import normalize_calendar
     rows = normalize_calendar(calendar)
@@ -79,15 +82,23 @@ def session_context(calendar, now):
     require(bool(following) and today - timedelta(days=7) <= date.fromisoformat(day) <= today,
             'missing_or_stale_strategy_calendar')
     signal, upcoming = available[-1], following[0]
-    require(time.fromisoformat(signal['open']) == time(9, 30) and time.fromisoformat(signal['close']) == time(16),
-            'exceptional_signal_session_requires_review')
+    if webull_early_close_cutoffs is None:
+        require(time.fromisoformat(signal['open']) == time(9, 30) and time.fromisoformat(signal['close']) == time(16),
+                'exceptional_signal_session_requires_review')
+    else:
+        from scripts.strategy_webull_market_data import session_hours
+        webull_hours = session_hours(signal, webull_early_close_cutoffs)
+        target_hours = session_hours(upcoming, webull_early_close_cutoffs)
     require(time.fromisoformat(upcoming['open']) == time(9, 30), 'unsupported_next_regular_open')
     next_open = datetime.combine(date.fromisoformat(upcoming['date']), time(9, 30), NY)
     require(now < next_open, 'strategy_signal_open_already_passed')
-    return dict(signal_session=day, next_session=upcoming['date'],
+    result = dict(signal_session=day, next_session=upcoming['date'],
         signal_available_at=datetime.combine(date.fromisoformat(day), time(20, 15), NY).isoformat(),
         next_open_at=next_open.astimezone(timezone.utc).isoformat(),
         execution_model='NEXT_SUPPLIED_REGULAR_SESSION_OPEN')
+    if webull_early_close_cutoffs is not None:
+        result.update(webull_hours=webull_hours, next_regular_close_at=target_hours['regular_close_at'])
+    return result
 
 
 def validate_archive(row, cfg, session, *, base_dir=ROOT, strategy_id=STRATEGY):
@@ -381,7 +392,7 @@ def main(argv, *, base_dir=ROOT):
             end=(started.astimezone(NY).date()+timedelta(days=10)).isoformat()))
     finally:
         provider.close()
-    session = session_context(calendar, started)
+    session = session_context(calendar, started, webull_early_close_cutoffs=cfg.get('webull_early_close_cutoffs'))
     from scripts.strategy_archive_identity import archive_id as versioned_archive_id
     archive_id = versioned_archive_id(cfg, session['signal_session'], STRATEGY)
     conn = connect(env=env)
@@ -392,6 +403,14 @@ def main(argv, *, base_dir=ROOT):
         value = validate_archive(archived, cfg, session, base_dir=base_dir)
     finally:
         conn.rollback(); conn.close()
+    if 'webull_hours' in session:
+        from scripts.strategy_webull_selection import ARCHIVE_KEY
+        require(isinstance(value.get('webull_after_hours'), dict), 'webull_capture_archive_missing')
+        session['webull_data_environment'] = cfg.get('webull_data_environment', 'production')
+        require(value['webull_after_hours'].get('environment', 'production') ==
+                session['webull_data_environment'], 'webull_capture_environment_changed')
+        session[ARCHIVE_KEY] = dict(id=archive_id, sha256=archived[1].strip(),
+            capture_sha256=digest(encoded(value['webull_after_hours'])))
     dataset = verified_dataset(value, archived[0], base_dir=base_dir)
     rows = candidate_rows(value, dataset, started)
     from scripts.strategy_backtest import run_candidate_backtest
@@ -440,6 +459,8 @@ def main(argv, *, base_dir=ROOT):
         return 1
     print(json.dumps(dict(status='PRIMARY_STRATEGY_SCREEN_COMPLETE', strategy_id=STRATEGY,
         signal_session=session['signal_session'], candidates=len(rows), outcome=batch['outcome'],
+        unified_candidates=len(selection.get('selected_signal_ids', ())),
+        after_hours_coverage=selection.get('after_hours_coverage'),
         scan_run_id=value['scan_run_id'], archive_id=archive_id, broker_operations=0)), flush=True)
     return 0
 
@@ -447,7 +468,8 @@ def main(argv, *, base_dir=ROOT):
 def finish_strategy_handoff(record, *, env, base_dir=ROOT, dataset=None):
     from scripts.strategy_archive_companions import prepare_primary
     from scripts.bull_flag_companion import _status
-    from scripts.setup_selection import publish, required_strategies
+    from scripts.setup_selection import required_strategies
+    from scripts.strategy_webull_selection import publish
     from scripts.research_strategies import CHALLENGER
     unavailable=[]
     for strategy_id in required_strategies(base_dir):

@@ -39,16 +39,23 @@ class EntryOnlyBroker:
         raise ValueError('entry_only_replacement_forbidden')
 
 
+class PremarketQuoteHold(Exception):
+    """A candidate was held before creating its signal or order claim."""
+
+
 class EntryOnlyStore:
     """Persist the separate close contract before the first order claim."""
-    def __init__(self, store, calendar, marker_for):
+    def __init__(self, store, calendar, marker_for, *, before_enroll=None):
         self.store, self.calendar, self.marker_for = store, calendar, marker_for
+        self.before_enroll = before_enroll
 
     def __getattr__(self, name):
         return getattr(self.store, name)
 
     def enroll(self, handoff, proposal, reference):
         marker = self.marker_for(handoff, self.calendar)
+        if self.before_enroll is not None:
+            self.before_enroll(proposal, reference)
         signal = self.store.enroll(handoff, proposal, reference)
         existing = signal['payload'].get('entry_lifecycle')
         if existing is None:
@@ -119,7 +126,7 @@ def admitted_entry_lease(runtime, store, opening, *, check_window, wait,
 
 def run_entry_only(config, *, runtime, NativeEngine, calendar_reader,
                    marker_for, preflight, base_dir, wait=None, progress,
-                   now=None, broker_factory=None, monotonic=None):
+                   now=None, broker_factory=None, monotonic=None, quote_fetch=None, primary_quote_fetch=None):
     """Place the published batch at 04:00 NY, release the lease, then return.
 
     Fresh direct broker state gates existing owned exposure. Monitor health is
@@ -149,13 +156,21 @@ def run_entry_only(config, *, runtime, NativeEngine, calendar_reader,
         progress['phase'] = 'UNIFIED_SELECTION_HANDOFF'
         verified = runtime.unified_handoff(env, inspected, base_dir=base_dir)
         queue = runtime.pipeline_execution_queue(verified)
+        selection = verified['record']['selection']
+        coverage = selection.get('after_hours_coverage', {})
+        if quote_fetch is not None:
+            from scripts.strategy_webull_selection import POLICY
+            require(selection.get('policy') == POLICY, 'webull_selection_required_for_scheduled_entry')
         if not queue or config.dry_run:
-            value = dict(status='skipped',
-                exit_reason='STRATEGY_DRY_RUN_INPUTS_ONLY' if config.dry_run else 'NO_STRATEGY_BUY_SIGNALS',
+            reason = ('STRATEGY_DRY_RUN_INPUTS_ONLY' if config.dry_run else
+                'AFTER_HOURS_FINALISTS_HELD' if coverage.get('requested') else 'NO_STRATEGY_BUY_SIGNALS')
+            value = dict(status='skipped', exit_reason=reason,
                 candidate_count=len(queue), orders_submitted=0, orders_filled=0,
                 strategy_contract=selection_contract(),
                 paper_only=True, broker_operations=0, finished_at=observe().isoformat(),
                 source_bindings=inspected['source_bindings'])
+            if coverage:
+                value['after_hours_coverage'] = coverage
             runtime.write_report(value, role='entry', base_dir=base_dir)
             return value
         handoff = runtime.readonly_handoff(env, base_dir=base_dir, pipeline_limits=True)
@@ -176,6 +191,16 @@ def run_entry_only(config, *, runtime, NativeEngine, calendar_reader,
             sleeper(min(seconds, check_window()))
             check_window()
 
+        if quote_fetch is not None:
+            remaining = (opening - observe()).total_seconds()
+            require(remaining <= 65 * 60, 'entry_only_premarket_wait_outside_bound')
+            wake_deadline = elapsed() + max(remaining, 0)
+            while remaining > 0:
+                remaining_wait = wake_deadline - elapsed()
+                require(remaining_wait > 0, 'entry_only_premarket_clock_changed')
+                sleeper(min(remaining, remaining_wait, 15))
+                remaining = (opening - observe()).total_seconds()
+            # Re-read again immediately after broker initialization below.
         check_window()
         admission_binding = deepcopy((handoff, verified['record'], queue))
 
@@ -192,6 +217,9 @@ def run_entry_only(config, *, runtime, NativeEngine, calendar_reader,
         # Freeze one calendar-derived close for the whole batch. No fallback to
         # a guessed16:00 when the exchange is closed or calendar is unavailable.
         marker = marker_for(handoff, calendar)
+        if quote_fetch is not None:
+            require(runtime.rules.utc(handoff['session']['next_regular_close_at']) ==
+                    runtime.rules.utc(marker['cancel_at']), 'entry_only_regular_close_changed')
         # Keep outer failure receipts truthful even if a later symbol's guard
         # fails after an earlier buy was accepted.
         config._entry_cancellation_policy = 'monitor_exchange_regular_close'
@@ -208,6 +236,8 @@ def run_entry_only(config, *, runtime, NativeEngine, calendar_reader,
         try:
             runtime.entry_account(broker, env)
             conn, store = runtime.store_connection(env, broker)
+            if quote_fetch is not None:
+                revalidate()
             def admission():
                 return preflight(runtime, NativeEngine, store, broker, base_dir=base_dir,
                     handoff=handoff, proposed_symbols={s['proposal']['symbol'] for s in queue})
@@ -218,8 +248,23 @@ def run_entry_only(config, *, runtime, NativeEngine, calendar_reader,
                 before = {s['signal_id'] for s in store.signals(active=False)}
                 existing_orders = {r['client_order_id'] for s in store.signals(active=False)
                                    for r in store.orders(s['signal_id'])}
-                scoped = EntryOnlyStore(store, calendar, marker_for)
-                core_guard = runtime.guard_for(env, base_dir=base_dir)
+                quote_decisions = {}
+
+                def verify_quote(proposal, ticket):
+                    from scripts.strategy_webull_market_data import premarket_decision
+                    check_window()
+                    symbol = proposal['symbol']
+                    decision = premarket_decision(quote_fetch, symbol, ticket=ticket,
+                        opening=opening, now=observe, primary_fetch=primary_quote_fetch)
+                    quote_decisions[symbol] = decision
+                    if decision['status'] != 'PASS':
+                        raise PremarketQuoteHold()
+                    check_window()
+
+                scoped = EntryOnlyStore(store, calendar, marker_for,
+                    before_enroll=verify_quote if quote_fetch is not None else None)
+                guard_options = {'pipeline_entry_only': True} if quote_fetch is not None else {}
+                core_guard = runtime.guard_for(env, base_dir=base_dir, **guard_options)
 
                 def guard(kind, signal):
                     require(kind == 'entry', 'entry_only_lifecycle_guard_forbidden')
@@ -243,11 +288,14 @@ def run_entry_only(config, *, runtime, NativeEngine, calendar_reader,
                     preflight(runtime, NativeEngine, store, broker, base_dir=base_dir,
                         handoff=origin, proposed_symbols={setup['proposal']['symbol']},
                         exempt_signal_ids=current - before)
-                    engine.enter(origin, references, now=observe(), clock=broker.clock(),
-                        account=runtime.entry_account(broker, env), positions=broker.positions(),
-                        open_orders=broker.open_orders(),
-                        max_new_entries=runtime.available_entry_budget(store, handoff['session']['next_session']),
-                        selected_signal_ids=[setup['proposal']['signal_id']])
+                    try:
+                        engine.enter(origin, references, now=observe(), clock=broker.clock(),
+                            account=runtime.entry_account(broker, env), positions=broker.positions(),
+                            open_orders=broker.open_orders(),
+                            max_new_entries=runtime.available_entry_budget(store, handoff['session']['next_session']),
+                            selected_signal_ids=[setup['proposal']['signal_id']])
+                    except PremarketQuoteHold:
+                        continue
                 records = [r for s in store.signals(active=False) for r in store.orders(s['signal_id'])]
                 new = [r for r in records if r['role'] == 'entry'
                        and r['client_order_id'] not in existing_orders]
@@ -273,6 +321,10 @@ def run_entry_only(config, *, runtime, NativeEngine, calendar_reader,
                     selection=verified['record']['selection'],
                     unified_selection_run_id=verified['record']['run_id'],
                     finished_at=observe().isoformat())
+                if quote_fetch is not None:
+                    value['premarket_quotes' if primary_quote_fetch is not None else 'webull_premarket'] = quote_decisions
+                    if value['status'] == 'ok' and not observations:
+                        value.update(status='skipped', exit_reason='NO_PAPER_ENTRIES_ADMITTED')
                 value['preflight'] = dict(proof, candidate_binding=dict(
                     unified_selection_run_id=verified['record']['run_id'],
                     selected_setups=verified['record']['selection'].get('selected_setups', [])),

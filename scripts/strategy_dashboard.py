@@ -59,7 +59,8 @@ def display_selection(connection, batch, primary_run_id, *, base_dir=ROOT, now=N
         batch[0].isoformat() == primary['session']['signal_session'] and
         batch[1] == datetime.fromisoformat(primary['candidate_run_ts_utc']),
         'unified_dashboard_primary_changed')
-    verified = selection.read_selection(connection, selection.parent_context(primary), now=now, base_dir=base_dir)
+    from scripts.strategy_webull_selection import read_selection
+    verified = read_selection(connection, selection.parent_context(primary), now=now, base_dir=base_dir)
     control = json.loads(health._read(Path(base_dir) /
         'reports/strategy_companions/unified_setups/latest.json', 65536))
     pipeline.require(control.get('status') == 'COMPLETED_UNIFIED_SETUP_SELECTION' and

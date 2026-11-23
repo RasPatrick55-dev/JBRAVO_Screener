@@ -31,6 +31,7 @@ This repository uses a Diataxis-style documentation layout. Start from this page
 - [Four additional swing chart-pattern companions](how-to/chart_pattern_companions.md)
 - [Market-wide daily strategy screening](how-to/market_wide_strategy_screen.md)
 - [Strategy execution handoff and activation requirements](how-to/strategy_execution_handoff.md)
+- [Webull-assisted paper workflow and task verification](how-to/webull_paper_workflow.md)
 - [Strategy Metrics stage](how-to/strategy_metrics_stage.md)
 - [Strategy identity in the backtesting stage](how-to/strategy_backtest_stage.md)
 - [Primary strategy Screener and handoff](how-to/primary_strategy_screen.md)

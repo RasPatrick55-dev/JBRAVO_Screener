@@ -1,0 +1,59 @@
+---
+title: Execute Trades · paper entry decisions
+config:
+  theme: neutral
+  look: classic
+  flowchart:
+    nodeSpacing: 25
+    rankSpacing: 23
+    padding: 8
+    wrappingWidth: 310
+---
+%% The existing Alpaca Paper task 1569544 was enabled on 2026-11-23.
+%% This diagram shows the prepared Webull command in config/webull_paper_tasks.json.
+%% The hosted sandbox first-minute check passed. The Webull task rollout is pending.
+%% The prepared launcher checks qualification, takes a generation lease
+%% and binds the entry-only runtime. Test mode reads tickets without orders.
+%% Hosted code to follow: scripts/strategy_execution_handoff.py, scripts/setup_selection.py,
+%% scripts/strategy_execution_runtime.py, strategy_entry_only_20261121.py,
+%% strategy_entry_preflight.py, and scripts/strategy_execution_engine.py.
+%% Only unconfirmed stop coverage can trigger a bounded read-only preflight recheck.
+%% The admission loop never retries an order submission.
+flowchart TB
+    schedule(["PythonAnywhere task 1569544 · 07:55 UTC"])
+    enabled{"Schedule enabled?"}
+    disabled(["Skip scheduler launch"])
+    launch["Verify paper-only context and trading date"]
+    handoff["Verify the Primary completion and report<br/>Replay archived price evidence and read fixed paper limits"]
+    valid{"Valid handoff?"}
+    stale(["Block stale or invalid handoff"])
+    wait["Enforce the scheduler start window<br/>Wait for 04:00 ET if early, then recheck"]
+    signals{"Any selected signals?"}
+    empty(["Record skip · no paper orders"])
+    admission["Require the first 60 seconds from 04:00 ET<br/>Check paper account, positions,<br/>open orders and stop coverage"]
+    ready{"Preflight passed?"}
+    blocked(["Block new paper orders"])
+    candidate["For each selected signal, check eligibility,<br/>cash, position caps and prior entries"]
+    eligible{"Signal and limit<br/>still eligible?"}
+    skip["Skip or block that signal"]
+    alpaca{"Usable Alpaca IEX quote?<br/>First premarket minute · age at most 15 s"}
+    fallback["Check Webull qualification<br/>Request the same symbol's fresh bid and ask"]
+    quote{"Usable quote meets price rules?<br/>Spread at most 1% · ask at or below paper limit"}
+    order["Require a fresh durable order claim<br/>Submit a buy limit order to Alpaca Paper"]
+    finish(["Record broker outcome or flag it for reconciliation<br/>Monitor Positions owns follow-up"])
+
+    schedule --> enabled
+    enabled -->|No| disabled
+    enabled -->|Yes| launch --> handoff --> valid
+    valid -->|No| stale
+    valid -->|Yes| signals
+    signals -->|No| empty
+    signals -->|Yes| wait --> admission --> ready
+    ready -->|No| blocked
+    ready -->|Yes| candidate --> eligible
+    eligible -->|No| skip
+    eligible -->|Yes| alpaca
+    alpaca -->|Yes| quote
+    alpaca -->|Data gap| fallback --> quote
+    quote -->|No| skip
+    quote -->|Yes| order --> finish

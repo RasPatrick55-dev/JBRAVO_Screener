@@ -170,6 +170,9 @@ def complete_primary(base_dir, invocation, result):
 
 PRIMARY_FAILURE_CODES = frozenset((
     'strategy_scan_not_archived_for_session', 'strategy_scan_source_changed',
+    'exceptional_signal_session_requires_review', 'unverified_webull_early_close',
+    'webull_calendar_close_mismatch', 'unsupported_webull_regular_open',
+    'webull_capture_archive_missing',
     'strategy_archive_scope_mismatch', 'incomplete_strategy_scan',
     'strategy_postflight_unified_selection_unavailable',
     'strategy_primary_invocation_mismatch', 'strategy_primary_source_changed_during_run',

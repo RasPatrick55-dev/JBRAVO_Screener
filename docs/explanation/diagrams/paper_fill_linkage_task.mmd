@@ -1,0 +1,44 @@
+---
+title: JBravo paper data fill linkage
+config:
+  theme: neutral
+  look: classic
+  flowchart:
+    nodeSpacing: 24
+    rankSpacing: 22
+    padding: 8
+    wrappingWidth: 300
+---
+%% PythonAnywhere task 1570763 was enabled on 2026-11-21. Its command hash matched
+%% the schedule readback for h1570763_account_prior_20261120.py, hourly at :15.
+%% The pinned wrapper runs hourly_lot_account_prior_20261120.py and the hourly data loader.
+%% Hosted code: scripts/strategy_fill_auto_sync.py, strategy_fill_sync_adapter.py,
+%% strategy_fill_linkage.py, strategy_lot_hourly_phase.py, strategy_order_origin_fetch.py,
+%% and strategy_lot_accounting_v2.py.
+%% Alpaca Paper methods are GET-only. PostgreSQL data changes are separately guarded.
+%% Sync receipts are under reports/strategy_fill_sync/<run-id>/.
+%% The lot invocation records automatic-result-<id>.json in its guarded state directory.
+%% A verified incremental commit leaves accounting_complete and publication_allowed false.
+flowchart TB
+    start(["PythonAnywhere task 1570763<br/>Hourly at :15"])
+    guard["Verify the launcher, paper account scope and locks<br/>Check prior transaction intents"]
+    ready{"Clear to start<br/>this hour's sync?"}
+    recover["Reconcile prior intent<br/>or hold for review"]
+    read["Alpaca Paper · GET only<br/>Read account, order snapshots and activities"]
+    link["Match actual Alpaca fills to strategy orders<br/>Check identifiers, side, symbol and quantity"]
+    commit["Commit the activity checkpoint<br/>and proven fill links to PostgreSQL<br/>Read them back independently"]
+    proven{"Current-hour<br/>linkage verified?"}
+    review["Hold the lot phase for review"]
+    origin["GET additional order origin or<br/>fill history evidence when needed"]
+    eligible{"Eligible closed-lot<br/>allocation proven?"}
+    hold["Keep gaps and unsupported<br/>allocations on hold"]
+    lot["Commit eligible lot events<br/>and verify them in PostgreSQL"]
+    report(["Record committed results and holds<br/>in the run receipts"])
+
+    start --> guard --> ready
+    ready -->|No| recover --> report
+    ready -->|Yes| read --> link --> commit --> proven
+    proven -->|No| review
+    proven -->|Yes| origin --> eligible
+    eligible -->|No| hold --> report
+    eligible -->|Yes| lot --> report
