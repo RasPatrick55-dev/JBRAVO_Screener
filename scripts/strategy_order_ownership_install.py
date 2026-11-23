@@ -14,19 +14,29 @@ def require(value, reason):
         raise ValueError(reason)
 
 
-def install_entry(runtime, NativeEngine, monitor, entry, lifecycle, preflight):
+def install_entry(runtime, NativeEngine, monitor, entry, lifecycle, preflight, *,
+                  source_variant='retained', quote_fetch=None, primary_quote_fetch=None, unified_reader=None):
     require(not getattr(runtime, '_entry_monitor_ownership_installed', False),
             'entry_ownership_duplicate_install')
     require(callable(getattr(runtime, 'validate_entry_recognition', None)),
             'entry_recognition_validator_missing')
     # Fail before any CLI/account operation if the monitor cannot interpret the
     # native Engine's close contract. This is source verification, not health.
-    lifecycle.monitor_engine(NativeEngine)
+    if source_variant == 'retained':
+        lifecycle.monitor_engine(NativeEngine)
+    else:
+        lifecycle.monitor_engine(NativeEngine, source_variant=source_variant)
+    if unified_reader is not None:
+        require(callable(unified_reader), 'entry_unified_reader_invalid')
+        runtime.unified_handoff = unified_reader
     def run(config, *, base_dir=runtime.ROOT, wait=None, progress):
+        options = {'quote_fetch': quote_fetch} if quote_fetch is not None else {}
+        if primary_quote_fetch is not None:
+            options['primary_quote_fetch'] = primary_quote_fetch
         return entry.run_entry_only(config, runtime=runtime, NativeEngine=NativeEngine,
             calendar_reader=monitor.calendar_session, marker_for=lifecycle.marker_for,
             preflight=preflight.broker_entry_preflight, base_dir=base_dir,
-            wait=wait, progress=progress)
+            wait=wait, progress=progress, **options)
     runtime._run_entry = run
     runtime._entry_monitor_ownership_installed = True
     return dict(lifecycle_owner='MONITOR_POSITIONS', entry_only=True,

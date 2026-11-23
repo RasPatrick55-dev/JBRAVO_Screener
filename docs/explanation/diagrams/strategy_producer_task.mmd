@@ -1,0 +1,73 @@
+---
+title: Strategy Producer · Alpaca archive with Webull fallback
+config:
+  theme: neutral
+  look: classic
+  sequence:
+    actorMargin: 30
+    boxMargin: 8
+    noteMargin: 8
+    messageMargin: 24
+    mirrorActors: false
+    wrap: true
+---
+%% PythonAnywhere task 1568725 was enabled on 2026-11-21. Its live command hash
+%% matched the reviewed command for STRATEGY_DASHBOARD_20261106_001/market_daily_boot.py.
+%% 01:20 UTC is the documented schedule. The task inventory omits the current time field.
+%% Prepared launcher acquires generation and task locks. Sandbox bars passed
+%% ordinary-session verification on 2026-11-23. Early-close verification is pending.
+%% scripts/daily_strategy_scan.py selects the completed New York trading session,
+%% prepares one dataset, and commits separate archives for the base and companion scans.
+%% Non-trading days report SKIPPED_NON_TRADING_DAY.
+%% Session files live under jbravo-research-tools/STRATEGY_DAILY_ACTIVATION_20261025_002/
+%% runs/<signal-session>/revisions/<configuration-hash>/ under the PythonAnywhere home.
+%% scripts/strategy_archive_identity.py derives the v2 ID from session, strategy and config.
+%% scripts/strategy_pipeline.py and scripts/strategy_archive_companions.py read the archives.
+sequenceDiagram
+    participant S as PythonAnywhere
+    participant P as Strategy producer
+    participant A as Alpaca
+    participant W as Webull Sandbox
+    participant D as PostgreSQL
+    participant M as Primary Pipeline
+
+    S->>P: Start 1568725 at 01:20 UTC using the prepared launcher
+    Note over P: Acquire run locks<br/>Check qualification before using Webull
+    P->>A: Read the exchange calendar
+    A-->>P: Exchange sessions
+
+    alt No trading session that New York date
+        P-->>S: Skip the non-trading day
+    else Completed trading session
+        P->>A: Capture tradable equities, IEX bars and corporate actions
+        A-->>P: Market data for the session
+        Note over P,A: daily_strategy_scan.py<br/>Prepare one shared dataset<br/>Save each scan and manifest
+        P->>D: Archive required companion scans
+        P->>A: Request raw minute bars for scanner finalists
+        A-->>P: Return available regular and after-hours bars
+        opt A finalist's data is missing or stale
+            P->>W: Request only the missing symbol and session window
+            W-->>P: Return available supplemental bars
+        end
+        Note over P,W: Webull closes at 20:00 ET on regular days<br/>Use 17:00 ET for listed 13:00 ET early closes
+        P->>D: Commit bars, providers and coverage in the primary archive<br/>jbravo_research.research_runs
+        P->>D: Read back committed rows separately
+        alt All required strategy archives complete
+            P-->>S: Save completion.json and exit successfully
+        else A required capture, scan or archive fails
+            P-->>S: Record failure and exit nonzero
+            Note over P,D: Earlier archive rows can remain as partial results.
+        end
+    end
+
+    S->>M: Start task 1568726 on its own schedule
+    M->>A: Resolve the completed signal session
+    A-->>M: Exchange sessions
+    M->>D: Look up the archive ID for that session, strategy and config
+    D-->>M: Return the matching archive row and hashes if present
+    Note over D,M: Verify archive hashes<br/>Check session files<br/>Repeat for companions
+    alt Required archives and files pass validation
+        Note over D,M: Run Backtest and Metrics<br/>Replay archived price evidence and publish paper limits
+    else A required archive or file is missing or invalid
+        M-->>S: Block primary completion
+    end

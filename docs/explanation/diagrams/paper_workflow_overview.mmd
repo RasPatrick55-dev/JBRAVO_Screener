@@ -1,0 +1,65 @@
+---
+title: JBravo Webull-assisted paper workflow and market timing
+config:
+  theme: neutral
+  look: classic
+  flowchart:
+    nodeSpacing: 30
+    rankSpacing: 27
+    padding: 10
+    wrappingWidth: 310
+---
+%% Arrows show data flow and broker interactions. PythonAnywhere starts each task independently.
+%% Task inventory on 2026-11-23 showed the existing Alpaca Paper Execute Trades enabled.
+%% This diagram shows the prepared Webull workflow. Hosted sandbox ordinary-session
+%% bars and first-minute quotes passed. The early-close probe and Webull rollout are pending.
+%% The Producer and Primary evening ET times fall on the preceding calendar date relative to UTC.
+%% EST is UTC−5 and EDT is UTC−4. New York's 04:00 ET is 03:00 in Chicago.
+%% Primary resolves calendar dates across weekends and holidays. A published
+%% early close requires a verified Webull cutoff and that exact session archive.
+%% Market hours and exceptions: https://www.nyse.com/trade/hours-calendars
+%% Alpaca extended hours: https://docs.alpaca.markets/us/docs/orders-at-alpaca
+%% Task walkthroughs in this directory:
+%% strategy_producer_task.mmd, daily_pipeline_task.mmd, execute_trades_task.mmd,
+%% monitor_positions_task.mmd, and paper_fill_linkage_task.mmd.
+flowchart TB
+    subgraph market["Standard U.S. equities hours · ET · See calendar for holidays and early closes"]
+        direction LR
+        premarket["04:00–09:30 ET<br/>Premarket"]
+        regular["09:30–16:00 ET<br/>Regular session"]
+        afterhours["16:00–20:00 ET<br/>After-hours"]
+        cutoff["20:15 ET<br/>JBravo signal data gate"]
+        premarket --> regular --> afterhours --> cutoff
+        short["Early close · Nov 27 or Dec 24, 2026<br/>Regular close 13:00 ET · Webull ATH ends 17:00 ET"]
+        afterhours ~~~ short
+    end
+
+    producer["Strategy Producer · 1568725<br/>01:20 UTC daily · 20:20 EST / 21:20 EDT<br/>Scan with Alpaca IEX · Fill finalist bar gaps with Webull"]
+    primary["Primary Pipeline · 1568726<br/>03:45 UTC daily · 22:45 EST / 23:45 EDT<br/>Verify the exact session archive and next trading day<br/>Run Backtest and Metrics · Publish up to 3 paper tickets"]
+    execute["Execute Trades · 1569544<br/>07:55 UTC slot · 02:55 EST / 03:55 EDT<br/>04:00 ET / 03:00 CT · Check selected symbols<br/>Try Alpaca IEX first · Fill quote gaps with Webull"]
+    orders[("PostgreSQL execution records<br/>Strategy signals, order claims and observations")]
+    monitor["Monitor Positions · 281101<br/>Always-on · 30 s between cycles<br/>Reconcile fills and manage stops and exits<br/>Quote checks 04:00–20:00 ET on trading days<br/>Native stops trigger in the regular session<br/>Cancel open entry remainder at exchange close"]
+    dataFeed["Webull sandbox market data<br/>Ordinary-session checks passed<br/>Early-close check pending"]
+    broker["Alpaca Paper"]
+    linkage["Paper Data Fill Linkage · 1570763<br/>Hourly at :15, including outside market hours<br/>Match broker fills to strategy orders"]
+    linked[("PostgreSQL fill links<br/>and eligible closed-lot records")]
+
+    market ~~~ producer
+    dataFeed -.->|Only finalist bar gaps| producer
+    dataFeed -.->|Only selected-symbol quote gaps| execute
+    producer -->|Verified PostgreSQL archive| primary
+    primary -->|PostgreSQL selection and fixed paper limits| execute
+    execute -->|Save claims and outcomes| orders
+    orders --> monitor
+    orders --> linkage
+    execute -.->|Eligible buy limits| broker
+    broker -.->|Order status and fills| monitor
+    broker -.->|GET only · orders and activities| linkage
+    linkage --> linked
+
+    classDef task fill:#eaf2ff,stroke:#6c87a9,color:#192b42
+    classDef data fill:#edf5f1,stroke:#769488,color:#203b31
+    classDef marketTime fill:#f5f5fa,stroke:#8c8ca1,color:#252539
+    class producer,primary,execute,monitor,linkage task
+    class orders,linked data
+    class premarket,regular,afterhours,cutoff,short marketTime

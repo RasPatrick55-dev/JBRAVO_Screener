@@ -1,0 +1,51 @@
+---
+title: Monitor Positions · paper order lifecycle
+config:
+  theme: neutral
+  look: classic
+  flowchart:
+    nodeSpacing: 24
+    rankSpacing: 22
+    padding: 8
+    wrappingWidth: 300
+---
+%% PythonAnywhere always-on task 281101 was enabled when checked on 2026-11-21.
+%% Its command matches MONITOR_QUOTE_DIAGNOSTICS_20261109_001/strategy_monitor_boot_20261120.py.
+%% Follow strategy_only_monitor.py -> manage_owned -> scripts/strategy_execution_engine.py.
+%% strategy_order_lifecycle.py validates the new entry marker and its exchange-close deadline.
+%% strategy_pending_stop_replacement.py handles broker-confirmed pending replacements.
+%% PostgreSQL stores public.strategy_execution_signals_app and public.strategy_execution_orders_app.
+%% Monitor reads these records even when the entry scheduler is disabled.
+%% After each cycle, runtime.write_report updates reports/strategy_execution/monitor/latest.json.
+flowchart TB
+    start(["PythonAnywhere always-on task 281101<br/>strategy_monitor_boot_20261120.py"])
+    entry["Execute Trades<br/>Saves signal, order claim and<br/>entry lifecycle marker in PostgreSQL"]
+    owned["Lock the paper account for the cycle<br/>Load only verified strategy-owned signals"]
+    reconcile["Read Alpaca Paper order status and fills<br/>Compute remaining shares from cumulative<br/>buy fills minus sell fills"]
+    known{"Order state<br/>resolved?"}
+    review["Flag for reconciliation<br/>Pause new actions for the signal"]
+    cancel["At the bound exchange close, cancel<br/>any open entry remainder and re-read fills<br/>13:00 ET on a verified early-close date"]
+    exposure{"Filled shares<br/>remain?"}
+    pending["Track pending entry or record<br/>closed or expired state"]
+    matched{"Broker position<br/>matches the fills?"}
+    risk["Use the originating strategy rules<br/>Apply verified completed bars when available"]
+    exit_due{"Exit or partial<br/>exit due?"}
+    stop["Confirm, place or tighten the fixed GTC stop<br/>Match stop quantity to owned shares<br/>Native stops trigger in regular hours"]
+    exit_ready{"Fresh quote and<br/>exit guards pass?"}
+    defer["Defer the sell<br/>Reconcile fills and stop state"]
+    sell["Confirm competing order cancellations<br/>Recheck owned quantity<br/>Submit a partial or full paper limit sell"]
+    report(["Save order and position state in PostgreSQL<br/>Write monitor status and wait 30 seconds"])
+
+    start --> owned
+    entry -.->|Durable handoff| owned
+    owned --> reconcile --> known
+    known -->|No| review --> report
+    known -->|Yes| cancel --> exposure
+    exposure -->|No| pending --> report
+    exposure -->|Yes| matched
+    matched -->|No| review
+    matched -->|Yes| risk --> exit_due
+    exit_due -->|No| stop --> report
+    exit_due -->|Yes| exit_ready
+    exit_ready -->|No| defer --> report
+    exit_ready -->|Yes| sell --> report

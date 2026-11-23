@@ -30,6 +30,14 @@ def binding(raw):return dict(bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest
 
 def load_config(path=CONFIG):
     cfg=strict_json(Path(path).read_bytes())
+    cutoffs = cfg.get('webull_early_close_cutoffs')
+    require('webull_data_environment' not in cfg or
+            cutoffs is not None and cfg['webull_data_environment'] in ('production', 'sandbox'),
+            'INVALID_WEBULL_DATA_ENVIRONMENT')
+    if cutoffs is not None:
+        require(type(cutoffs) is dict and len(cutoffs) <= 20 and all(
+            date.fromisoformat(day).isoformat() == day and cutoff == '17:00'
+            for day, cutoff in cutoffs.items()), 'INVALID_WEBULL_EARLY_CLOSE_CUTOFFS')
     from scripts.strategy_universe import market_config
     require(cfg.get('schema') in ('jbravo.daily-strategy-config.v1','jbravo.daily-strategy-config.v2') and
         cfg.get('enabled') is True,'DAILY_CONFIG_DISABLED_OR_INVALID')
@@ -67,9 +75,10 @@ class Provider:
         self.max_bytes=max_bytes
         self.min_interval=min_interval;self.last_request=None
 
-    def get(self,url,params):
+    def get(self,url,params,*,timeout=(10,15)):
         from scripts.strategy_universe import ASSETS
-        require(url in (CALENDAR,ASSETS,DATA+'/v2/stocks/bars',DATA+'/v1/corporate-actions'),'PROVIDER_ENDPOINT_REFUSED')
+        require(url in (CALENDAR,ASSETS,DATA+'/v2/stocks/bars',DATA+'/v1/corporate-actions',
+                         DATA+'/v2/stocks/quotes/latest'),'PROVIDER_ENDPOINT_REFUSED')
         if self.last_request is not None:
             delay=self.min_interval-(clock.monotonic()-self.last_request)
             if delay>0:clock.sleep(delay)
@@ -79,7 +88,7 @@ class Provider:
         self.receipts.append(receipt)
         response=None
         try:
-            response=self.session.get(url,params=params,timeout=(10,15),allow_redirects=False,stream=True)
+            response=self.session.get(url,params=params,timeout=timeout,allow_redirects=False,stream=True)
             require(response.status_code==200,'PROVIDER_HTTP_'+str(response.status_code))
             require(response.headers.get('Content-Encoding','identity') in ('identity',''),'PROVIDER_ENCODING_REFUSED')
             raw=b''
@@ -225,6 +234,8 @@ def archive_scan(summary,root,cfg,*,env):
         archive_identity_version=2,capture_revision_sha256=configuration_hash(cfg,PRIMARY),
         configuration_sha256=canonical_hash(cfg),scan_manifest_sha256=binding(manifest_raw)['sha256'],summary=summary,handoff=handoff,output_root=str(root),
         research_qualified=False,execution_authorized=False,order_submission_authorized=False)
+    if 'webull_early_close_cutoffs' in cfg and cfg['strategy_id'] == PRIMARY:
+        result['webull_after_hours'] = strict_json((root/'webull-after-hours.json').read_bytes())
     body=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False)
     expected=binding(body.encode())['sha256'];spec_sha=binding(spec_raw)['sha256']
     conn=connect(write=True,env=env)
@@ -248,7 +259,8 @@ def archive_scan(summary,root,cfg,*,env):
     save_json(root/'archive.json',proof)
     return proof
 
-def run_daily(cfg,provider,output,*,now=None,bootstrap_latest=False,archive=None):
+def run_daily(cfg,provider,output,*,now=None,bootstrap_latest=False,archive=None,
+              webull=None, observe=None):
     now=now or datetime.now(timezone.utc)
     started=clock.monotonic()
     rows,raw=provider.get(CALENDAR,dict(start=cfg['warmup_start'],end=(now.astimezone(NY).date()+timedelta(days=14)).isoformat()))
@@ -256,6 +268,11 @@ def run_daily(cfg,provider,output,*,now=None,bootstrap_latest=False,archive=None
     if session is None:return dict(status='SKIPPED_NON_TRADING_DAY',pipeline=PIPELINE,broker_operations=0)
     output=Path(output).resolve();output.mkdir(parents=True,exist_ok=True)
     require(not output.is_relative_to(Path(__file__).resolve().parents[1]),'DAILY_OUTPUT_INSIDE_REPOSITORY')
+    webull_hours = None
+    if 'webull_early_close_cutoffs' in cfg:
+        from scripts.strategy_webull_market_data import session_hours
+        webull_hours = session_hours(next(r for r in calendar if r['date'] == session),
+                                     cfg['webull_early_close_cutoffs'])
     # An interrupted session never reuses its claim or partially saved input batch.
     from scripts.strategy_archive_identity import create_session_root
     root=create_session_root(output,session,cfg)
@@ -289,7 +306,8 @@ def run_daily(cfg,provider,output,*,now=None,bootstrap_latest=False,archive=None
             **({'dataset': dataset} if dataset is not None else {}))
         save_json(root/'provider-requests.json',provider.receipts)
         require(archive is not None,'DAILY_POSTGRES_ARCHIVE_REQUIRED')
-        proof=archive(result,root,cfg)
+        if webull_hours is None:
+            proof=archive(result,root,cfg)
         from scripts.bull_flag_companion import produce
         companion = dict(status='DISABLED')
         phase = 'COMPANION_SCANS'
@@ -318,6 +336,29 @@ def run_daily(cfg,provider,output,*,now=None,bootstrap_latest=False,archive=None
                 save_json(root/'blocked.json', dict(status='DAILY_STRATEGY_SCAN_BLOCKED',
                     unavailable_strategies=unavailable, outcomes=outcomes, broker_operations=0))
                 raise DailyError('REQUIRED_STRATEGY_SCREENS_UNAVAILABLE')
+        if webull_hours is not None:
+            from scripts.strategy_runtime_diagnostics import checkpoint
+            from functools import partial
+            from scripts.strategy_webull_market_data import alpaca_bars, capture_after_hours
+            phase = 'EXTENDED_HOURS_CAPTURE'
+            deadline = started + cfg['max_total_seconds']
+            stop = root/'STOP'
+            checkpoint(phase, deadline=deadline, stop_file=stop)
+            finalists = {p['symbol'] for p in result['top_candidates']}
+            for strategy_id, outcome in {**companions, 'bull_flag_breakout_v1': companion}.items():
+                if outcome['status'] == 'COMPLETED_COMPANION_SCREEN':
+                    handoff = strict_json((root/'companions'/strategy_id/'scan/paper_handoff.json').read_bytes())
+                    finalists.update(p['symbol'] for p in handoff['proposals'])
+            prior_requests = len(provider.receipts)
+            supplementary = capture_after_hours(finalists, webull_hours, fetch=webull,
+                now=observe or (lambda: datetime.now(timezone.utc)),
+                environment=cfg.get('webull_data_environment', 'production'),
+                primary_fetch=partial(alpaca_bars, provider))
+            checkpoint(phase, deadline=deadline, stop_file=stop)
+            save_json(root/'extended-hours-provider-requests.json', provider.receipts[prior_requests:])
+            save_json(root/'webull-after-hours.json', supplementary)
+            phase = 'PRIMARY_ARCHIVE'
+            proof = archive(result, root, cfg)
         value=dict(status='DAILY_STRATEGY_SCAN_COMPLETE',pipeline=PIPELINE,signal_session=session,
             strategy_id=cfg['strategy_id'],scan_run_id=result['run_id'],candidates=len(result['top_candidates']),
             provider_gets=len(provider.receipts),archive=proof,output_root=str(root),
@@ -350,14 +391,20 @@ def configured_environment():
     return env
 
 def main(output,*,bootstrap_latest=False):
+    from contextlib import ExitStack
     provider=None
     try:
         cfg=load_config();env=configured_environment()
         provider=Provider(env.get('APCA_API_KEY_ID'),env.get('APCA_API_SECRET_KEY'),max_gets=cfg['max_provider_gets'],
             max_seconds=cfg.get('max_capture_seconds',240),max_bytes=cfg.get('max_provider_bytes',32*1024*1024),
             min_interval=.35 if cfg.get('schema')=='jbravo.daily-strategy-config.v2' else 0)
-        result=run_daily(cfg,provider,output,bootstrap_latest=bootstrap_latest,
-            archive=lambda summary,root,cfg:archive_scan(summary,root,cfg,env=env))
+        with ExitStack() as resources:
+            webull = None
+            if 'webull_early_close_cutoffs' in cfg:
+                from scripts.strategy_webull_market_data import webull_fallback
+                webull = webull_fallback(resources, env, cfg.get('webull_data_environment', 'production'), 'bars')
+            result=run_daily(cfg,provider,output,bootstrap_latest=bootstrap_latest, webull=webull,
+                archive=lambda summary,root,cfg:archive_scan(summary,root,cfg,env=env))
         print(json.dumps(result,sort_keys=True));return 0
     except Exception as error:
         print(json.dumps(dict(status='DAILY_STRATEGY_SCAN_FAILED',error_type=type(error).__name__,

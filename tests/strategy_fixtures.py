@@ -4,7 +4,8 @@ from scripts.daily_strategy_scan import load_config
 
 def pilot_config():
     cfg = load_config()
-    for key in ('universe', 'max_capture_seconds', 'max_total_seconds', 'max_provider_bytes'):
+    for key in ('universe', 'max_capture_seconds', 'max_total_seconds', 'max_provider_bytes',
+                'webull_early_close_cutoffs', 'webull_data_environment'):
         cfg.pop(key)
     cfg.update(schema='jbravo.daily-strategy-config.v1', max_provider_gets=24, max_scan_seconds=600,
         symbols=['ALK','FN','HMY','LOGI','MIRM','NVST','PLUG','SKY','SRRK','STLD'])

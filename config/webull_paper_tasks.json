@@ -1,0 +1,23 @@
+{
+  "timezone": "UTC",
+  "tasks": [
+    {
+      "id": 1568725,
+      "role": "Producer",
+      "time": "01:20",
+      "command": "bash /home/RasPatrick/jbravo_screener/bin/run_webull_paper_task.sh producer"
+    },
+    {
+      "id": 1568726,
+      "role": "Primary Pipeline",
+      "time": "03:45",
+      "command": "bash /home/RasPatrick/jbravo_screener/scripts/ops/run_pythonanywhere_primary_pipeline.sh"
+    },
+    {
+      "id": 1569544,
+      "role": "Execute Trades",
+      "time": "07:55",
+      "command": "bash /home/RasPatrick/jbravo_screener/bin/run_webull_paper_task.sh entry --place-paper-orders"
+    }
+  ]
+}

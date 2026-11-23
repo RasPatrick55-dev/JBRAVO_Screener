@@ -8,6 +8,11 @@
   "episode_start": "2026-01-02",
   "episode_id": "daily-paper-2026",
   "feed": "iex",
+  "webull_data_environment": "sandbox",
+  "webull_early_close_cutoffs": {
+    "2026-11-27": "17:00",
+    "2026-12-24": "17:00"
+  },
   "currency": "USD",
   "portfolio": {"initial_cash": 100000.0, "alloc_pct": 0.05, "top_n": 3, "max_positions": 4, "trail_pct": 0.03, "max_hold_days": 7, "atr_multiple": 1.0},
   "cost_case": {"id": "base_cost", "fee_per_fill": 1.0, "slippage_bps": 5.0},

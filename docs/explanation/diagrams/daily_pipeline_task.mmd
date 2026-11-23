@@ -1,0 +1,42 @@
+---
+title: Primary Pipeline · verified sessions and paper tickets
+config:
+  theme: neutral
+  look: classic
+  flowchart:
+    nodeSpacing: 26
+    rankSpacing: 24
+    padding: 9
+    wrappingWidth: 310
+---
+%% Scope: PythonAnywhere primary scheduled task 1568726 and its deployed strategy route.
+%% Enabled status and host launcher, wrapper, and strategy source checked on 2026-11-21.
+%% Documented schedule: 03:45 UTC. The task inventory does not expose the current time field.
+%% Hosted entry chain: scripts/ops/run_pythonanywhere_primary_pipeline.sh ->
+%% scripts.pythonanywhere_primary_pipeline -> scripts.primary_paper_pipeline ->
+%% scripts.primary_pipeline -> scripts.run_pipeline -> scripts.strategy_pipeline.
+%% Prepared local workflow. The separate Producer supplies the completed-session archive.
+flowchart TB
+    trigger(["PythonAnywhere scheduler<br/>Primary task 1568726 · 03:45 UTC"])
+    launch["run_pythonanywhere_primary_pipeline.sh<br/>Load environment and take the overlap lock"]
+    guards{"Generation lock and<br/>paper context valid?"}
+    stopped(["Refuse startup"])
+    controller["primary_pipeline.py<br/>Create an invocation ID and call run_pipeline"]
+    archive["strategy_pipeline.py<br/>Resolve signal and target dates from Alpaca's calendar<br/>Verify exchange close, Webull cutoff and PostgreSQL archive"]
+    stages["Build candidates, run Backtest and Metrics<br/>Commit and read back the candidate batch"]
+    selection["Finish companion Backtest and Metrics<br/>Use archived Alpaca IEX bars and any Webull supplements<br/>Publish up to 3 paper tickets"]
+    postflight{"Pipeline and<br/>postflight passed?"}
+    failed(["Return a nonzero exit code<br/>Record failure for this invocation"])
+    complete(["Save completed-primary.json<br/>Return exit code 0"])
+    db[("PostgreSQL · source of truth<br/>Candidate views and unified selection")]
+    reports["reports/pipeline_postflight/<br/>Invocation-bound reports"]
+
+    trigger --> launch --> guards
+    guards -->|No| stopped
+    guards -->|Yes| controller --> archive --> stages --> selection --> postflight
+    archive -.->|Missing archive or unverified calendar exception| failed
+    postflight -->|No| failed
+    postflight -->|Yes| complete
+    selection -.->|Committed data| db
+    complete -.-> reports
+    failed -.-> reports
