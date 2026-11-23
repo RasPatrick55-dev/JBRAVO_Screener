@@ -49,10 +49,7 @@ class FullNative(F.ReplayBindings, Native):
             sql = sql.decode("utf-8")
         self.round_trips.append((sql, params))
         self.advance_clock()
-        timeout, separator, statement = sql.partition("; ")
-        if separator and timeout.startswith("SET LOCAL statement_timeout = "):
-            super().execute(timeout)
-            sql = statement
+        sql = self.execute_control_prefix(sql, super().execute)
         if sql.startswith("/* combined-canonical-replay */"):
             self.pending = F.replay_wire(sql, self.replay_bindings, super().execute, super().fetchmany)
             return
@@ -133,7 +130,7 @@ def test_production_shaped_replay_survives_round_trip_latency(monkeypatch):
 
     def round_trip():
         nonlocal elapsed
-        elapsed += 0.3
+        elapsed += 0.42
 
     original_init = C.T.Cursor.__init__
 
@@ -147,13 +144,28 @@ def test_production_shaped_replay_survives_round_trip_latency(monkeypatch):
     optimized.advance_clock = round_trip
     actual = C.read_cohort(lambda: optimized, optimized.identity, F.S.ACCOUNT)
     assert 8 < elapsed < C.COHORT_DEADLINE_SECONDS
-    assert len(optimized.round_trips) == 36
+    assert len(optimized.round_trips) == 26
     assert sum("combined-canonical-replay" in sql for sql, _ in optimized.round_trips) == 1
 
     elapsed = 0
+    with monkeypatch.context() as previous:
+        previous.setattr(C, "DEFERRED_CONTROLS", frozenset())
+        release_020 = FullNative()
+        release_020.advance_clock = round_trip
+        with pytest.raises(ValueError, match="EXECUTION_DEADLINE_OR_SQL_CAP"):
+            C.read_cohort(lambda: release_020, release_020.identity, F.S.ACCOUNT)
+    assert release_020.rollbacks == release_020.closes == 1
+
+    elapsed = 0
+    latency = 0.16
+    def faster_round_trip():
+        nonlocal elapsed
+        elapsed += latency
+
     with monkeypatch.context() as unbatched:
         unbatched.setattr(C.CohortCursor, "recheck_canonical", C.T.Cursor.recheck_canonical)
         baseline = FullNative()
+        baseline.advance_clock = faster_round_trip
         expected = C.read_cohort(lambda: baseline, baseline.identity, F.S.ACCOUNT)
     assert actual == expected
     assert len(baseline.round_trips) - len(optimized.round_trips) == 23

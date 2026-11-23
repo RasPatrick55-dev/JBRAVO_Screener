@@ -328,6 +328,38 @@ def _pythonanywhere_always_on_tasks() -> list[dict[str, Any]]:
     return [task for task in payload if isinstance(task, dict)]
 
 
+def _runs_primary_pipeline(command: str) -> bool:
+    entrypoint = "scripts/ops/run_pythonanywhere_primary_pipeline.sh"
+    try:
+        outer = shlex.split(command)
+        if len(outer) == 3 and Path(outer[0]).name == "bash" and outer[1] in {"-c", "-lc"}:
+            command = outer[2]
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        segments: list[list[str]] = [[]]
+        for token in lexer:
+            if token in {";", "&&", "||", "|", "&"}:
+                segments.append([])
+            else:
+                segments[-1].append(token)
+        for segment in segments:
+            index = next(
+                (i for i, token in enumerate(segment) if not re.match(r"[A-Za-z_][A-Za-z_0-9]*=", token)),
+                len(segment),
+            )
+            invocation = segment[index:]
+            if len(invocation) >= 2 and Path(invocation[0]).name == "bash":
+                target = invocation[1]
+                if target in {entrypoint, f"./{entrypoint}"} or re.fullmatch(
+                    rf"/home/[A-Za-z0-9_-]+/(?:JBRAVO_Screener|jbravo_screener)/{re.escape(entrypoint)}",
+                    target,
+                ):
+                    return True
+    except ValueError:
+        pass
+    return False
+
+
 def _task_name_from_command(command: str) -> Optional[str]:
     """Classify invoked entrypoints, not words in descriptions or shell output."""
     labels = {
@@ -598,6 +630,28 @@ def _fetch_pythonanywhere_task_log() -> Optional[tuple[str, str]]:
         remote_url=os.environ.get("PYTHONANYWHERE_TASK_LOG_URL"),
         match_keywords=["run pipeline", "run_pipeline"],
     )
+
+
+def _fetch_current_primary_task_log() -> Optional[tuple[str, str]]:
+    """Resolve the enabled primary launcher through the provider task inventory."""
+    candidates = [
+        task for task in _pythonanywhere_schedule_tasks()
+        if task.get("enabled") is True
+        and _runs_primary_pipeline(str(task.get("command") or task.get("script") or ""))
+    ]
+    if len(candidates) != 1:
+        return None
+    task = candidates[0]
+    task_id = str(task.get("id") or "")
+    if not re.fullmatch(r"[0-9]+", task_id):
+        return None
+    logfile = task.get("logfile") or task.get("log_file") or _task_logfile_from_detail("schedule", task_id)
+    if logfile != f"/var/log/schedule-log-{task_id}.log":
+        return None
+    payload = _fetch_pythonanywhere_file(None, logfile)
+    if payload and payload[0].strip():
+        return payload[0], f"pythonanywhere:schedule/{task_id}/"
+    return None
 
 
 def _fetch_pythonanywhere_execute_task_log() -> Optional[tuple[str, str]]:
@@ -7998,6 +8052,11 @@ def _execute_log_file_payload(stage: str) -> tuple[str | None, str]:
     filename = _EXECUTE_STAGE_FILES.get(stage)
     if not filename:
         return None, "files:none"
+
+    if stage == "pipeline":
+        active_log = _fetch_current_primary_task_log()
+        if active_log:
+            return active_log
 
     env_map = {
         "execute": ("PYTHONANYWHERE_EXECUTE_LOG_URL", "PYTHONANYWHERE_EXECUTE_LOG_PATH"),
