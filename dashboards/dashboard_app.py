@@ -646,9 +646,12 @@ def _fetch_current_primary_task_log() -> Optional[tuple[str, str]]:
     if not re.fullmatch(r"[0-9]+", task_id):
         return None
     logfile = task.get("logfile") or task.get("log_file") or _task_logfile_from_detail("schedule", task_id)
-    if logfile != f"/var/log/schedule-log-{task_id}.log":
+    expected_path = f"/var/log/schedule-log-{task_id}.log"
+    username = _pythonanywhere_username()
+    # The schedule API may return the signed-in file viewer path.
+    if logfile != expected_path and (not username or logfile != f"/user/{username}/files{expected_path}"):
         return None
-    payload = _fetch_pythonanywhere_file(None, logfile)
+    payload = _fetch_pythonanywhere_file(None, expected_path)
     if payload and payload[0].strip():
         return payload[0], f"pythonanywhere:schedule/{task_id}/"
     return None
