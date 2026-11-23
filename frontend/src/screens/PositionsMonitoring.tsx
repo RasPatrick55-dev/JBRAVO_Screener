@@ -50,6 +50,7 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: { active
   const monitorStatus = monitorCompleted
     ? monitor?.stale === true || monitorAge > 300_000 ? "STALE" : "COMPLETED"
     : logs.kind === "loading" ? "LOADING" : "UNVERIFIED";
+  const monitorEventCount = finiteNumber(monitor?.event_count);
   const currentTab = activeTab ?? "Positions";
   const navTabs = ["Dashboard", "Account", "Trades", "Positions", "Execute", "Screener", "ML Pipeline"].map(label => ({ label, isActive: label === currentTab }));
   const badges = buildNavbarBadges(live, positions.kind === "loading" ? "loading" : available && positions.kind !== "stale" ? "ready" : "error");
@@ -61,10 +62,11 @@ export default function PositionsMonitoring({ activeTab, onTabSelect }: { active
       <SourceNotice label="Broker positions" {...positions} />
       <p className="text-sm text-secondary">Alpaca broker marks only. PostgreSQL OPEN trades are not substituted. Optional trailing-stop, days-held and captured-P/L enrichment is deferred and remains unknown.</p>
       <div role="status" className="rounded-lg border border-slate-500/40 p-3 text-sm text-secondary">
-        <strong>Monitor receipt: {monitorStatus}</strong>
-        {monitorObserved ? <div>Observed (UTC): {monitorObserved} · Events: {finiteNumber(monitor?.event_count) ?? "unknown"}</div> : null}
+        <strong>Latest monitor cycle: {monitorStatus}</strong>
+        {monitorObserved ? <div>Observed (UTC): {monitorObserved} · Events: {monitorEventCount ?? "unknown"}</div> : null}
+        {monitorStatus === "COMPLETED" && monitorEventCount === 0 ? <p>This cycle recorded no position events.</p> : null}
       </div>
-      <SourceNotice label="Operational monitoring logs" {...logs} />
+      <SourceNotice label="Monitoring event history" {...logs} />
       <PositionsTab positions={rows} summary={summary} logs={monitoringLogs} isLoading={positions.kind === "loading"}
         hasError={!available && positions.kind !== "loading"} available={available} logsAvailable={canDisplay(logs.kind)} />
     </main></div>;

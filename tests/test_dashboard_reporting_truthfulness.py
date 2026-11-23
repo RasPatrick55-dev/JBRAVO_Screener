@@ -987,6 +987,22 @@ def test_fresh_zero_event_monitor_receipt_does_not_refresh_old_logs(tmp_path):
     assert empty["monitor_receipt"]["event_count"] == 0
 
 
+def test_monitor_events_keep_their_own_age_and_flag_receipt_only_timestamps():
+    ns = helpers("_strategy_monitor_log_entries", "_monitor_observation_metadata",
+        _format_utc_datetime_for_monitor=lambda dt: dt.isoformat())
+    old = (NOW - timedelta(hours=2)).isoformat()
+    future = (NOW + timedelta(seconds=30)).isoformat()
+    previous, observed = ns["_strategy_monitor_log_entries"]({"finished_at": NOW.isoformat(), "events": [
+        {"code": "STOP_CHECK", "ts_utc": old},
+        {"code": "STOP_CHECK", "ts_utc": future},
+    ]})
+    assert previous["ts_utc"] == old
+    assert previous["freshness"] == "stale"
+    assert previous["report_observed_at"] == NOW.isoformat()
+    assert observed["ts_utc"] == NOW.isoformat()
+    assert observed["timestamp_kind"] == "monitor_report_observation"
+
+
 def test_resources_use_one_snapshot_and_preserve_mixed_freshness():
     read = Mock(return_value={"generated_at": (NOW - timedelta(days=19)).isoformat(),
         "file_storage": {"used_bytes": 15, "limit_bytes": 10},
@@ -1004,6 +1020,39 @@ def test_resources_use_one_snapshot_and_preserve_mixed_freshness():
     assert cpu["status"] == "fresh"
     assert disk["status"] == postgres["status"] == "stale"
     assert disk["value"] == 150 and disk["over_quota"]
+
+
+def test_measured_storage_with_unverified_quota_has_no_percentage():
+    ns = helpers(*USAGE_HELPERS,
+        _pythonanywhere_usage_snapshot=lambda: {"file_storage": {
+            "used_bytes": 183, "captured_at": NOW.isoformat(), "percent": 143,
+        }}, _pythonanywhere_api_get_json=lambda _: None)
+
+    report = ns["api_pythonanywhere_resources"]()
+    disk = report["resources"][1]
+    assert report["ok"] and report["status"] == disk["status"] == "partial"
+    assert disk["used"] == 183
+    assert disk["value"] is disk["quota"] is disk["over_quota"] is None
+
+
+def test_legacy_snapshot_keeps_measurements_without_assuming_the_old_quotas(tmp_path):
+    snapshot_file = tmp_path / "data/pythonanywhere_usage.json"
+    snapshot_file.parent.mkdir()
+    snapshot_file.write_text(json.dumps({
+        "version": 1, "generated_at": (NOW - timedelta(days=19)).isoformat(),
+        "file_storage": {"mode": "pythonanywhere", "used_bytes": 143, "limit_bytes": 100, "percent": 100},
+        "postgres_storage": {"used_bytes": 11, "limit_bytes": 100, "percent": 11},
+    }), encoding="utf-8")
+    remote_read = Mock()
+    ns = helpers(*USAGE_HELPERS, "_pythonanywhere_usage_snapshot", BASE_DIR=tmp_path,
+        _pythonanywhere_api_get_json=lambda _: None, _fetch_pythonanywhere_file=remote_read)
+
+    _, disk, postgres = ns["api_pythonanywhere_resources"]()["resources"]
+    remote_read.assert_not_called()
+    assert [disk["used"], postgres["used"]] == [143, 11]
+    for metric in (disk, postgres):
+        assert metric["status"] == "stale"
+        assert metric["value"] is metric["quota"] is metric["over_quota"] is None
 
 
 def test_trades_overview_uses_current_physical_history_contract():

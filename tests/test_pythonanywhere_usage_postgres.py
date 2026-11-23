@@ -5,6 +5,13 @@ import pytest
 from scripts import pythonanywhere_usage
 
 
+@pytest.fixture(autouse=True)
+def offline_storage_measurement(monkeypatch):
+    monkeypatch.setattr(pythonanywhere_usage, "get_used_bytes_via_du", lambda: None)
+    monkeypatch.delenv("PYTHONANYWHERE_POSTGRES_QUOTA_BYTES", raising=False)
+    monkeypatch.delenv("PYTHONANYWHERE_POSTGRES_QUOTA_GB", raising=False)
+
+
 @pytest.mark.alpaca_optional
 def test_postgres_quota_and_percent_floor(monkeypatch):
     used_bytes = 428_000_000
@@ -55,7 +62,8 @@ def test_postgres_fields_exist_when_query_succeeds(monkeypatch):
     assert postgres["pg_used_bytes"] == 512_000_000
     assert postgres["pg_used_pretty"] == "488 MB"
     assert postgres["pg_used_gib"] is not None
-    assert postgres["pg_quota_gb"] is not None
+    assert postgres["pg_quota_gb"] is postgres["pg_storage_percent"] is None
+    assert postgres["captured_at"] is not None
     assert postgres["pg_error"] is None
 
 
@@ -80,4 +88,18 @@ def test_postgres_failure_sets_pg_error_and_null_fields(monkeypatch):
     assert postgres["pg_used_bytes"] is None
     assert postgres["pg_storage_percent"] is None
     assert postgres["pg_used_pretty"] is None
-    assert postgres["pg_error"] == "db unreachable"
+    assert postgres["pg_error"] == "postgres_measurement_unavailable"
+
+
+@pytest.mark.alpaca_optional
+def test_postgres_limit_and_cluster_measurement_use_requested_scope(monkeypatch):
+    monkeypatch.setattr(pythonanywhere_usage, "pythonanywhere_cpu_usage", lambda: None)
+    monkeypatch.setattr(pythonanywhere_usage, "postgres_size_bytes", {"total_wal": 460}.__getitem__)
+    monkeypatch.setenv("PYTHONANYWHERE_POSTGRES_QUOTA_BYTES", "4096")
+
+    postgres = pythonanywhere_usage.build_payload(Path("."), None, "1000", "pythonanywhere", "total_wal")["postgres_storage"]
+
+    assert postgres["mode"] == "total_wal"
+    assert postgres["used_bytes"] == 460
+    assert postgres["limit_bytes"] == 1000
+    assert postgres["percent"] == 46

@@ -2,10 +2,13 @@ import argparse
 import json
 import math
 import os
+import re
 import subprocess
 import sys
+import tempfile
 import urllib.request
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
@@ -69,6 +72,8 @@ def pythonanywhere_cpu_usage() -> Optional[dict]:
     except (TypeError, ValueError):
         used_val = None
         limit_val = None
+    if used_val is None or limit_val is None or not math.isfinite(used_val) or not math.isfinite(limit_val):
+        return None
     percent = percent_used(used_val, limit_val)
     return {
         "used_seconds": used_val,
@@ -85,22 +90,11 @@ def parse_size_to_bytes(value: Optional[str]) -> Optional[int]:
     text = str(value).strip().lower()
     if not text:
         return None
-    if text.isdigit():
-        return int(text)
-    number = ""
-    unit = ""
-    for char in text:
-        if char.isdigit() or char == ".":
-            number += char
-        else:
-            unit += char
-    if not number:
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(b|[kmgt]b?)?", text)
+    if not match:
         return None
-    try:
-        numeric = float(number)
-    except ValueError:
-        return None
-    unit = unit.strip() or "b"
+    numeric = Decimal(match[1])
+    unit = match[2] or "b"
     factors = {
         "b": 1,
         "kb": 1024,
@@ -112,8 +106,7 @@ def parse_size_to_bytes(value: Optional[str]) -> Optional[int]:
         "tb": 1024**4,
         "t": 1024**4,
     }
-    factor = factors.get(unit, 1)
-    return int(numeric * factor)
+    return int(numeric * factors[unit]) or None
 
 
 def percent_used(used: Optional[float], limit: Optional[float]) -> Optional[float]:
@@ -142,51 +135,44 @@ def directory_size_bytes(path: Path) -> Optional[int]:
         return total
 
 
-def get_used_bytes_via_du() -> int:
+def get_used_bytes_via_du() -> Optional[int]:
+    """Measure the account directories documented by PythonAnywhere."""
     try:
         output = subprocess.check_output(
-            [
-                "bash",
-                "-lc",
-                "du -s -B 1 /tmp ~/.[!.]* ~/* /var/www/ 2>/dev/null | awk '{s+=$1}END{print s+0}'",
-            ],
+            ["du", "-s", "-B1", "-c", "--", "/tmp", str(Path.home())],
             text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            env={**os.environ, "LC_ALL": "C"},
         )
-        return int(output.strip() or "0")
-    except Exception:
-        return 0
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return None
+    lines = output.splitlines()
+    match = re.fullmatch(r"(\d+)\s+total", lines[-1]) if len(lines) == 3 else None
+    return int(match[1]) if match else None
 
 
-def pythonanywhere_file_quota_bytes() -> int:
-    try:
-        quota_gb = float(os.getenv("PYTHONANYWHERE_DISK_QUOTA_GB", "10"))
-    except (TypeError, ValueError):
-        quota_gb = 10.0
-    if quota_gb <= 0:
-        quota_gb = 10.0
-    return int(quota_gb * (1024**3))
+def pythonanywhere_file_quota_bytes() -> Optional[int]:
+    return _configured_quota("PYTHONANYWHERE_DISK_QUOTA")
 
 
-def pythonanywhere_postgres_quota_gb() -> float:
-    try:
-        quota_gb = float(os.getenv("PYTHONANYWHERE_POSTGRES_QUOTA_GB", "10"))
-    except (TypeError, ValueError):
-        quota_gb = 10.0
-    if quota_gb <= 0:
-        quota_gb = 10.0
-    return quota_gb
+def _configured_quota(prefix: str) -> Optional[int]:
+    exact = os.getenv(prefix + "_BYTES")
+    if exact is not None:
+        if not re.fullmatch(r"[0-9]{1,18}", exact):
+            return None
+        return int(exact) or None
+    gibibytes = os.getenv(prefix + "_GB")
+    return parse_size_to_bytes(gibibytes + "g") if gibibytes else None
 
 
-def pythonanywhere_postgres_quota_bytes() -> int:
-    override = os.getenv("PYTHONANYWHERE_POSTGRES_QUOTA_BYTES")
-    if override is not None:
-        try:
-            quota_bytes = int(override)
-            if quota_bytes > 0:
-                return quota_bytes
-        except (TypeError, ValueError):
-            pass
-    return int(pythonanywhere_postgres_quota_gb() * (1024**3))
+def pythonanywhere_postgres_quota_gb() -> Optional[float]:
+    quota = pythonanywhere_postgres_quota_bytes()
+    return quota / 1024**3 if quota is not None else None
+
+
+def pythonanywhere_postgres_quota_bytes() -> Optional[int]:
+    return _configured_quota("PYTHONANYWHERE_POSTGRES_QUOTA")
 
 
 def pythonanywhere_postgres_storage_percent(used_bytes: int, quota_bytes: int) -> int:
@@ -242,8 +228,8 @@ def postgres_size_bytes(mode: str = "database") -> Optional[int]:
             if base_size is None:
                 return None
             if mode in {"database_wal", "total_wal"}:
-                wal_bytes = _postgres_wal_bytes(conn) or 0
-                return base_size + wal_bytes
+                wal_bytes = _postgres_wal_bytes(conn)
+                return base_size + wal_bytes if wal_bytes is not None else None
             return base_size
     except Exception:
         return None
@@ -289,14 +275,19 @@ def build_payload(
     postgres_mode: str,
 ) -> dict:
     cpu_payload = pythonanywhere_cpu_usage()
+    if cpu_payload is not None:
+        cpu_payload["captured_at"] = datetime.now(timezone.utc).isoformat()
     used_bytes = storage_used_bytes(storage_path, storage_mode)
+    file_captured = datetime.now(timezone.utc).isoformat() if used_bytes is not None else None
+    limit_bytes = parse_size_to_bytes(storage_limit)
     if storage_mode == "pythonanywhere":
-        quota_bytes = pythonanywhere_file_quota_bytes()
-        used = int(used_bytes or 0)
-        storage_percent = pythonanywhere_file_storage_percent(used, quota_bytes)
-        limit_bytes = quota_bytes
+        if storage_limit is None:
+            limit_bytes = pythonanywhere_file_quota_bytes()
+        storage_percent = (
+            pythonanywhere_file_storage_percent(used_bytes, limit_bytes)
+            if used_bytes is not None and limit_bytes is not None else None
+        )
     else:
-        limit_bytes = parse_size_to_bytes(storage_limit)
         storage_percent = percent_used(
             float(used_bytes) if used_bytes is not None else None,
             float(limit_bytes) if limit_bytes is not None else None,
@@ -306,15 +297,23 @@ def build_payload(
     pg_used_pretty: Optional[str] = None
     pg_error: Optional[str] = None
     try:
-        pg_used_bytes, pg_used_pretty = get_pg_used_bytes_and_pretty(os.getenv("DATABASE_URL"))
-    except Exception as exc:
-        pg_error = str(exc)
+        if postgres_mode == "database":
+            pg_used_bytes, pg_used_pretty = get_pg_used_bytes_and_pretty(os.getenv("DATABASE_URL"))
+        else:
+            pg_used_bytes = postgres_size_bytes(postgres_mode)
+    except Exception:
+        pass
+    if pg_used_bytes is None:
+        pg_error = "postgres_measurement_unavailable"
 
-    pg_quota_bytes = pythonanywhere_postgres_quota_bytes()
-    pg_quota_gb = pythonanywhere_postgres_quota_gb()
+    pg_captured = datetime.now(timezone.utc).isoformat() if pg_used_bytes is not None else None
+    pg_quota_bytes = (
+        parse_size_to_bytes(postgres_limit) if postgres_limit is not None
+        else pythonanywhere_postgres_quota_bytes()
+    )
     pg_percent = (
         pythonanywhere_postgres_storage_percent(pg_used_bytes, pg_quota_bytes)
-        if pg_used_bytes is not None
+        if pg_used_bytes is not None and pg_quota_bytes is not None
         else None
     )
 
@@ -322,19 +321,21 @@ def build_payload(
         "cpu": cpu_payload,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "file_storage": {
+            "captured_at": file_captured,
             "used_bytes": used_bytes,
             "limit_bytes": limit_bytes,
             "percent": round(storage_percent, 2)
             if isinstance(storage_percent, float)
             else storage_percent,
-            "file_used_bytes": int(used_bytes or 0),
-            "file_quota_bytes": int(limit_bytes or 0),
-            "file_storage_percent": int(storage_percent or 0),
-            "file_used_gib": round((int(used_bytes or 0) / (1024**3)), 3),
+            "file_used_bytes": used_bytes,
+            "file_quota_bytes": limit_bytes,
+            "file_storage_percent": int(storage_percent) if storage_percent is not None else None,
+            "file_used_gib": round(used_bytes / (1024**3), 3) if used_bytes is not None else None,
             "path": str(storage_path),
             "mode": storage_mode,
         },
         "postgres_storage": {
+            "captured_at": pg_captured,
             "used_bytes": pg_used_bytes,
             "limit_bytes": pg_quota_bytes,
             "percent": pg_percent,
@@ -345,11 +346,11 @@ def build_payload(
             "pg_used_gib": round((pg_used_bytes / (1024**3)), 3)
             if pg_used_bytes is not None
             else None,
-            "pg_quota_gb": pg_quota_gb,
+            "pg_quota_gb": pg_quota_bytes / (1024**3) if pg_quota_bytes is not None else None,
             "pg_error": pg_error,
             "mode": postgres_mode,
         },
-        "version": 1,
+        "version": 2,
     }
 
 
@@ -412,7 +413,22 @@ def main() -> int:
         storage_mode=args.storage_mode,
         postgres_mode=args.postgres_mode,
     )
-    output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=output_path.parent, delete=False,
+            prefix=".usage-", suffix=".json",
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, output_path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return 0
 
 

@@ -69,6 +69,64 @@ def test_unknown_missing_invalid_future_and_offset_timestamps():
     assert "producer convention" in log_receipt([], NOW)["timestamp_basis"]
 
 
+def test_execute_pipeline_sorts_only_verified_event_timestamps(monkeypatch, tmp_path):
+    from test_dashboard_api import _prepare_dashboard_data, _reload_dashboard_app
+
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+    embedded = '{"market_open":"2026-11-23T14:30:00+00:00","status":"ok"}'
+    provider_log = "\n".join((
+        "[2026-11-22T21:45:04-06:00] INFO primary started",
+        embedded,
+        "2026-11-23 03:46:05 -- Completed task, took 56.43 seconds, return code was 0.",
+    ))
+    monkeypatch.setattr(module, "_screener_logs_from_db", lambda *_: ([], "postgres:none"))
+    monkeypatch.setattr(module, "_execute_log_file_payload",
+                        lambda stage: (provider_log, "pythonanywhere:schedule/1568726/"))
+    with module.server.test_client() as client:
+        rows = client.get("/api/execute/logs?stage=pipeline").get_json()["rows"]
+
+    assert [row["ts_utc"] for row in rows] == [
+        "2026-11-23T03:46:05+00:00", "2026-11-23T03:45:04+00:00", None,
+    ]
+    assert rows[0]["message"].startswith("-- Completed task")
+    assert log_provenance(rows[0]["message"], "pipeline")["provenance"] == "scheduler"
+    assert rows[-1]["message"] == embedded
+
+
+@pytest.mark.parametrize(("stage", "status", "message"), [
+    ("screener", "COMPLETED", "Primary run recorded Screener completion."),
+    ("backtest", "SKIPPED_NO_CANDIDATES", "Backtest skipped because the Screener produced no candidates."),
+    ("metrics", "SKIPPED_NO_CANDIDATES", "Metrics skipped because the Screener produced no candidates."),
+])
+def test_screener_logs_show_verified_stage_outcome_with_archive(monkeypatch, tmp_path, stage, status, message):
+    from dashboards import operational_status
+    from test_dashboard_api import _prepare_dashboard_data, _reload_dashboard_app
+
+    _prepare_dashboard_data(tmp_path)
+    module = _reload_dashboard_app(monkeypatch, tmp_path)
+    outcome_at = datetime.now(timezone.utc).isoformat()
+    receipt = dict(ok=True, source="primary_receipt", finished_utc=outcome_at, stage_statuses={stage: status})
+    monkeypatch.setattr(operational_status, "pipeline_task", lambda _: receipt)
+    archived_at = "2026-10-25T12:00:00+00:00"
+    monkeypatch.setattr(module, "_screener_logs_from_files", lambda *_: ([{
+        "ts_utc": archived_at, "_ts": datetime.fromisoformat(archived_at),
+        "message": "Archived entry", "level": "INFO", "source": "screener.log",
+    }], "screener.log"))
+
+    with module.server.test_client() as client:
+        logs_url = f"/api/screener/logs?stage={stage}"
+        data = client.get(logs_url).get_json()
+        assert data["source"] == "mixed"
+        assert [row["message"] for row in data["rows"]] == [message, "Archived entry"]
+        assert data["rows"][0]["provenance"] == "verified_primary_receipt"
+        assert {row["source"]: row["latest_event_at"] for row in data["source_receipts"]} == {
+            "primary_receipt": outcome_at, "screener.log": archived_at,
+        }
+        receipt["ok"] = False
+        assert [row["message"] for row in client.get(logs_url).get_json()["rows"]] == ["Archived entry"]
+
+
 def test_log_endpoints_preserve_per_source_evidence_before_filtering(monkeypatch, tmp_path):
     from test_dashboard_api import _prepare_dashboard_data, _reload_dashboard_app
 

@@ -452,6 +452,13 @@ export default function MLPipeline({ activeTab, onTabSelect }: MLPipelineProps) 
                   value={formatDateTime(successfulPredictionExecution(data))}
                   note="Unknown: no DB/provider-bound execution receipt is available. Artifact metadata and local return-code logs do not verify execution."
                 />
+                {data?.primary_prediction_preparation?.status === "NOT_USED_BY_STRATEGY" && (
+                  <DetailRow
+                    label="Primary run ML preparation"
+                    value="Unused by the strategy"
+                    note={`Verified primary run completed ${formatDateTime(data.primary_prediction_preparation.finished_at)} for signal session ${formatRunDate(data.primary_prediction_preparation.signal_session)}.`}
+                  />
+                )}
                 <DetailRow
                   label="Market session"
                   value={data?.freshness?.session_status ?? "unknown"}

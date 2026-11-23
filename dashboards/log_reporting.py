@@ -44,28 +44,44 @@ def _unique_json_fields(pairs):
     return fields
 
 
-def event_time(text):
+def split_log_event(text):
     # Only a leading log timestamp uses the existing producer UTC convention.
     # Never borrow arbitrary dates from a message, path, or nested JSON data.
     match = _LOG_TIMESTAMP.match(text)
     if match:
-        return _parse_timestamp(match[1], allow_naive=True)
+        stamp = _parse_timestamp(match[1], allow_naive=True)
+        if stamp is None:
+            return None, text
+        message = text[match.end():]
+        if text.lstrip().startswith("["):
+            message = message.removeprefix("]")
+        return stamp, message.strip() or text
     # PythonAnywhere monitor output has a yearless display prefix, then a JSON
     # result. The explicit completion time supplies the year and offset; the
     # display prefix and fetch time must never be used to guess either one.
     json_start = text.find("{")
     if json_start < 0:
-        return None
+        return None, text
     try:
         payload = json.loads(text[json_start:], object_pairs_hook=_unique_json_fields)
     except (ValueError, RecursionError):
-        return None
+        return None, text
     if not isinstance(payload, dict):
-        return None
-    return _parse_timestamp(payload.get("finished_at"))
+        return None, text
+    return _parse_timestamp(payload.get("finished_at")), text
+
+
+def event_time(text):
+    return split_log_event(text)[0]
 
 
 def log_provenance(text, source):
+    if source == "primary_receipt":
+        return {
+            "provenance": "verified_primary_receipt",
+            "provenance_label": "Verified primary receipt",
+            "provenance_evidence": "Stage outcome observed at primary run completion",
+        }
     # Exact emitter signatures, restricted to known backtest/pipeline sources.
     # This is format attribution, not proof of a particular runtime or a fill.
     known_source = bool(
@@ -85,7 +101,7 @@ def log_provenance(text, source):
             "provenance_evidence": "scripts/backtest_core.py in-memory simulator emitter signature; runtime attribution not independently verified",
         }
     if re.search(
-        r" -- (?:Started task|Completed task, took .+ seconds, return code was -?\d+\.)\s*$", text
+        r"(?:^| )-- (?:Started task|Completed task, took .+ seconds, return code was -?\d+\.)\s*$", text
     ):
         return {
             "provenance": "scheduler",

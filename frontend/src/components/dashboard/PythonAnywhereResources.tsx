@@ -80,7 +80,8 @@ export default function PythonAnywhereResources({
           const value = typeof resource.value === "number" && Number.isFinite(resource.value) ? resource.value : null;
           const safeValue = value === null ? 0 : Math.max(0, Math.min(100, value));
           const status = sourceStatus === "loading" ? "LOADING" : sourceStatus === "stale" ? "STALE" : resource.stale === true || resource.status === "stale" ? "STALE"
-            : resource.status === "fresh" && resource.captured_at && value !== null ? "FRESH" : "UNKNOWN";
+            : resource.status === "fresh" && resource.captured_at && value !== null ? "FRESH"
+              : resource.status === "partial" && resource.captured_at && typeof resource.used === "number" ? "PARTIAL" : "UNKNOWN";
           return (
             <div
               key={resource.label}
@@ -89,17 +90,17 @@ export default function PythonAnywhereResources({
               <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-[0.08em] text-sky-100/70">
                 <span>{resource.label}</span>
                 <span className="text-sky-100">
-                  {value === null ? "Unknown" : `${status === "STALE" ? "Last observed " : ""}${formatAmount(value)}%`}
+                  {value === null ? (status === "PARTIAL" ? "Quota unknown" : "Unknown") : `${status === "STALE" ? "Last observed " : ""}${formatAmount(value)}%`}
                 </span>
               </div>
-              <div className="mt-2 h-2 w-full rounded-full bg-progress-rail">
+              {value !== null && <div className="mt-2 h-2 w-full rounded-full bg-progress-rail">
                 <div
                   className="h-2 rounded-full bg-progress-fill"
                   style={{ width: `${safeValue}%` }}
                 />
-              </div>
+              </div>}
               <div className="mt-2 space-y-1 text-[10px] text-sky-100/80">
-                <p>{status === "STALE" ? "STALE · Current usage and quota unverified" : status}
+                <p>{status === "STALE" ? "STALE · Current usage and quota unverified" : status === "PARTIAL" ? "Usage measured · Quota unverified" : status}
                   {status === "FRESH" && value !== null && value > 100 ? " · Over quota" : ""}</p>
                 <p>{status === "STALE" ? "Last observed used / quota" : "Used / quota"}: {formatAmount(resource.used)} / {formatAmount(resource.quota ?? resource.limit)} {resource.unit ?? ""}</p>
                 <p className="break-all">Source: {resource.source || "unknown"}</p>
